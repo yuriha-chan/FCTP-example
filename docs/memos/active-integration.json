@@ -1,0 +1,21 @@
+{
+  "range": "ongoing-authority-and-territory-integration",
+  "compression": "Keep recent ongoing context intact; this memo is an index, not a replacement.",
+  "establishedAPIs": {
+    "hosting": "createHost, host.signObject, generic key publication; docs/handoffs/host-verification.md",
+    "factualEvidence": "resolveExitEvidence(uri,{vessel,registry},{fetcher}); docs/handoffs/evidence.md",
+    "home": "installHome serializes per-player operations; docs/handoffs/home.md",
+    "registry": "installRegistry event deltas/exact request binding repair authored; docs/handoffs/registry.md"
+  },
+  "resolvedIssuesAwaitingIntegratedChecks": [
+    "Nested signed contexts: DI owns protected proof term; FCTP no longer redefines it; Quantity.data uses @json; intact nested ExitEvent roundtrip/tamper tests passed.",
+    "Persistent GET lookup now uses absolute object URI; structural token dispatch and invalid-token 401 behavior repaired.",
+    "Simulation test config explicitly typed to remove inferred-object index error."
+  ],
+  "semanticReviewActions": [
+    { "unit": "policy-territory", "findings": ["Rejected entry emits no EntryRejected", "Event IDs derive from foreign request or non-resource actor paths", "Admission acceptance/mismatch options immutable despite admin requirements", "Retained exited vessel prevents reentry"] },
+    { "unit": "sim-territory", "findings": ["Invalid envelope is treated as business EntryRejected", "Rejected visit counts as active and blocks future entry", "Entry port/route ownership unchecked", "Pending handling checks protocol vessel rather than internal simulation vessel", "Broad catch can turn persistence failure into local admission rejection"] },
+    { "unit": "workspace-verification", "finding": "Latest full pipeline stopped at unused URI import in host.ts, no runtime suite reached; delegate repair and checks." }
+  ],
+  "next": "Bounded adapter semantic repairs, then mechanical integrated gate, then app resources/local APIs and cross-Territory scenario."
+}

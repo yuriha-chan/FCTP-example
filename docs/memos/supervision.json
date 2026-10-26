@@ -1,0 +1,30 @@
+{
+  "purpose": "Reusable implementation knowledge and supervisor decisions; not a replacement for source specifications.",
+  "sourceDocuments": {
+    "protocol": { "path": "/app/protocol.txt", "contextHandling": "During enter_housekeeping retain full content verbatim in context; do not compress or substitute a summary/reference.", "fileHandling": "Rewriting prohibited independently." },
+    "implementationRequirements": { "path": "/app/plan.txt", "contextHandling": "During enter_housekeeping retain full content verbatim in context; do not compress or substitute a summary/reference.", "fileHandling": "Rewriting prohibited independently." }
+  },
+  "instructionFiles": {
+    "supervisor": "/app/docs/supervisor-instructions.md",
+    "subagent": "/app/docs/subagent-instructions.md"
+  },
+  "decisions": [
+    { "id": "D1", "decision": "User waived unavailable Context7 requirement; official documentation and available tools are permitted." },
+    { "id": "D2", "decision": "Supervisor decides MVP-local conventions, records reasons, and asks user about actual source-requirement contradictions." },
+    { "id": "D3", "decision": "Fresh General subagents complete bounded checkpoints; supervisor continues across checkpoints until completion or genuine blocker." },
+    { "id": "D4", "decision": "Subagents perform mechanical verification; supervisor reviews meaning, domain boundaries, competing abstractions, and patch-work integration." },
+    { "id": "D5", "decision": "Descriptive handoffs record existing code, not immutable ownership requirements. Explicit supervisor refactoring assignments may change recorded structure while preserving specification requirements." }
+  ],
+  "reusableFindings": [
+    { "id": "F1", "finding": "Workspace packages resolve runtime imports through compiled dist; build and dependent tests must be sequential.", "evidence": "/app/docs/handoffs/verification.md" },
+    { "id": "F2", "finding": "Root checks initially excluded app/test sources. Verification must report actual source coverage, not only successful package builds.", "evidence": "/app/docs/handoffs/host.md" },
+    { "id": "F3", "finding": "Use one generic persistent Actor/key host; authority and Territory adapters must not duplicate key storage, routing, or worker lifecycle.", "evidence": "/app/packages/server-base/src/host.ts" },
+    { "id": "F4", "finding": "Vessel capacity is mass; warehouse slots are separate local policy. Reservations for shared stock must span all vessels.", "evidence": "/app/docs/handoffs/sim-domain.md" },
+    { "id": "F5", "finding": "Item IDs and Stack data are semantic cargo identity. Local production may reject unsupported ingredients explicitly, but must not silently erase them.", "evidence": ["/app/docs/handoffs/policy-domain.md", "/app/docs/handoffs/sim-domain.md"] }
+  ],
+  "reviewQueue": [
+    { "unit": "host-integration", "status": "blocked on stale descriptive route ownership; supervisor clarification pending", "handoff": "/app/docs/handoffs/host.md" },
+    { "unit": "home", "status": "focused test/lint passed; semantic review finds revisions need serialization across asynchronous read/commit", "handoff": "/app/docs/handoffs/home.md" },
+    { "unit": "registry", "status": "incomplete; tests missing; semantic defects identified", "defects": ["EntryRejected issuer compares destination Territory sender to originating Registry", "CargoOperationEvent.cargo is an operation delta, not full manifest replacement", "Exact Berthing/Exit request linkage must replace loose any-matching-request lookup"], "handoff": "/app/docs/handoffs/registry.md" }
+  ]
+}

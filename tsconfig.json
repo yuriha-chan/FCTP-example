@@ -1,0 +1,16 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/protocol" },
+    { "path": "./packages/auth" },
+    { "path": "./packages/identity" },
+    { "path": "./packages/resources" },
+    { "path": "./packages/federation" },
+    { "path": "./packages/server-base" },
+    { "path": "./packages/client-sdk" },
+    { "path": "./apps/test-authority" },
+    { "path": "./apps/territory-policy" },
+    { "path": "./apps/territory-sim" },
+    { "path": "./apps/demo" }
+  ]
+}

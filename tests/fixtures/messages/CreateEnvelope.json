@@ -1,0 +1,58 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/activitystreams",
+    "https://fctp.example/context",
+    "https://w3id.org/security/data-integrity/v2"
+  ],
+  "id": "https://fctp.example/activities/exit-1",
+  "type": "Create",
+  "actor": "https://fctp.example/actors/territory-blue",
+  "object": {
+    "@context": [
+      "https://www.w3.org/ns/activitystreams",
+      "https://fctp.example/context",
+      "https://w3id.org/security/data-integrity/v2"
+    ],
+    "id": "https://fctp.example/events/exit-1",
+    "type": "ExitEvent",
+    "vessel": "https://fctp.example/vessels/ship-1",
+    "territory": "https://fctp.example/actors/territory-blue",
+    "route": "https://fctp.example/routes/blue-red",
+    "entryRequest": "https://fctp.example/requests/entry-1",
+    "departureEvent": "https://fctp.example/events/departure-1",
+    "cargo": {
+      "entries": [
+        {
+          "variety": "https://fctp.example/varieties/ore",
+          "count": 4,
+          "data": {
+            "assay": {
+              "purity": 0.97
+            }
+          }
+        }
+      ]
+    },
+    "effectiveAt": "2026-10-26T10:00:00Z",
+    "proof": {
+      "type": "DataIntegrityProof",
+      "created": "2026-10-26T21:28:50Z",
+      "verificationMethod": "https://fctp.example/actors/territory-blue#message-fixture-key",
+      "cryptosuite": "eddsa-rdfc-2022",
+      "proofPurpose": "assertionMethod",
+      "proofValue": "z2vCV2NaxXj34c2gcExZrQWdS3pj2u2BkuS5TkrEEQ198X6cYtQ2bnshgnWG9RqwgTaSuJxJg4vRR553VuPkVMiP4"
+    }
+  },
+  "to": [
+    "https://fctp.example/actors/registry-main"
+  ],
+  "published": "2026-10-26T10:00:00Z",
+  "proof": {
+    "type": "DataIntegrityProof",
+    "created": "2026-10-26T21:28:50Z",
+    "verificationMethod": "https://fctp.example/actors/territory-blue#message-fixture-key",
+    "cryptosuite": "eddsa-rdfc-2022",
+    "proofPurpose": "assertionMethod",
+    "proofValue": "z218cm5h35kFHtn74wxdHJa6QDUhh6ucxhcHASSY4bjs23jEtbJQbA4bwRcebasYNxydha3J6aui2cSBEFNwpWPeR"
+  }
+}

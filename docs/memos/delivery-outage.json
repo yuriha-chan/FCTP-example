@@ -1,0 +1,24 @@
+{
+  "format": "delivery-outage-observation",
+  "transport": "actual-loopback-http",
+  "scenario": {
+    "territory": "policy",
+    "operations": ["mine", "manufacture", "transfer-to-port", "entry", "load"],
+    "registryUnavailableDuringLoadDelivery": true,
+    "territoryLoadRemainsCommitted": true,
+    "outboxPayloadByteIdenticalAfterRetry": true,
+    "activityAndObjectIdsRetained": true,
+    "registryListenerRestartedFromSameStoreAndKeyPaths": true,
+    "duplicatePosts": 2,
+    "duplicateInboxProcessingCount": 0,
+    "registryDeltaAndEventCount": 1,
+    "cryptographicVerification": "Registry handler accepted the Activity; its handler requires cryptographic verification, key attribution, and expected-issuer match.",
+    "territoryRestartPreservesRouteCacheAndTokenState": true,
+    "persistenceRestartVerified": true
+  },
+  "verification": {
+    "buildAndTestSourceTypecheck": "passed: npm run build && npm run typecheck:tests",
+    "focusedTest": "passed: delivery-outage, policy-territory, and sim-territory; 7 tests",
+    "eslint": "passed: scoped ESLint over all five owned source/test files"
+  }
+}

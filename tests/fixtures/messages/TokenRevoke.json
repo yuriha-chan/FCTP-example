@@ -1,0 +1,5 @@
+{
+  "tokenRevoke": "revoke",
+  "actor": "https://fctp.example/actors/player-1",
+  "revision": 4
+}

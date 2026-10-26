@@ -1,0 +1,7 @@
+{
+  "@context": "https://w3id.org/security/multikey/v1",
+  "id": "https://fctp.example/actors/territory-blue#message-fixture-key",
+  "type": "Multikey",
+  "controller": "https://fctp.example/actors/territory-blue",
+  "publicKeyMultibase": "z6MkobUMJxrZEjcjgZo6t7GFHPxqx1cNZjMDSdB1toi6WLnv"
+}

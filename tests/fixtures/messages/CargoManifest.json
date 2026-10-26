@@ -1,0 +1,13 @@
+{
+  "entries": [
+    {
+      "variety": "https://fctp.example/varieties/ore",
+      "count": 4,
+      "data": {
+        "assay": {
+          "purity": 0.97
+        }
+      }
+    }
+  ]
+}

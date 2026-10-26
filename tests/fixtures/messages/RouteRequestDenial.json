@@ -1,0 +1,5 @@
+{
+  "id": "https://fctp.example/events/route-denied-1",
+  "request": "https://fctp.example/requests/route-1",
+  "reason": "Endpoint declined"
+}

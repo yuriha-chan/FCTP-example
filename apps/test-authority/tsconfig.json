@@ -1,0 +1,1 @@
+{"extends":"../../tsconfig.base.json","compilerOptions":{"rootDir":"src","outDir":"dist","tsBuildInfoFile":"dist/.tsbuildinfo"},"include":["src/**/*.ts"],"references":[{"path":"../../packages/protocol"},{"path":"../../packages/identity"},{"path":"../../packages/auth"},{"path":"../../packages/resources"},{"path":"../../packages/federation"},{"path":"../../packages/server-base"}]}

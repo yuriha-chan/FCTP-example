@@ -1,0 +1,54 @@
+{
+  "format": "final-verification-facts",
+  "command": "timeout 180s npm test",
+  "runs": 1,
+  "exitCode": 0,
+  "timeoutSeconds": 180,
+  "stages": {
+    "build": {
+      "result": "passed",
+      "includes": [
+        "TypeScript project builds",
+        "browser client TypeScript compilation",
+        "browser esbuild bundle via apps/demo/build-client.mjs"
+      ]
+    },
+    "testSourceTypecheck": {
+      "result": "passed",
+      "includes": ["tests/", "apps/client/"]
+    },
+    "eslint": {
+      "result": "passed",
+      "includes": ["packages", "apps", "tests"]
+    },
+    "runtimeTests": {
+      "result": "passed",
+      "reported": 61,
+      "passed": 61,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "durationMs": 12507.775576,
+      "diagnostics": []
+    }
+  },
+  "observedRuntimeAcceptance": {
+    "hostWorkerRetry": "passed",
+    "inboxRecovery": "passed",
+    "messageFixtures": "passed",
+    "actualHttpCirculation": "passed",
+    "actualHttpOutageRecovery": "passed",
+    "launcherHttpStaticAssetsAndShutdown": "passed",
+    "uiTesting": false,
+    "completeRuntimeSuite": true,
+    "completeFctpConformanceClaim": false
+  },
+  "workspaceChanges": {
+    "applicationCodeTestsAndConfigurationChanged": false
+  },
+  "mechanicalChecks": {
+    "gitDiffCheck": "passed",
+    "memoJsonParse": "passed"
+  }
+}

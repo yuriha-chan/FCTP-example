@@ -1,0 +1,43 @@
+{
+  "checkpoint": "integration-diagnosis",
+  "scope": "diagnosis-only; no application or test source edits",
+  "fullSuite": {
+    "source": "docs/handoffs/integration-verification.md",
+    "reported": 22,
+    "passed": 10,
+    "failed": 2,
+    "cancelled": 10,
+    "timeoutMs": 120000,
+    "timeout": true
+  },
+  "targetedRuns": [
+    {
+      "command": "timeout 40s npx tsx --test tests/evidence.test.ts",
+      "result": "2 passed, 1 failed",
+      "diagnosis": "Fixture changes EntryRequest.id away from the requested URI, so required identity validation precedes destination binding."
+    },
+    {
+      "command": "timeout 40s npx tsx --test tests/home.test.ts",
+      "result": "assertion failed at line 69: expected 403, received 401; file interrupted at about 38.7s with pending promise",
+      "diagnosis": "Rotated credential is invalid and correctly maps to 401; failed assertion bypasses success-path-only server cleanup."
+    },
+    {
+      "command": "timeout 40s npx tsx --test tests/policy-territory.test.ts",
+      "result": "return-with-evidence assertion failed; business-rejection test passed",
+      "diagnosis": "Fixture fetcher does not serve the original EntryRequest resource at the evidence URI."
+    },
+    {
+      "command": "timeout 40s npx tsx --test tests/registry.test.ts",
+      "result": "first test failed, second passed",
+      "diagnosis": "Verifier callback misuses the three-argument contract, causing expected issuer mismatch and no Registry adoption. No nested queue/read deadlock evidenced by source."
+    }
+  ],
+  "protocolSemantics": {
+    "invalidOrRevokedCredential": 401,
+    "authenticatedButPolicyDenied": 403,
+    "evidenceChecks": ["fetched object id equals requested URI", "evidence-to-destination binding"],
+    "objectPersistence": "real evidence references must resolve to persisted objects under exact URIs"
+  },
+  "possibleConcurrentPortRace": "Root test script runs all test files in one node test invocation; multiple tests release an ephemeral port before binding it later. Source-only risk, not observed in these runs.",
+  "uiTests": false
+}

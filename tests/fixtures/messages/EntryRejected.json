@@ -1,0 +1,7 @@
+{
+  "id": "https://fctp.example/events/rejected-1",
+  "type": "EntryRejected",
+  "request": "https://fctp.example/requests/entry-1",
+  "territory": "https://fctp.example/actors/territory-blue",
+  "reason": "Route is closed"
+}

@@ -1,0 +1,36 @@
+{
+  "checkpoint": "bounded-launcher-and-inbox-verification",
+  "ownedPaths": [
+    "tests/demo-launcher.test.ts",
+    "tests/inbox-recovery.test.ts",
+    "docs/handoffs/launcher-verification.md",
+    "docs/memos/launcher-verification.json"
+  ],
+  "launcherAssertions": {
+    "urlResolution": "new URL(path, base)",
+    "htmlReferencesStylesheetAndBundle": true,
+    "stylesheetServedSuccessfully": true,
+    "nonemptyJavaScriptBundleServed": true,
+    "administratorSecretsAbsentFromConfig": true,
+    "cleanClose": true,
+    "browserOrDomTested": false
+  },
+  "inboxAssertions": {
+    "originalRejectedActivityPersistsAcrossRestart": true,
+    "duplicateReplayDoesNotRequeue": true
+  },
+  "verification": {
+    "commands": [
+      "npm run build",
+      "npm run typecheck:tests",
+      "npx tsx --test tests/demo-launcher.test.ts tests/inbox-recovery.test.ts",
+      "npx eslint tests/demo-launcher.test.ts tests/inbox-recovery.test.ts"
+    ],
+    "results": {
+      "build": "passed",
+      "testTypecheck": "passed",
+      "focusedRuntimeTests": "passed; 5 tests",
+      "eslint": "passed"
+    }
+  }
+}

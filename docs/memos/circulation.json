@@ -1,0 +1,41 @@
+{
+  "checkpoint": "circulation-http-acceptance",
+  "test": "tests/circulation.test.ts",
+  "ownedPaths": [
+    "tests/circulation.test.ts",
+    "docs/handoffs/circulation.md",
+    "docs/memos/circulation.json"
+  ],
+  "acceptance": {
+    "realHttp": true,
+    "freeLoopbackPorts": 3,
+    "applicationFactories": [
+      "createAuthorityApp",
+      "createPolicyApp",
+      "createSimulationApp"
+    ],
+    "signedPlayerTokenDelivery": true,
+    "explicitInboxOutboxPumping": true,
+    "aProductionLoadExit": true,
+    "independentExitEvidenceVerification": ["A", "B"],
+    "bExactExitEvidenceEntry": true,
+    "delayedBerthingAndUnload": true,
+    "importedReprocessingAndReload": true,
+    "registryNonAdoptionPreservesTerritoryOperation": true,
+    "bNativeProductionAndReservations": true,
+    "visibleManifestMismatchDecision": true
+  },
+  "artifact": "The focused test emits sanitized actual Activity wrappers, ExitEvent objects, evidence verification/binding reports, and Territory decision facts. No credentials or private keys are included.",
+  "verification": {
+    "requiredSequence": [
+      "npm run build && npm run typecheck:tests",
+      "npx tsx --test tests/circulation.test.ts",
+      "npx eslint tests/circulation.test.ts"
+    ],
+    "results": {
+      "buildAndTestTypecheck": "passed; build noted browser bundle pending because apps/client/src/main.ts is absent, exit status 0",
+      "focusedRuntimeTest": "passed; 5 tests, 0 failures",
+      "eslint": "passed; no output"
+    }
+  }
+}

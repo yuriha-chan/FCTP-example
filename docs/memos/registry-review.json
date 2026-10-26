@@ -1,0 +1,24 @@
+{
+  "unit": "registry",
+  "status": "implementation and integration tests authored; verification blocked by unrelated workspace build error",
+  "changedFiles": [
+    "apps/test-authority/src/registry.ts",
+    "tests/registry.test.ts",
+    "docs/handoffs/registry.md",
+    "docs/memos/registry-review.json"
+  ],
+  "findings": [
+    "EntryRejected expected issuer is the destination Territory of the exact locally issued EntryRequest and does not depend on an event vessel field.",
+    "BerthingEvent, DepartureEvent, ExitEvent and optional departure evidence are checked against exact issued requests.",
+    "CargoOperationEvent cargo applies as a load/unload delta with Item ID and Stack variety/data identity; impossible unloads leave Registry cargo and event history unchanged.",
+    "Exit evidence delegates to server-base resolveExitEvidence while the Registry verifies local issuance links.",
+    "Added real-key signed Activity-envelope handling tests and persistence assertions."
+  ],
+  "verification": {
+    "command": "npm test",
+    "result": "blocked during npm run build before test-source typecheck, ESLint, or tests",
+    "error": "apps/territory-sim/src/territory.ts:185 TS18048: evidence is possibly undefined",
+    "registryCompileErrors": "Initial root build also reported Registry count narrowing errors; corrected before the second root build attempt."
+  },
+  "checkpoint": "Stop at Registry unit pending supervisor review; no Home, Territory, bootstrap, root, or configuration paths changed."
+}

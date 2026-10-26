@@ -1,0 +1,8 @@
+{
+  "id": "https://fctp.example/requests/departure-1",
+  "type": "DepartureRequest",
+  "vessel": "https://fctp.example/vessels/ship-1",
+  "territory": "https://fctp.example/actors/territory-blue",
+  "port": "https://fctp.example/ports/harbor-1",
+  "route": "https://fctp.example/routes/blue-red"
+}

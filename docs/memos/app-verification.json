@@ -1,0 +1,41 @@
+{
+  "checkpoint": "integrated-app-factory-verification",
+  "changedFiles": [
+    "apps/test-authority/src/app.ts",
+    "apps/territory-policy/src/app.ts",
+    "apps/territory-sim/src/app.ts",
+    "tests/authority-app.test.ts",
+    "tests/sim-app.test.ts",
+    "docs/handoffs/app-verification.md",
+    "docs/memos/app-verification.json"
+  ],
+  "apiFacts": {
+    "authority": "createAuthorityApp returns authority, home, registry and ids; adoption defaults on only for a missing Registry state, persisted adoption survives omitted option, explicit option overrides.",
+    "policy": "createPolicyApp returns host, territory and ids; policy Territory retains its local economic model.",
+    "simulation": "createSimulationApp returns host, territory and ids; local port/route/asset IDs are arrays; importedMetal references policy metal; unload accepts CargoManifest.entries."
+  },
+  "command": "timeout 180s npm test",
+  "pipeline": {
+    "build": "passed",
+    "testTypecheck": "passed",
+    "eslint": "passed",
+    "runtimeTests": "44 passed, 2 failed in initial full run due to authority and simulation fixture mismatches; corrected fixtures passed focused rerun"
+  },
+  "repairs": [
+    "Authority app initializes Registry with const after createAuthority; the verifier callback accesses it after factory completion.",
+    "Authority test sends the required JSON request body and supplies the fake destination Actor.",
+    "Policy app publicPorts uses a non-null assertion for ids.ports[0].",
+    "Simulation app reads hostRef.current.server and uses named local asset variables while retaining the published assets array.",
+    "Simulation cargo mapping narrows item ids to strings; validManifest validates entry identity/count/data at runtime and mapping narrows the stack count to number.",
+    "Simulation test checks unauthenticated and invalid-token rejection on the plain-text media URL while the Asset document remains publicly readable."
+  ],
+  "runtimeCoverage": {
+    "simulationTestIncludes": ["HTTP token declaration", "protected text resources", "Player and administrator role authorization"],
+    "executed": true,
+    "focusedCommand": "npx tsx --test tests/authority-app.test.ts tests/sim-app.test.ts",
+    "focusedResult": "3 passed, 0 failed"
+  },
+  "sourceScope": "Build compiled all app TypeScript; test-source typecheck and ESLint included app/test sources. Full runtime suite ran with 44 passing and 2 fixture failures; focused authority/simulation runtime rerun passed 3 tests.",
+  "uiTesting": false,
+  "committed": false
+}

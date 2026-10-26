@@ -1,0 +1,8 @@
+{
+  "name": "@fctp/resources",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": { ".": { "types": "./src/index.ts", "import": "./dist/index.js" } },
+  "types": "./dist/index.d.ts",
+  "dependencies": { "@fctp/protocol": "0.1.0", "@fctp/auth": "0.1.0" }
+}

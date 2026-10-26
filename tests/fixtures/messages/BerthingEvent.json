@@ -1,0 +1,9 @@
+{
+  "id": "https://fctp.example/events/berthing-1",
+  "type": "BerthingEvent",
+  "vessel": "https://fctp.example/vessels/ship-1",
+  "territory": "https://fctp.example/actors/territory-blue",
+  "port": "https://fctp.example/ports/harbor-1",
+  "request": "https://fctp.example/requests/entry-1",
+  "effectiveAt": "2026-10-26T10:00:00Z"
+}

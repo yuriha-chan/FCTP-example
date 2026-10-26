@@ -1,0 +1,42 @@
+{
+  "memoType": "completed-range-reusable-knowledge",
+  "compressionBoundary": {
+    "eligible": ["Initial repository exploration", "Rendered implementation plan and documentation groundwork", "Initial seven-package foundation checkpoint", "Verified inbound Activity adapter checkpoint", "Supervisor/subagent instruction separation"],
+    "excluded": ["Full protocol.txt context", "Full plan.txt context", "Important early user instructions", "Recent unfinished authority and Territory integrations", "Current verification and nested-proof blockers"]
+  },
+  "repository": {
+    "root": "/app",
+    "runtime": "Node 24.22.1; npm 11.19.1",
+    "originalUserFiles": ["protocol.txt", "plan.txt", "opencode.json", "tui.json"],
+    "initialState": "Greenfield Git repository; original files untracked; preserve user work."
+  },
+  "establishedArchitecture": {
+    "browserCompatiblePackages": ["protocol", "identity", "resources", "auth", "client-sdk"],
+    "serverPackages": ["federation", "server-base"],
+    "identity": "Actual Digital Bazaar eddsa-rdfc-2022 proofs; fixed document loader; separate cryptography, attribution, expected issuer results.",
+    "transport": "Signed Activity wrappers; independent signed ExitEvent evidence; persistent Inbox/Outbox and retry payloads.",
+    "resources": "Shared Fetch ResourceClient; bearer-isolated caches; no shared game policy.",
+    "auth": "Exact HMAC token derivation and SHA256 digest; monotonic revisions; equal-revision conflict fails closed."
+  },
+  "verifiedCompletedChecks": {
+    "foundationCheckpoint": "typecheck and ESLint passed; initial 7 tests passed",
+    "inboundVerifierCheckpoint": "typecheck, ESLint, and 10 tests passed sequentially",
+    "coverageQualification": "Selected shared behavior, not full MVP or complete protocol conformance. Later app integrations require separate checks."
+  },
+  "reusableLessons": [
+    "Package runtime exports point at dist; dependent tests must follow build sequentially.",
+    "Descriptive handoffs are factual snapshots, not immutable design constraints.",
+    "Fresh agents receive one bounded goal and return at its checkpoint; supervisor continues across checkpoints.",
+    "Mechanical checks are delegated; supervisor reviews interpretation, ownership, duplicate abstractions and patch-work integration."
+  ],
+  "lookup": {
+    "plan": "docs/implementation-plan.md",
+    "mapping": "docs/spec-mapping.md",
+    "conventions": "docs/implementation-conventions.md",
+    "foundationAPI": "docs/handoffs/foundation.md",
+    "inboundVerifierAPI": "docs/handoffs/verification.md",
+    "supervisorRequirements": "docs/supervisor-instructions.md",
+    "subagentRequirements": "docs/subagent-instructions.md",
+    "activeFindings": "docs/implementation-handoff.md"
+  }
+}

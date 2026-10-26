@@ -1,0 +1,32 @@
+{
+  "checkpoint": "bounded-inbox-recovery",
+  "ownedPaths": [
+    "packages/server-base/src/server.ts",
+    "packages/server-base/src/store.ts",
+    "tests/inbox-recovery.test.ts",
+    "docs/handoffs/inbox-recovery.md",
+    "docs/memos/inbox-recovery.json"
+  ],
+  "api": "FctpServer.processInbox(limit): Promise<number>",
+  "policy": {
+    "serializedInvocations": true,
+    "oncePerEligibleItemPerCall": true,
+    "retryPreservesOriginalActivityAndDedupHashes": true,
+    "invalidTokenSchemaQuarantined": true,
+    "verificationFailureDelayedRetry": true,
+    "backoff": "min(60000, 500 * 2^min(attempts, 7))",
+    "failuresObservable": "AggregateError delivered to host workerErrors"
+  },
+  "verification": {
+    "commands": [
+      "npm run build && npm run typecheck:tests",
+      "npx tsx --test tests/inbox-recovery.test.ts",
+      "npx eslint packages/server-base/src/server.ts packages/server-base/src/store.ts tests/inbox-recovery.test.ts"
+    ],
+    "results": {
+      "buildAndTestTypecheck": "passed",
+      "focusedRuntimeTest": "passed; 2 tests",
+      "eslint": "passed"
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "unit": "mechanical-integration-verification",
+  "changedFiles": [
+    "packages/server-base/src/host.ts",
+    "docs/handoffs/integration-verification.md",
+    "docs/memos/integration-verification.json"
+  ],
+  "sourceChange": "Removed unused URI type import from host.ts.",
+  "command": "npm test",
+  "pipeline": {
+    "build": "passed",
+    "testTypecheck": "passed",
+    "eslint": "passed; eslint packages apps tests",
+    "runtimeTests": {
+      "total": 22,
+      "passed": 10,
+      "failed": 2,
+      "cancelled": 10,
+      "skipped": 0,
+      "todo": 0,
+      "result": "interrupted; shell command exceeded 120-second timeout"
+    }
+  },
+  "failures": [
+    {
+      "file": "tests/evidence.test.ts:79",
+      "test": "exit evidence returns unavailable references and unissued foreign-destination entry as binding failures",
+      "expected": "/destination-does-not-match/",
+      "actual": "EntryRequest id does not match requested URI"
+    },
+    {
+      "file": "tests/home.test.ts:69",
+      "test": "Home persists player credentials, rotates and revokes scoped declarations, and proxies with matching authorization",
+      "expected": 403,
+      "actual": 401
+    }
+  ],
+  "coverage": "No coverage report or coverage counts produced.",
+  "frameworkScope": "Checks app and test sources: build, test-source typecheck, ESLint over packages/apps/tests, and runtime tests; not only package build output.",
+  "uiTesting": "Not performed.",
+  "concurrentWriteErrors": []
+}

@@ -1,0 +1,29 @@
+{
+  "checkpoint": "integration-fixture-repair",
+  "scope": "assigned fixture repair in tests/policy-territory.test.ts and tests/server-wire.test.ts; no implementation edits",
+  "changes": {
+    "tests/evidence.test.ts": "foreign destination fixture preserves requested EntryRequest ID and changes only destination territory",
+    "tests/policy-territory.test.ts": "fetch fixture strips URI fragments for HTTP routing so #key-1 key IDs resolve the fragment-free endpoint; serves the original EntryRequest, DepartureEvent, and referenced DepartureRequest at exact IDs; return assertion prints full decision diagnostics on failure",
+    "tests/server-wire.test.ts": "registers protected resource at the actual listener-port URI used by requests",
+    "tests/registry.test.ts": "inbound verifier callback follows three-argument contract and forwards actual sender plus activity.object; cleanup uses finally",
+    "tests/home.test.ts": "stale credentials expect 401; authenticated policy denial explicitly expects 403; cleanup uses finally"
+  },
+  "exportedApisChanged": false,
+  "verification": {
+    "command": "timeout 180s npm test",
+    "build": "passed",
+    "typecheckTests": "passed",
+    "eslint": "passed",
+    "runtime": {
+      "reported": 42,
+      "passed": 42,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "timedOut": false,
+      "durationMs": 6820.832137
+    }
+  },
+  "blockers": [],
+  "uiTests": false
+}

@@ -1,0 +1,305 @@
+{
+  "EntryRequest": {
+    "id": "https://fctp.example/requests/entry-1",
+    "type": "EntryRequest",
+    "vessel": {
+      "id": "https://fctp.example/vessels/ship-1",
+      "registry": "https://fctp.example/actors/registry-main",
+      "possessor": "https://fctp.example/actors/player-1",
+      "capacity": 100
+    },
+    "cargo": {
+      "entries": [
+        {
+          "variety": "https://fctp.example/varieties/ore",
+          "count": -1,
+          "data": {}
+        }
+      ]
+    },
+    "journey": {
+      "events": []
+    },
+    "destination": {
+      "territory": "https://fctp.example/actors/territory-blue",
+      "port": "https://fctp.example/ports/harbor-1",
+      "route": "https://fctp.example/routes/blue-red"
+    },
+    "extension": {
+      "retained": true
+    }
+  },
+  "EntryRejected": {
+    "id": "not-an-absolute-uri",
+    "type": "EntryRejected",
+    "request": "https://fctp.example/requests/entry-1",
+    "territory": "https://fctp.example/actors/territory-blue",
+    "reason": "Route is closed"
+  },
+  "BerthingEvent": {
+    "id": "not-an-absolute-uri",
+    "type": "BerthingEvent",
+    "vessel": "https://fctp.example/vessels/ship-1",
+    "territory": "https://fctp.example/actors/territory-blue",
+    "port": "https://fctp.example/ports/harbor-1",
+    "request": "https://fctp.example/requests/entry-1",
+    "effectiveAt": "2026-10-26T10:00:00Z"
+  },
+  "CargoOperationEvent": {
+    "id": "not-an-absolute-uri",
+    "type": "CargoOperationEvent",
+    "vessel": "https://fctp.example/vessels/ship-1",
+    "territory": "https://fctp.example/actors/territory-blue",
+    "port": "https://fctp.example/ports/harbor-1",
+    "operation": "unload",
+    "cargo": {
+      "entries": [
+        {
+          "variety": "https://fctp.example/varieties/ore",
+          "count": 4,
+          "data": {
+            "assay": {
+              "purity": 0.97
+            }
+          }
+        }
+      ]
+    },
+    "effectiveAt": "2026-10-26T10:00:00Z"
+  },
+  "DepartureRequest": {
+    "id": "not-an-absolute-uri",
+    "type": "DepartureRequest",
+    "vessel": "https://fctp.example/vessels/ship-1",
+    "territory": "https://fctp.example/actors/territory-blue",
+    "port": "https://fctp.example/ports/harbor-1",
+    "route": "https://fctp.example/routes/blue-red"
+  },
+  "DepartureEvent": {
+    "id": "not-an-absolute-uri",
+    "type": "DepartureEvent",
+    "vessel": "https://fctp.example/vessels/ship-1",
+    "territory": "https://fctp.example/actors/territory-blue",
+    "port": "https://fctp.example/ports/harbor-1",
+    "request": "https://fctp.example/requests/departure-1",
+    "effectiveAt": "2026-10-26T10:00:00Z"
+  },
+  "VoyageEvent": {
+    "id": "not-an-absolute-uri",
+    "type": "VoyageEvent",
+    "vessel": "https://fctp.example/vessels/ship-1",
+    "territory": "https://fctp.example/actors/territory-blue",
+    "kind": "waypoint",
+    "details": {
+      "sequence": 2
+    },
+    "effectiveAt": "2026-10-26T10:00:00Z"
+  },
+  "TokenDigest": {
+    "tokenDigest": "AAECAwQFBgcICQoLDA0ODw==",
+    "actor": "https://fctp.example/actors/player-1",
+    "revision": -1
+  },
+  "TokenRevoke": {
+    "tokenRevoke": "revoke",
+    "actor": "https://fctp.example/actors/player-1",
+    "revision": -1
+  },
+  "RouteRequest": {
+    "id": "not-an-absolute-uri",
+    "applyFrom": "https://fctp.example/actors/territory-blue",
+    "applyTo": "https://fctp.example/actors/territory-red",
+    "object": {
+      "id": "https://fctp.example/routes/blue-red",
+      "from": "https://fctp.example/actors/territory-blue",
+      "to": "https://fctp.example/actors/territory-red"
+    },
+    "@context": [
+      "https://www.w3.org/ns/activitystreams",
+      "https://fctp.example/context",
+      "https://w3id.org/security/data-integrity/v2"
+    ],
+    "proof": {
+      "type": "DataIntegrityProof",
+      "created": "2026-10-26T21:28:50Z",
+      "verificationMethod": "https://fctp.example/actors/territory-blue#message-fixture-key",
+      "cryptosuite": "eddsa-rdfc-2022",
+      "proofPurpose": "assertionMethod",
+      "proofValue": "z4eaj4Jwj9xTHmM4uz2pHb5gjTEud5HzGar3shRT7rvsRw1bCJ9rJ3Dh5yShg9JPjJpEus1ez4uv4mvmU7hXPEww7"
+    }
+  },
+  "RouteRequestApproval": {
+    "id": "not-an-absolute-uri",
+    "request": {
+      "id": "https://fctp.example/requests/route-1",
+      "applyFrom": "https://fctp.example/actors/territory-blue",
+      "applyTo": "https://fctp.example/actors/territory-red"
+    },
+    "object": {
+      "id": "https://fctp.example/routes/blue-red",
+      "from": "https://fctp.example/actors/territory-blue",
+      "to": "https://fctp.example/actors/territory-red"
+    }
+  },
+  "RouteRequestDenial": {
+    "id": "not-an-absolute-uri",
+    "request": "https://fctp.example/requests/route-1",
+    "reason": "Endpoint declined"
+  },
+  "Variety": {
+    "id": "not-an-absolute-uri",
+    "name": "Refined ingot",
+    "holder": "https://fctp.example/actors/territory-blue",
+    "mass": 2.5,
+    "version": "1",
+    "production": [
+      {
+        "type": "mine",
+        "duration": 1,
+        "yield": [
+          {
+            "probability": 1,
+            "count": 2,
+            "data": {
+              "grade": "raw"
+            }
+          }
+        ]
+      },
+      {
+        "type": "manufacture",
+        "ingredients": [
+          {
+            "variety": "https://fctp.example/varieties/ore",
+            "count": 3,
+            "data": {}
+          }
+        ],
+        "location": [
+          {
+            "id": "https://fctp.example/areas/foundry",
+            "name": "Foundry",
+            "territory": "https://fctp.example/actors/territory-blue"
+          }
+        ],
+        "tool": "https://fctp.example/assets/smelter",
+        "duration": 5,
+        "yield": [
+          {
+            "probability": 1,
+            "count": 1,
+            "data": {
+              "grade": "refined"
+            }
+          }
+        ]
+      }
+    ],
+    "extension": {
+      "publisherNote": "example"
+    }
+  },
+  "CargoManifest": {
+    "entries": [
+      {
+        "variety": "not-a-uri",
+        "count": 2,
+        "data": {}
+      }
+    ]
+  },
+  "ExitEvent": {
+    "@context": [
+      "https://www.w3.org/ns/activitystreams",
+      "https://fctp.example/context",
+      "https://w3id.org/security/data-integrity/v2"
+    ],
+    "id": "https://fctp.example/events/exit-1",
+    "type": "ExitEvent",
+    "vessel": "https://fctp.example/vessels/ship-1",
+    "territory": "https://fctp.example/actors/territory-blue",
+    "route": "https://fctp.example/routes/blue-red",
+    "entryRequest": "https://fctp.example/requests/entry-1",
+    "departureEvent": "https://fctp.example/events/departure-1",
+    "cargo": {
+      "entries": [
+        {
+          "variety": "https://fctp.example/varieties/ore",
+          "count": 4,
+          "data": {
+            "assay": {
+              "purity": 0.97
+            }
+          }
+        }
+      ]
+    },
+    "effectiveAt": "2026-10-26T10:00:00Z",
+    "proof": {
+      "type": "DataIntegrityProof",
+      "created": "2026-10-26T21:28:50Z",
+      "verificationMethod": "https://fctp.example/actors/territory-blue#message-fixture-key",
+      "cryptosuite": "eddsa-rdfc-2022",
+      "proofPurpose": "assertionMethod",
+      "proofValue": "z2vCV2NaxXj34c2gcExZrQWdS3pj2u2BkuS5TkrEEQ198X6cYtQ2bnshgnWG9RqwgTaSuJxJg4vRR553VuPkVAAAA"
+    }
+  },
+  "CreateEnvelope": {
+    "@context": [
+      "https://www.w3.org/ns/activitystreams",
+      "https://fctp.example/context",
+      "https://w3id.org/security/data-integrity/v2"
+    ],
+    "id": "https://fctp.example/activities/exit-1",
+    "type": "Create",
+    "actor": "https://fctp.example/actors/territory-blue",
+    "object": {
+      "@context": [
+        "https://www.w3.org/ns/activitystreams",
+        "https://fctp.example/context",
+        "https://w3id.org/security/data-integrity/v2"
+      ],
+      "id": "https://fctp.example/events/exit-1",
+      "type": "ExitEvent",
+      "vessel": "https://fctp.example/vessels/ship-1",
+      "territory": "https://fctp.example/actors/territory-blue",
+      "route": "https://fctp.example/routes/blue-red",
+      "entryRequest": "https://fctp.example/requests/entry-1",
+      "departureEvent": "https://fctp.example/events/departure-1",
+      "cargo": {
+        "entries": [
+          {
+            "variety": "https://fctp.example/varieties/ore",
+            "count": 4,
+            "data": {
+              "assay": {
+                "purity": 0.97
+              }
+            }
+          }
+        ]
+      },
+      "effectiveAt": "2026-10-26T10:00:00Z",
+      "proof": {
+        "type": "DataIntegrityProof",
+        "created": "2026-10-26T21:28:50Z",
+        "verificationMethod": "https://fctp.example/actors/territory-blue#message-fixture-key",
+        "cryptosuite": "eddsa-rdfc-2022",
+        "proofPurpose": "assertionMethod",
+        "proofValue": "z2vCV2NaxXj34c2gcExZrQWdS3pj2u2BkuS5TkrEEQ198X6cYtQ2bnshgnWG9RqwgTaSuJxJg4vRR553VuPkVMiP4"
+      }
+    },
+    "to": [
+      "https://fctp.example/actors/registry-main"
+    ],
+    "published": "not-an-instant",
+    "proof": {
+      "type": "DataIntegrityProof",
+      "created": "2026-10-26T21:28:50Z",
+      "verificationMethod": "https://fctp.example/actors/territory-blue#message-fixture-key",
+      "cryptosuite": "eddsa-rdfc-2022",
+      "proofPurpose": "assertionMethod",
+      "proofValue": "z218cm5h35kFHtn74wxdHJa6QDUhh6ucxhcHASSY4bjs23jEtbJQbA4bwRcebasYNxydha3J6aui2cSBEFNwpWPeR"
+    }
+  }
+}

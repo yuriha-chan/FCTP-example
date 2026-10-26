@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FCTP Browser Client</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header>
+      <h1>FCTP Browser Client</h1>
+      <p>Shared FCTP resources and local experimental Territory controls.</p>
+      <p id="connection-status" role="status">Loading service configuration…</p>
+    </header>
+    <main>
+      <section>
+        <h2>Actor and Territory resources</h2>
+        <form id="actor-form">
+          <label>Actor URI or WebFinger handle <input name="actor" required placeholder="https://…/actors/territory or @territory@host"></label>
+          <button>Resolve Actor</button>
+        </form>
+        <div class="columns">
+          <pre id="actor-result" aria-live="polite"></pre>
+          <div id="resource-browser"></div>
+        </div>
+        <form id="resource-get-form">
+          <label>Resource URI <input name="uri" required></label>
+          <label>Resource Server Actor URI <input name="resourceActor"></label>
+          <label>Retrieval route
+            <select name="route"><option value="direct">Direct</option><option value="proxy">Home proxy</option></select>
+          </label>
+          <button>Authenticated GET</button>
+        </form>
+        <pre id="resource-result" aria-live="polite"></pre>
+      </section>
+
+      <section>
+        <h2>Test authority, Home and Registry</h2>
+        <p>Local demo defaults: authority <code>demo-authority-admin</code>, policy <code>demo-policy-admin</code>, simulation <code>demo-sim-admin</code>. Replace these with the launcher's configured credentials. Values and issued native token stay in memory only.</p>
+        <form id="authority-form" class="grid-form">
+          <label>Test-authority administrator<input name="authorityAdmin" type="password" autocomplete="off" placeholder="demo-authority-admin"></label>
+          <label>Policy administrator<input name="policyAdmin" type="password" autocomplete="off" placeholder="demo-policy-admin"></label>
+          <label>Simulation administrator<input name="simulationAdmin" type="password" autocomplete="off" placeholder="demo-sim-admin"></label>
+          <button type="button" data-action="issue-token">Explicit test-authority login · issue native token</button>
+          <button type="button" data-action="rotate-token">Rotate native token</button>
+          <label>Native token<input name="nativeToken" type="password" autocomplete="off"></label>
+          <label>Resource Actor URI<input name="resourceActor"></label>
+          <button type="button" data-action="digest-request">Request token digest</button>
+          <button type="button" data-action="revoke-token">Revoke resource token</button>
+        </form>
+        <form id="registry-form" class="grid-form">
+          <label>Destination demo Territory<select name="destination"><option value="policy">Territory A · Policy</option><option value="simulation">Territory B · Simulation</option></select></label>
+          <label>Destination Territory Actor URI<input name="territory" required></label>
+          <label>Port URI<input name="port" required></label>
+          <label>Route URI<input name="route" required></label>
+          <button type="button" data-action="registry-entry">Send Registry entry request</button>
+          <button type="button" data-action="registry-departure">Send Registry departure request</button>
+          <label>Registry operation adoption<select name="adoption"><option value="true">Adopt notifications</option><option value="false">Do not adopt notifications</option></select></label>
+          <button type="button" data-action="registry-adoption">Set adoption</button>
+          <button type="button" data-action="refresh-authority">Refresh Registry state</button>
+        </form>
+        <div class="columns">
+          <div><h3>Registry declared cargo and events</h3><pre id="registry-state"></pre></div>
+          <div><h3>Exit evidence verification and comparison</h3>
+            <form id="exit-form"><label>ExitEvent URI<input name="exitUri" required></label><button>Fetch and verify ExitEvent</button></form>
+            <pre id="exit-result"></pre>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Territory A · Policy rules</h2>
+        <p>Local experimental API. Administrative policy/admission and immediate production are separate from shared FCTP resource operations.</p>
+        <div class="columns">
+          <form id="policy-admin-form">
+            <label>Policy JSON<textarea name="policy" rows="10" spellcheck="false">{}</textarea></label>
+            <button type="button" data-action="policy-update">Update policy</button>
+            <label>Admission JSON<textarea name="admission" rows="6" spellcheck="false">{}</textarea></label>
+            <button type="button" data-action="admission-update">Update admission</button>
+          </form>
+          <div><h3>Territory-owned inventory, production and admission decisions</h3><pre id="policy-state"></pre></div>
+        </div>
+        <form id="policy-operation-form" class="grid-form">
+          <label>Ore count<input name="mineCount" type="number" min="1" value="2"></label><button type="button" data-action="policy-mine">Mine ore</button>
+          <label>Manufacture count<input name="manufactureCount" type="number" min="1" value="1"></label><button type="button" data-action="policy-manufacture">Manufacture ore-to-metal</button>
+          <label>Transfer direction<select name="direction"><option value="to-port">Warehouse to port</option><option value="to-warehouse">Port to warehouse</option></select></label>
+          <label>Variety URI<input name="variety"></label><label>Count<input name="transferCount" type="number" min="1" value="1"></label><button type="button" data-action="policy-transfer">Transfer inventory</button>
+          <label>Vessel URI<input name="vessel"></label><label>Cargo variety URI<input name="cargoVariety"></label><label>Cargo count<input name="cargoCount" type="number" min="1" value="1"></label>
+          <button type="button" data-action="policy-load">Load vessel</button><button type="button" data-action="policy-unload">Unload vessel</button>
+          <button type="button" data-action="refresh-policy">Refresh inventory and completion view</button>
+        </form>
+        <pre id="policy-result" aria-live="polite"></pre>
+      </section>
+
+      <section>
+        <h2>Territory B · Facilities and discrete ticks</h2>
+        <p>Local experimental API. Production and cargo handling create scheduled jobs; use tick and refresh to observe completion. B cargo uses an <code>entryRequest</code> URI and rich CargoManifest.</p>
+        <div class="columns">
+          <form id="simulation-admin-form">
+            <label>Facilities JSON<textarea name="facilities" rows="8" spellcheck="false">{}</textarea></label>
+            <button type="button" data-action="facilities-update">Configure facilities</button>
+            <button type="button" data-action="simulation-tick">Advance one tick</button>
+          </form>
+          <div><h3>Territory-owned facilities, jobs, cargo, decisions and evidence/trust</h3><pre id="simulation-state"></pre></div>
+        </div>
+        <form id="simulation-operation-form" class="grid-form">
+          <label>Mining count<input name="mineCount" type="number" min="1" value="2"></label><label>Mining duration in ticks<input name="mineDuration" type="number" min="0" value="1"></label>
+          <button type="button" data-action="simulation-mine">Start mining</button>
+          <label>Manufacture recipe<select name="recipe"><option value="native">Native ore to metal</option><option value="imported">Imported A metal to refined</option></select></label><label>Manufacture count<input name="manufactureCount" type="number" min="1" value="1"></label>
+          <button type="button" data-action="simulation-manufacture">Start manufacture</button>
+          <label>EntryRequest URI<input name="entryRequest"></label><label>Cargo manifest JSON<textarea name="cargo" rows="4" spellcheck="false">{"entries":[{"variety":"https://example.invalid/varieties/metal","count":1,"data":{}}]}</textarea></label>
+          <label>Handling duration in ticks<input name="duration" type="number" min="0" value="1"></label>
+          <button type="button" data-action="simulation-load">Schedule load</button><button type="button" data-action="simulation-unload">Schedule unload</button>
+          <button type="button" data-action="refresh-simulation">Refresh inventory and completion view</button>
+        </form>
+        <pre id="simulation-result" aria-live="polite"></pre>
+      </section>
+
+      <section>
+        <h2>Observed A → B circulation</h2>
+        <p>Use the controls above to observe: A mine → manufacture → warehouse/port transfer → load → Registry departure and signed ExitEvent; then Registry entry to B → tick until berth → unload → tick → imported-metal manufacture → tick → load → tick → departure request → tick to signed ExitEvent. Each Territory reports its own inventory/cargo. Registry adoption is independent and cargo comparisons are descriptive.</p>
+      </section>
+    </main>
+    <script type="module" src="/dist/client/main.js"></script>
+  </body>
+</html>

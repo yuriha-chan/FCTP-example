@@ -1,0 +1,34 @@
+{
+  "id": "https://fctp.example/requests/entry-1",
+  "type": "EntryRequest",
+  "vessel": {
+    "id": "https://fctp.example/vessels/ship-1",
+    "registry": "https://fctp.example/actors/registry-main",
+    "possessor": "https://fctp.example/actors/player-1",
+    "capacity": 100
+  },
+  "cargo": {
+    "entries": [
+      {
+        "variety": "https://fctp.example/varieties/ore",
+        "count": 4,
+        "data": {
+          "assay": {
+            "purity": 0.97
+          }
+        }
+      }
+    ]
+  },
+  "journey": {
+    "events": []
+  },
+  "destination": {
+    "territory": "https://fctp.example/actors/territory-blue",
+    "port": "https://fctp.example/ports/harbor-1",
+    "route": "https://fctp.example/routes/blue-red"
+  },
+  "extension": {
+    "retained": true
+  }
+}

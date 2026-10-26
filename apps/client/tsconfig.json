@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "composite": true
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../../packages/protocol" },
+    { "path": "../../packages/auth" },
+    { "path": "../../packages/identity" },
+    { "path": "../../packages/resources" },
+    { "path": "../../packages/client-sdk" }
+  ]
+}

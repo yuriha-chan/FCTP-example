@@ -1,0 +1,13 @@
+:root { color-scheme: light; font: 16px/1.5 system-ui, sans-serif; color: #17212b; background: #f2f5f7; }
+body { margin: 0 auto; max-width: 1180px; padding: 1rem; }
+header, section { background: white; border: 1px solid #cbd5dc; border-radius: .5rem; margin: 1rem 0; padding: 1rem; }
+h1, h2, h3 { line-height: 1.2; }
+label { display: grid; gap: .25rem; min-width: 12rem; }
+input, select, textarea, button { box-sizing: border-box; font: inherit; padding: .45rem; width: 100%; }
+button { cursor: pointer; align-self: end; }
+form { display: flex; flex-wrap: wrap; align-items: end; gap: .7rem; margin: .8rem 0; }
+.grid-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); }
+.columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 28rem), 1fr)); gap: 1rem; }
+pre { background: #eef2f4; border-radius: .35rem; max-height: 28rem; overflow: auto; padding: .8rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+code { background: #eef2f4; padding: .1rem .25rem; }
+@media (max-width: 600px) { body { padding: .5rem; } section { padding: .7rem; } }

@@ -1,0 +1,16 @@
+{
+  "reason": "Home operations previously read a Player snapshot, performed asynchronous token derivation or signing, and later committed it. Overlapping digest, rotation, and revoke calls could therefore reuse revisions or overwrite resource/token state.",
+  "invariant": "All complete HomeService operations for one Player execute sequentially, including async derivation, signing, resource retrieval, and persistence. A failed operation rejects its own caller but leaves the per-Player queue usable. Each resource revision is persisted as a monotonically increasing greatest revision, including after revoke.",
+  "api": {
+    "serialization": "installHome maintains a private per-Player Promise queue and wraps issueNativeToken, rotateNativeToken, requestDigest, revoke, deriveToken, and getResource. No shared locking abstraction or federation/baseware changes are required.",
+    "exportsChanged": false,
+    "persistedState": "server.store.domain.home.players[playerActorId].revisions[resourceActorId]"
+  },
+  "results": {
+    "focusedTest": "npx tsx --test tests/home.test.ts — passed, 1 test.",
+    "eslint": "npx eslint apps/test-authority/src/home.ts tests/home.test.ts — passed with no output.",
+    "appTypecheck": "npm run typecheck (tsc -b --pretty false) — passed. Existing root project references include apps/test-authority source.",
+    "testTypecheck": "npm run typecheck:tests (tsc -p tests/tsconfig.json --pretty false) — failed on unrelated tests/sim-domain.test.ts:136 TS7053 (string index into an inferred closed variety-key object); no Home diagnostics.",
+    "credentialValidation": "Overlapping requestDigest/rotateNativeToken/revoke produced sequential revisions 4, 5, and 6; Resource Server rejected credentials after the final revoke. A subsequent digest at revision 7 restored the current credential. A rejected duplicate issuance did not prevent subsequent service operations."
+  }
+}

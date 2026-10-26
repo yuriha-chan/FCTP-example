@@ -1,0 +1,38 @@
+# Implementation conventions
+
+These adopted choices govern the MVP implementation. They are local conventions, not additional FCTP requirements, and supersede historical open statuses in earlier registers and handoffs. `protocol.txt` and `plan.txt` remain intact and authoritative for their respective roles.
+
+## Adopted conventions
+
+- **Transport and delivery:** Use ActivityStreams `Create` wrappers for vessel requests/responses/events and token declarations, addressed to the recipient Actor. Use `Follow`/`Undo` and resource `Create`/`Update`/`Delete` where applicable. Preserve embedded FCTP object shapes; distinguish token declarations structurally rather than adding a required FCTP field. Sign outbound Activity envelopes; sign ExitEvent objects independently. HTTP 202 acknowledges durable acceptance, not business success.
+- **Identity and evidence:** Actor `publicKeys` reference fetchable Multikey documents whose controller matches the Actor ID and whose verification method appears in that Actor's key list. Evaluate cryptographic proof, key ownership, and expected publisher independently. Token declarations require the Home associated with the Player in local enrollment. Never infer economic trust from signature validity.
+- **Context:** Retain the provisional FCTP context URI and resolve it through a fixed local JSON-LD context. Include fixed ActivityStreams and security contexts required by the proof implementation. The allowlisted loader does not fetch arbitrary remote contexts. Map FCTP terms explicitly; retain extension fields and do not require extra fields on received FCTP objects.
+- **Token revisions and encoding:** Lower revisions are ignored; identical same-revision content is idempotent; conflicting same-revision content disables that revision until a greater revision. Preserve the highest revision after revocation. Diplomatic token encoding is standard base64 without padding; digest encoding is standard base64. Native tokens are random secret bytes transported as encoded text and decoded to bytes before HMAC.
+- **Deduplication and persistence:** Persist Activity and object IDs with payload identity. Exact replays are no-ops; conflicting reuse is a protocol error. Scope recipient processing to the destination Actor. Persist accepted work before acknowledging and serialize store mutations. Use atomic snapshot replacement and a persistent retry queue; domain update and outgoing work share a transaction; retries retain original payloads and IDs.
+- **Resources and maps:** Use Fetch, Actor-derived resource links, authenticated GET and token-isolated cache entries. Local development uses loopback HTTP as an explicit exception to production HTTPS requirements; local services provide CORS for the demo client. The local ASCII map format URI is `https://fctp.example/formats/ascii`, with `text/plain; charset=utf-8` representation data. Asset rendering is text-only.
+- **Local APIs and authorization:** Experimental endpoints live under `/local/`, separate from Actor, Inbox/Outbox and resource URLs. Discovery describes local operations; use Actor/resource identifiers rather than inferred hostnames. A and B APIs remain separate. Administrator credentials are server-local and separate from federation keys and Player diplomatic tokens. Player cargo operations must match the active vessel possessor.
+- **Production:** A applies persisted finite-reserve, quota and recipe rules immediately. B reserves raw inputs immediately and completes mining, manufacture and timed cargo handling on discrete ticks; reservations prevent reuse. B supports its native chain and imported A-metal reprocessing. Production mapping and duration units are local recipe semantics; no shared production engine is used.
+- **Tooling and persistence:** Use Node 24 LTS, npm workspaces, pinned dependencies, TypeScript, ESLint, Node HTTP, Fetch/Web Crypto, and a local JSON snapshot store. No external service is required.
+- **Domain boundaries:** A and B retain distinct entry policies, domain structures and facility parameters. Use request, entryRequest, vessel/Registry linkage and issuer checks to validate evidence correspondence. No baseware decision automatically adopts evidence cargo or synchronizes inventories.
+
+## Implementation references
+
+| Adopted decision | Source latitude | Implementation evidence |
+|---|---|---|
+| Activity envelopes, addressing, signatures and acknowledgements | `protocol.txt` §§2, 11; `plan.txt` §§3.2, 8 | `packages/federation/`, `packages/server-base/`; `tests/server-wire.test.ts`, `tests/host.test.ts`, `tests/circulation.test.ts` |
+| Fixed JSON-LD context and proof/key attribution | `protocol.txt` §§2.3, 6; `plan.txt` §§3.1–3.2 | `packages/identity/`; `tests/verification.test.ts`, `tests/nested-proof.test.ts` |
+| ASCII format identifier and text media | `protocol.txt` §7.4 delegates format details; `plan.txt` §4 | `packages/resources/`, A/B app resources, `apps/client/src/client.ts`; app tests |
+| `/local/` APIs and app authorization | `plan.txt` §§3.4, 4, 8 | `apps/territory-policy/src/app.ts`, `apps/territory-sim/src/app.ts`, authority Home/Registry routes; app tests |
+| Local production semantics | `protocol.txt` §5; `plan.txt` §3.5 | A/B domain code; `tests/policy-domain.test.ts`, `tests/sim-domain.test.ts`, `tests/circulation.test.ts` |
+| Equal-revision conflict behavior | `protocol.txt` §10; `plan.txt` §3.3 | `packages/auth/`, `packages/server-base/`; `tests/foundation.test.ts`, `tests/home.test.ts` |
+| Durable delivery and dedup | `protocol.txt` §§11.1, 11.3; `plan.txt` §3.2 | `packages/server-base/`; host, wire and circulation tests |
+| Workspace and runtime tooling | `plan.txt` §§2, 9 | `package.json`, lockfile, project configs and `apps/demo/`; `tests/demo-launcher.test.ts` |
+
+## Intentional MVP latitude
+
+- Framework, persistence adapter, test runner and build tooling may be selected reproducibly (`plan.txt` §§2, 9).
+- A policy values and B facility/tick parameters are local game rules (`plan.txt` §§5.1–5.2).
+- Production execution remains Territory-specific (`plan.txt` §3.5).
+- The client supports a limited ASCII/text representation rather than all map and Asset formats (`protocol.txt` §7.4; `plan.txt` §4).
+- Cache behavior may be selected by the Home server while preserving authorization isolation (`protocol.txt` §7.7; `plan.txt` §3.3).
+- Territory cargo and Registry-declared cargo may differ; Registry may decline adoption (`protocol.txt` §§9.4, 9.9; `plan.txt` §§3.1, 6–7).

@@ -1,0 +1,22 @@
+{
+  "id": "https://fctp.example/events/cargo-1",
+  "type": "CargoOperationEvent",
+  "vessel": "https://fctp.example/vessels/ship-1",
+  "territory": "https://fctp.example/actors/territory-blue",
+  "port": "https://fctp.example/ports/harbor-1",
+  "operation": "unload",
+  "cargo": {
+    "entries": [
+      {
+        "variety": "https://fctp.example/varieties/ore",
+        "count": 4,
+        "data": {
+          "assay": {
+            "purity": 0.97
+          }
+        }
+      }
+    ]
+  },
+  "effectiveAt": "2026-10-26T10:00:00Z"
+}

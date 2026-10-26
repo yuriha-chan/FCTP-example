@@ -1,0 +1,40 @@
+{
+  "format": "worker-test-repair-facts",
+  "changedFiles": [
+    "tests/host.test.ts",
+    "docs/handoffs/worker-test-repair.md",
+    "docs/memos/worker-test-repair.json"
+  ],
+  "productionFilesChanged": false,
+  "exportedApisChanged": false,
+  "testBehavior": {
+    "waitsForFirstWorkerError": true,
+    "enqueuesDistinctSecondPoisonActivityAfterFirstError": true,
+    "waitsForSecondWorkerError": true,
+    "assertsFirstActivityRemainsDelayedDuringContinuation": true,
+    "retainsFailureCountAssertion": true,
+    "waitTimeoutMs": 5000,
+    "testTimeoutMs": 10000,
+    "hostCleanupRunsBeforeTemporaryDirectoryRemoval": true
+  },
+  "verification": [
+    {
+      "command": "npm run build && npm run typecheck:tests",
+      "result": "passed",
+      "coverage": "project builds, browser client compilation and bundling, test-source typechecking, browser client typechecking"
+    },
+    {
+      "command": "npx tsx --test tests/host.test.ts",
+      "result": "passed",
+      "tests": 1,
+      "passed": 1,
+      "failed": 0,
+      "cancelled": 0
+    },
+    {
+      "command": "npx eslint tests/host.test.ts",
+      "result": "passed",
+      "output": "no output"
+    }
+  ]
+}

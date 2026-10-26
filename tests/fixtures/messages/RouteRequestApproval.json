@@ -1,0 +1,13 @@
+{
+  "id": "https://fctp.example/events/route-approved-1",
+  "request": {
+    "id": "https://fctp.example/requests/route-1",
+    "applyFrom": "https://fctp.example/actors/territory-blue",
+    "applyTo": "https://fctp.example/actors/territory-red"
+  },
+  "object": {
+    "id": "https://fctp.example/routes/blue-red",
+    "from": "https://fctp.example/actors/territory-blue",
+    "to": "https://fctp.example/actors/territory-red"
+  }
+}

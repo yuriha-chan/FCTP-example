@@ -1,0 +1,53 @@
+{
+  "id": "https://fctp.example/varieties/ingot",
+  "name": "Refined ingot",
+  "holder": "https://fctp.example/actors/territory-blue",
+  "mass": 2.5,
+  "version": "1",
+  "production": [
+    {
+      "type": "mine",
+      "duration": 1,
+      "yield": [
+        {
+          "probability": 1,
+          "count": 2,
+          "data": {
+            "grade": "raw"
+          }
+        }
+      ]
+    },
+    {
+      "type": "manufacture",
+      "ingredients": [
+        {
+          "variety": "https://fctp.example/varieties/ore",
+          "count": 3,
+          "data": {}
+        }
+      ],
+      "location": [
+        {
+          "id": "https://fctp.example/areas/foundry",
+          "name": "Foundry",
+          "territory": "https://fctp.example/actors/territory-blue"
+        }
+      ],
+      "tool": "https://fctp.example/assets/smelter",
+      "duration": 5,
+      "yield": [
+        {
+          "probability": 1,
+          "count": 1,
+          "data": {
+            "grade": "refined"
+          }
+        }
+      ]
+    }
+  ],
+  "extension": {
+    "publisherNote": "example"
+  }
+}

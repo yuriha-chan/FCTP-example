@@ -1,0 +1,11 @@
+{
+  "id": "https://fctp.example/events/voyage-1",
+  "type": "VoyageEvent",
+  "vessel": "https://fctp.example/vessels/ship-1",
+  "territory": "https://fctp.example/actors/territory-blue",
+  "kind": "waypoint",
+  "details": {
+    "sequence": 2
+  },
+  "effectiveAt": "2026-10-26T10:00:00Z"
+}
