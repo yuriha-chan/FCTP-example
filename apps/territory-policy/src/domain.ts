@@ -21,6 +21,7 @@ export interface Policy {
   warehouseLimits: Record<string, number>;
   portLimits: Record<string, number>;
   decisions: Record<string, 'allow' | 'deny'>;
+  varietyPortPolicy?: Record<string, 'allow' | 'deny'>;
   admission?: {
     registryAcceptance?: string[];
     territoryAcceptance?: string[];
@@ -46,14 +47,14 @@ export type OperationResult = { success: true; state: TerritoryState } | { succe
 const validCount = (value: number): boolean => Number.isSafeInteger(value) && value >= 0;
 const clone = <T>(value: T): T => structuredClone(value);
 const hasEmptyData = (data: Record<string, unknown>): boolean => Object.keys(data).length === 0;
-const rejected = (state: TerritoryState, action: string, error: string, details: Record<string, unknown> = {}): OperationResult => ({
+const rejected = (state: TerritoryState, action: string, error: string, details: Record<string, unknown> = {}, actor = 'system'): OperationResult => ({
   success: false,
-  state: { ...state, audit: [...state.audit, { actor: 'system', action, outcome: 'rejected', details: { ...details, error } }] },
+  state: { ...state, audit: [...state.audit, { actor, action, outcome: 'rejected', details: { ...details, error } }] },
   error
 });
-const accepted = (state: TerritoryState, action: string, details: Record<string, unknown>): OperationResult => ({
+const accepted = (state: TerritoryState, action: string, details: Record<string, unknown>, actor = 'system'): OperationResult => ({
   success: true,
-  state: { ...state, audit: [...state.audit, { actor: 'system', action, outcome: 'accepted', details }] }
+  state: { ...state, audit: [...state.audit, { actor, action, outcome: 'accepted', details }] }
 });
 const localCount = (state: TerritoryState, inventory: Record<string, number>, variety: string): number => inventory[variety] ?? 0;
 const mass = (state: TerritoryState, manifest: CargoManifest): number => manifest.entries.reduce((sum, item) => {
@@ -98,49 +99,49 @@ export function changePolicy(state: TerritoryState, policy: Policy, actor: strin
   return { success: true, state: { ...state, policy: clone(policy), audit: [...state.audit, { actor, action: 'policy-change', outcome: 'accepted', details: { policy: clone(policy) } }] } };
 }
 
-export function mineOre(state: TerritoryState, oreVariety: string, count: number): OperationResult {
-  if (!state.policy.miningPermitted) return rejected(state, 'mine', 'Mining is not permitted', { oreVariety, count });
-  if (!validCount(count) || count === 0 || count > state.policy.miningQuota || count > state.policy.oreReserve) return rejected(state, 'mine', 'Mining quota or reserve exceeded', { oreVariety, count });
+export function mineOre(state: TerritoryState, oreVariety: string, count: number, actor = 'system'): OperationResult {
+  if (!state.policy.miningPermitted) return rejected(state, 'mine', 'Mining is not permitted', { oreVariety, count }, actor);
+  if (!validCount(count) || count === 0 || count > state.policy.miningQuota || count > state.policy.oreReserve) return rejected(state, 'mine', 'Mining quota or reserve exceeded', { oreVariety, count }, actor);
   const nextCount = localCount(state, state.rawInventory, oreVariety) + count;
-  if (!state.commodities[oreVariety]?.variety.production?.some((production) => production.type === 'mine') || nextCount > (state.policy.warehouseLimits[oreVariety] ?? Infinity)) return rejected(state, 'mine', 'Commodity has no configured mining production or warehouse limit exceeded', { oreVariety, count });
+  if (!state.commodities[oreVariety]?.variety.production?.some((production) => production.type === 'mine') || nextCount > (state.policy.warehouseLimits[oreVariety] ?? Infinity)) return rejected(state, 'mine', 'Commodity has no configured mining production or warehouse limit exceeded', { oreVariety, count }, actor);
   const next = { ...state, rawInventory: { ...state.rawInventory, [oreVariety]: nextCount }, policy: { ...state.policy, oreReserve: state.policy.oreReserve - count, miningQuota: state.policy.miningQuota - count } };
-  return accepted(next, 'mine', { oreVariety, count });
+  return accepted(next, 'mine', { oreVariety, count }, actor);
 }
 
-export function manufacture(state: TerritoryState, recipeId: string, count: number): OperationResult {
+export function manufacture(state: TerritoryState, recipeId: string, count: number, actor = 'system'): OperationResult {
   const recipe = state.policy.recipes.find((entry) => entry.id === recipeId);
-  if (!recipe || !state.policy.manufacturePermits.includes(recipeId)) return rejected(state, 'manufacture', 'Manufacturing is not permitted', { recipeId, count });
-  if (!validCount(count) || count === 0) return rejected(state, 'manufacture', 'Invalid production count', { recipeId, count });
+  if (!recipe || !state.policy.manufacturePermits.includes(recipeId)) return rejected(state, 'manufacture', 'Manufacturing is not permitted', { recipeId, count }, actor);
+  if (!validCount(count) || count === 0) return rejected(state, 'manufacture', 'Invalid production count', { recipeId, count }, actor);
   const required = Object.entries(recipe.ingredients).map(([variety, amount]) => [variety, amount * count] as const);
   const outputCount = recipe.outputCount * count;
-  if (!validCount(outputCount) || required.some(([, amount]) => !validCount(amount))) return rejected(state, 'manufacture', 'Production quantity exceeds safe limits', { recipeId, count });
-  if (required.some(([variety, amount]) => !state.commodities[variety] || localCount(state, state.rawInventory, variety) < amount)) return rejected(state, 'manufacture', 'Insufficient ingredients', { recipeId, count });
-  if (!state.commodities[recipe.output] || localCount(state, state.rawInventory, recipe.output) + outputCount > (state.policy.warehouseLimits[recipe.output] ?? Infinity)) return rejected(state, 'manufacture', 'Unknown output or warehouse limit exceeded', { recipeId, count });
+  if (!validCount(outputCount) || required.some(([, amount]) => !validCount(amount))) return rejected(state, 'manufacture', 'Production quantity exceeds safe limits', { recipeId, count }, actor);
+  if (required.some(([variety, amount]) => !state.commodities[variety] || localCount(state, state.rawInventory, variety) < amount)) return rejected(state, 'manufacture', 'Insufficient ingredients', { recipeId, count }, actor);
+  if (!state.commodities[recipe.output] || localCount(state, state.rawInventory, recipe.output) + outputCount > (state.policy.warehouseLimits[recipe.output] ?? Infinity)) return rejected(state, 'manufacture', 'Unknown output or warehouse limit exceeded', { recipeId, count }, actor);
   const rawInventory = { ...state.rawInventory };
   for (const [variety, amount] of required) rawInventory[variety] = rawInventory[variety]! - amount;
   rawInventory[recipe.output] = (rawInventory[recipe.output] ?? 0) + outputCount;
-  return accepted({ ...state, rawInventory }, 'manufacture', { recipeId, count, outputCount });
+  return accepted({ ...state, rawInventory }, 'manufacture', { recipeId, count, outputCount }, actor);
 }
 
-export function transferWarehouseToPort(state: TerritoryState, variety: string, count: number): OperationResult {
-  if (!validCount(count) || count === 0 || localCount(state, state.rawInventory, variety) < count) return rejected(state, 'warehouse-to-port', 'Insufficient warehouse stock or invalid count', { variety, count });
-  if (localCount(state, state.portInventory, variety) + count > (state.policy.portLimits[variety] ?? Infinity)) return rejected(state, 'warehouse-to-port', 'Port stock limit exceeded', { variety, count });
+export function transferWarehouseToPort(state: TerritoryState, variety: string, count: number, actor = 'system'): OperationResult {
+  if (!validCount(count) || count === 0 || localCount(state, state.rawInventory, variety) < count) return rejected(state, 'warehouse-to-port', 'Insufficient warehouse stock or invalid count', { variety, count }, actor);
+  if (localCount(state, state.portInventory, variety) + count > (state.policy.portLimits[variety] ?? Infinity)) return rejected(state, 'warehouse-to-port', 'Port stock limit exceeded', { variety, count }, actor);
   const rawInventory = { ...state.rawInventory, [variety]: state.rawInventory[variety]! - count };
   const portInventory = { ...state.portInventory, [variety]: localCount(state, state.portInventory, variety) + count };
-  return accepted({ ...state, rawInventory, portInventory }, 'warehouse-to-port', { variety, count });
+  return accepted({ ...state, rawInventory, portInventory }, 'warehouse-to-port', { variety, count }, actor);
 }
 
-export function transferPortToWarehouse(state: TerritoryState, variety: string, count: number): OperationResult {
-  if (!validCount(count) || count === 0 || localCount(state, state.portInventory, variety) < count) return rejected(state, 'port-to-warehouse', 'Insufficient port stock or invalid count', { variety, count });
-  if (localCount(state, state.rawInventory, variety) + count > (state.policy.warehouseLimits[variety] ?? Infinity)) return rejected(state, 'port-to-warehouse', 'Warehouse limit exceeded', { variety, count });
-  return accepted({ ...state, portInventory: { ...state.portInventory, [variety]: state.portInventory[variety]! - count }, rawInventory: { ...state.rawInventory, [variety]: localCount(state, state.rawInventory, variety) + count } }, 'port-to-warehouse', { variety, count });
+export function transferPortToWarehouse(state: TerritoryState, variety: string, count: number, actor = 'system'): OperationResult {
+  if (!validCount(count) || count === 0 || localCount(state, state.portInventory, variety) < count) return rejected(state, 'port-to-warehouse', 'Insufficient port stock or invalid count', { variety, count }, actor);
+  if (localCount(state, state.rawInventory, variety) + count > (state.policy.warehouseLimits[variety] ?? Infinity)) return rejected(state, 'port-to-warehouse', 'Warehouse limit exceeded', { variety, count }, actor);
+  return accepted({ ...state, portInventory: { ...state.portInventory, [variety]: state.portInventory[variety]! - count }, rawInventory: { ...state.rawInventory, [variety]: localCount(state, state.rawInventory, variety) + count } }, 'port-to-warehouse', { variety, count }, actor);
 }
 
-export function prepareVessel(state: TerritoryState, vesselId: string, capacity: number, cargo: CargoManifest = { entries: [] }): OperationResult {
+export function prepareVessel(state: TerritoryState, vesselId: string, capacity: number, cargo: CargoManifest = { entries: [] }, actor = 'system'): OperationResult {
   const validation = validateModel<CargoManifest>(cargo, 'CargoManifest');
   const itemIds = validation.success ? validation.data.entries.flatMap((item) => 'id' in item ? [item.id] : []) : [];
-  if (!vesselId || !Number.isFinite(capacity) || capacity < 0 || vesselId in state.vessels || !validation.success || new Set(itemIds).size !== itemIds.length || !Number.isFinite(mass(state, cargo)) || mass(state, cargo) > capacity) return rejected(state, 'prepare-vessel', 'Invalid vessel or cargo capacity', { vesselId, capacity });
-  return accepted({ ...state, vessels: { ...state.vessels, [vesselId]: { capacity, manifest: clone(cargo) } } }, 'prepare-vessel', { vesselId });
+  if (!vesselId || !Number.isFinite(capacity) || capacity < 0 || vesselId in state.vessels || !validation.success || new Set(itemIds).size !== itemIds.length || !Number.isFinite(mass(state, cargo)) || mass(state, cargo) > capacity) return rejected(state, 'prepare-vessel', 'Invalid vessel or cargo capacity', { vesselId, capacity }, actor);
+  return accepted({ ...state, vessels: { ...state.vessels, [vesselId]: { capacity, manifest: clone(cargo) } } }, 'prepare-vessel', { vesselId }, actor);
 }
 
 export function removeVessel(state: TerritoryState, vesselId: string): OperationResult {
@@ -151,28 +152,30 @@ export function removeVessel(state: TerritoryState, vesselId: string): Operation
   return accepted({ ...state, vessels }, 'remove-vessel', { vesselId });
 }
 
-export function exitVessel(state: TerritoryState, vesselId: string): OperationResult {
-  if (!state.vessels[vesselId]) return rejected(state, 'exit-vessel', 'Unknown vessel', { vesselId });
+export function exitVessel(state: TerritoryState, vesselId: string, actor = 'system'): OperationResult {
+  if (!state.vessels[vesselId]) return rejected(state, 'exit-vessel', 'Unknown vessel', { vesselId }, actor);
   const vessels = { ...state.vessels };
   delete vessels[vesselId];
-  return accepted({ ...state, vessels }, 'exit-vessel', { vesselId });
+  return accepted({ ...state, vessels }, 'exit-vessel', { vesselId }, actor);
 }
 
-export function loadCargo(state: TerritoryState, vesselId: string, variety: string, count: number): OperationResult {
+export function loadCargo(state: TerritoryState, vesselId: string, variety: string, count: number, actor = 'system'): OperationResult {
+  if (state.policy.varietyPortPolicy?.[variety] === 'deny') return rejected(state, 'load', 'Variety is denied by local port policy', { vesselId, variety, count }, actor);
   const vessel = state.vessels[vesselId];
   const commodity = state.commodities[variety];
-  if (!vessel || !commodity || !validCount(count) || count === 0 || localCount(state, state.portInventory, variety) < count) return rejected(state, 'load', 'Unknown vessel/commodity or insufficient port stock', { vesselId, variety, count });
+  if (!vessel || !commodity || !validCount(count) || count === 0 || localCount(state, state.portInventory, variety) < count) return rejected(state, 'load', 'Unknown vessel/commodity or insufficient port stock', { vesselId, variety, count }, actor);
   const manifest = addManifestCount(vessel.manifest, variety, count);
-  if (mass(state, manifest) > vessel.capacity) return rejected(state, 'load', 'Vessel capacity exceeded', { vesselId, variety, count });
-  return accepted({ ...state, portInventory: { ...state.portInventory, [variety]: state.portInventory[variety]! - count }, vessels: { ...state.vessels, [vesselId]: { ...vessel, manifest } } }, 'load', { vesselId, variety, count });
+  if (mass(state, manifest) > vessel.capacity) return rejected(state, 'load', 'Vessel capacity exceeded', { vesselId, variety, count }, actor);
+  return accepted({ ...state, portInventory: { ...state.portInventory, [variety]: state.portInventory[variety]! - count }, vessels: { ...state.vessels, [vesselId]: { ...vessel, manifest } } }, 'load', { vesselId, variety, count }, actor);
 }
 
-export function unloadCargo(state: TerritoryState, vesselId: string, variety: string, count: number): OperationResult {
+export function unloadCargo(state: TerritoryState, vesselId: string, variety: string, count: number, actor = 'system'): OperationResult {
+  if (state.policy.varietyPortPolicy?.[variety] === 'deny') return rejected(state, 'unload', 'Variety is denied by local port policy', { vesselId, variety, count }, actor);
   const vessel = state.vessels[vesselId];
-  if (!vessel || !validCount(count) || count === 0 || countManifest(vessel.manifest, variety) < count) return rejected(state, 'unload', 'Unknown vessel or insufficient cargo', { vesselId, variety, count });
-  if (localCount(state, state.portInventory, variety) + count > (state.policy.portLimits[variety] ?? Infinity)) return rejected(state, 'unload', 'Port stock limit exceeded', { vesselId, variety, count });
+  if (!vessel || !validCount(count) || count === 0 || countManifest(vessel.manifest, variety) < count) return rejected(state, 'unload', 'Unknown vessel or insufficient cargo', { vesselId, variety, count }, actor);
+  if (localCount(state, state.portInventory, variety) + count > (state.policy.portLimits[variety] ?? Infinity)) return rejected(state, 'unload', 'Port stock limit exceeded', { vesselId, variety, count }, actor);
   const manifest = subtractManifestCount(vessel.manifest, variety, count);
-  return accepted({ ...state, portInventory: { ...state.portInventory, [variety]: localCount(state, state.portInventory, variety) + count }, vessels: { ...state.vessels, [vesselId]: { ...vessel, manifest } } }, 'unload', { vesselId, variety, count });
+  return accepted({ ...state, portInventory: { ...state.portInventory, [variety]: localCount(state, state.portInventory, variety) + count }, vessels: { ...state.vessels, [vesselId]: { ...vessel, manifest } } }, 'unload', { vesselId, variety, count }, actor);
 }
 
 export const territoryAProduction: { ore: Variety; metal: Variety; recipes: Recipe[]; production: Production[] } = {

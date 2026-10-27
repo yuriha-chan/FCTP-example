@@ -14,6 +14,8 @@ The experimental authoring routes use the authenticated Player's native token (`
 
 Missing or invalid native authentication returns `401`; malformed JSON, non-object bodies, invalid fields, and unsupported top-level keys return `400` without authoring mutation. A reference to an Asset not owned by the authenticated Player returns `403` without mutation. Signing and persistence failures propagate as server failures. The Player Actor exposes a public `creations` link to `/objects/players/<name>/creations`, an OrderedCollection of that Player's published Assets, Varieties, and AssetGrants. The objects, collection, text media, and public Outbox are public resources; native-auth catalog scoping does not make published output secret. Local publication records signed Create Activities in the Player Outbox with an empty recipient list and does not enqueue delivery. No remote subscriber delivery is implied. Optional Production is descriptive data: it does not install a Territory rule or generate cargo.
 
+The rendered client exposes Asset text controls from a loaded public `creations` collection, so a non-owner can read published text. Each control attempts the public media GET without credentials first; only a `401` or `403` with a native token falls back to the Actor-scoped authenticated read. `404` and other failures remain visible.
+
 | Route | Credential | Request | Response |
 |---|---|---|---|
 | `POST /local/home/issue` | Authority admin | Optional `{ "actor": "<Player URI>" }` | `200 { actor, nativeToken }` |
@@ -37,8 +39,12 @@ Missing or invalid native authentication returns `401`; malformed JSON, non-obje
 | `POST /local/manufacture` | Player diplomatic token | `{ count, recipe: "ore-to-metal" }` | `200` result or `409` domain rejection |
 | `POST /local/transfer` | Player diplomatic token | `{ direction: "to-port" | "to-warehouse", variety, count }` | `200` result or `409` domain rejection |
 | `POST /local/load`, `/local/unload` | Player diplomatic token who possesses the active visit | `{ vessel, variety, count }` | `200` result or `409` domain rejection |
-| `POST /local/admin/policy` | A admin credential | Persisted policy object with mining permission/quota/reserve, recipe/permits, limits and decisions | `200` update result; `400` invalid policy |
+| `POST /local/admin/policy` | A admin credential | Persisted policy object with mining permission/quota/reserve, recipe/permits, limits, optional `varietyPortPolicy` and decisions | `200` update result; `400` invalid policy |
 | `POST /local/admin/admission` | A admin credential | Partial admission object; supported fields include `registryAcceptance`, `territoryAcceptance`, `publicPorts`, `mismatchPolicy` | `200 { admission }`; `400` invalid input |
+
+Player-initiated A mine, manufacture, transfer, load, and unload operations record the authenticated Player URI in local audit entries. Registry entry `prepare-vessel` and departure `exit-vessel` record the verified Registry sender; internal and action-discovery preview operations default to `system`. Attribution does not change authorization.
+
+`varietyPortPolicy` is an optional local A permit map keyed by absolute `http` or `https` canonical Variety URIs without credentials. A missing entry means allow; `deny` rejects `load` or `unload` of that exact variety before port inventory or vessel manifest changes, with an attributed rejection. The permit does not create, modify, or register a Variety object, is not an FCTP field, and has no B equivalent. Policy validation returns `400` for malformed keys or decisions other than `allow` or `deny`.
 
 Player credentials identify an enrolled Player; load/unload additionally require that Player to match the active visit possessor. An administrator credential alone cannot operate cargo. Invalid credentials return `401`; authenticated but unauthorized cargo access returns `403`; unknown `/local/` paths return JSON `404`. Invalid JSON/operation fields return `400`; valid operation requests rejected by local domain conditions may return `409`.
 

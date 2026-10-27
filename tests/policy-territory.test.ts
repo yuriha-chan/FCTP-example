@@ -60,11 +60,14 @@ test('policy Territory accepts a signed Registry entry, produces and loads cargo
     const entryActivity = await host.sign('registry', { '@context': ['https://www.w3.org/ns/activitystreams', 'https://fctp.example/context'], id: 'https://registry.test/activities/entry/1', type: 'Create', actor: registry, object: request, to: [territoryId] } as never);
     await host.server.receive(territoryId, entryActivity);
     await host.server.processInbox();
+    const player = 'https://registry.test/players/1';
     assert.equal((await policy.ledger).visits[request.vessel.id]?.departed, false);
-    assert.equal((await policy.mine(territoryAProduction.ore.id, 2)).success, true);
-    assert.equal((await policy.manufacture('ore-to-metal', 1)).success, true);
-    assert.equal((await policy.transferWarehouseToPort(territoryAProduction.metal.id, 1)).success, true);
-    assert.equal((await policy.load(request.vessel.id, territoryAProduction.metal.id, 1)).success, true);
+    assert.equal((await policy.ledger).state.audit.find((entry) => entry.action === 'prepare-vessel')?.actor, registry);
+    assert.equal((await policy.mine(territoryAProduction.ore.id, 2, player)).success, true);
+    assert.equal((await policy.manufacture('ore-to-metal', 1, player)).success, true);
+    assert.equal((await policy.transferWarehouseToPort(territoryAProduction.metal.id, 1, player)).success, true);
+    assert.equal((await policy.load(request.vessel.id, territoryAProduction.metal.id, 1, player)).success, true);
+    assert.equal((await policy.ledger).state.audit.find((entry) => entry.action === 'load')?.actor, player);
     const departureRequest = { id: 'https://registry.test/departure/1', type: 'DepartureRequest', vessel: request.vessel.id, territory: territoryId, port: 'https://example.test/port/1' };
     departureRequestEvidence = departureRequest;
     const departureActivity = await host.sign('registry', { '@context': ['https://www.w3.org/ns/activitystreams', 'https://fctp.example/context'], id: 'https://registry.test/activities/departure/1', type: 'Create', actor: registry, object: departureRequest, to: [territoryId] } as never);
@@ -78,6 +81,7 @@ test('policy Territory accepts a signed Registry entry, produces and loads cargo
     assert.match(String(exit?.id), /\/objects\/policy\/exit\//);
     assert.deepEqual(exit?.cargo, { entries: [{ variety: territoryAProduction.metal.id, count: 1, data: {} }] });
     assert.equal((await policy.ledger).visits[request.vessel.id]?.departed, true);
+    assert.equal((await policy.ledger).state.audit.find((entry) => entry.action === 'exit-vessel')?.actor, registry);
     assert.equal((await policy.state).vessels[request.vessel.id], undefined);
     assert.deepEqual((await policy.ledger).visits[request.vessel.id]?.cargo, exit?.cargo);
 

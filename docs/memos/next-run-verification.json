@@ -1,0 +1,54 @@
+{
+  "checkpoint": "next-run-broad-gate-verification",
+  "command": "timeout 180s npm test",
+  "workingDirectory": "/app",
+  "commandRuns": 1,
+  "exitStatus": 0,
+  "timeoutFired": false,
+  "stages": {
+    "build": {
+      "command": "npm run build",
+      "result": "passed",
+      "includesBrowserBundle": true
+    },
+    "testSourceTypecheck": {
+      "command": "npm run typecheck:tests",
+      "result": "passed"
+    },
+    "eslint": {
+      "command": "npm run lint",
+      "result": "passed",
+      "diagnostics": 0
+    },
+    "runtimeTests": {
+      "command": "tsx --test tests/**/*.test.ts",
+      "result": "passed",
+      "tests": 85,
+      "suites": 0,
+      "pass": 85,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "durationMs": 55074.43836
+    }
+  },
+  "browserBundle": {
+    "path": "dist/client/main.js",
+    "exists": true,
+    "bytes": 490696,
+    "mtimeUtc": "2026-10-27T09:35:42Z"
+  },
+  "gitDiffCheck": {
+    "result": "clean",
+    "exitStatus": 0,
+    "output": ""
+  },
+  "scope": {
+    "productionCodeEdited": false,
+    "testCodeEdited": false,
+    "additionalBroadGatesRun": false,
+    "commitCreated": false,
+    "browserUiAcceptanceClaimed": false
+  }
+}

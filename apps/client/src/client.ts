@@ -89,6 +89,13 @@ export async function readText(uri: string, nativeToken: string, actorId: string
   return response.text();
 }
 
+export async function readTextPublicThenAuthenticated(uri: string, actorId: string, nativeToken?: string): Promise<string> {
+  const response = await fetch(uri, { headers: { Accept: 'text/plain' }, cache: 'no-store' });
+  if (response.ok) return response.text();
+  if (nativeToken && (response.status === 401 || response.status === 403)) return readText(uri, nativeToken, actorId);
+  throw new ResourceError(response.status, response.status === 401 ? 'unauthorized' : response.status === 403 ? 'forbidden' : response.status === 404 ? 'not-found' : 'http-error');
+}
+
 export async function getAuthenticated<T>(uri: string, actorId: string, nativeToken: string, route: 'direct' | 'proxy', config: ClientConfig): Promise<T> {
   if (route === 'direct') return sdk.get<T>(uri as URI, { nativeToken, resourceServer: actorId as URI, cache: false });
   const response = await fetch(`${config.origins.authority}/local/home/proxy?${new URLSearchParams({ uri, resourceActor: actorId })}`, {

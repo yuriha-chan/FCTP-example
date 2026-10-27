@@ -1,0 +1,61 @@
+{
+  "checkpoint": "non-owner-asset-text-readability",
+  "ownedPaths": [
+    "apps/client/src/main.ts",
+    "apps/client/src/client.ts",
+    "tests/browser-authoring.test.ts",
+    "docs/handoffs/asset-readability.md",
+    "docs/memos/asset-readability.json"
+  ],
+  "exportedApi": {
+    "name": "readTextPublicThenAuthenticated",
+    "module": "apps/client/src/client.ts",
+    "signature": "(uri: string, actorId: string, nativeToken?: string) => Promise<string>"
+  },
+  "behavior": {
+    "publicGetFirst": true,
+    "credentialsOnPublicGet": false,
+    "authenticatedFallbackStatuses": [401, 403],
+    "fallbackRequiresNativeToken": true,
+    "visibleWithoutFallbackStatuses": ["404", "other non-OK"],
+    "renderer": "textContent"
+  },
+  "renderedNonOwnerPath": {
+    "entry": "Resolve another Player Actor, then load Published Player creations",
+    "collectionFields": ["orderedItems", "items"],
+    "controlLabel": "Asset text <name>",
+    "collectionJsonResultPreserved": true
+  },
+  "focusedTest": {
+    "file": "tests/browser-authoring.test.ts",
+    "nonOwnerSession": "player-3",
+    "assetOwner": "player-2",
+    "exactLiteralTextObserved": true,
+    "injectedHeadingNotRenderedAsHeading": true,
+    "missingMedia404Visible": true,
+    "timeoutMs": 120000
+  },
+  "authoritySemanticsChanged": false,
+  "authorityPublicationRoutesChanged": false,
+  "unrelatedWorkspaceChangesObserved": [
+    "apps/territory-policy/src/app.ts",
+    "apps/territory-policy/src/domain.ts",
+    "apps/territory-policy/src/territory.ts",
+    "tests/policy-actions.test.ts",
+    "tests/policy-app.test.ts",
+    "tests/policy-domain.test.ts",
+    "tests/policy-territory.test.ts"
+  ],
+  "verification": {
+    "commands": [
+      { "command": "npm run build", "result": "passed" },
+      { "command": "npm run typecheck:tests", "result": "passed" },
+      { "command": "npx tsx --test tests/browser-authoring.test.ts", "result": "passed", "tests": 1, "failed": 0 },
+      { "command": "npx eslint apps/client/src/main.ts apps/client/src/client.ts tests/browser-authoring.test.ts", "result": "passed" }
+    ],
+    "failedCommandsCorrected": 0,
+    "broadGateRun": false,
+    "commitCreated": false,
+    "uiAcceptanceClaimed": false
+  }
+}

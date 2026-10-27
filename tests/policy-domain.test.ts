@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   changePolicy,
   createTerritoryState,
+  exitVessel,
   loadCargo,
   manufacture,
   mineOre,
@@ -108,6 +109,78 @@ test('cargo preserves Items and nonempty Stack data and bulk unload cannot consu
   const loaded = loadCargo(ported, 'incoming', ore, 1);
   assert.equal(loaded.success, true);
   if (loaded.success) assert.deepEqual(loaded.state.vessels.incoming?.manifest.entries, [item, stack, { variety: ore, count: 1, data: {} }]);
+});
+
+test('operations attribute audit entries to the acting Player or Registry and default to system', () => {
+  const player = 'https://authority.example/actors/player';
+  const registry = 'https://authority.example/actors/registry';
+  let state = succeed(mineOre(initial(), ore, 2, player));
+  assert.equal(state.audit.at(-1)?.actor, player);
+  assert.equal(state.audit.at(-1)?.outcome, 'accepted');
+  const rejectedMine = mineOre(state, metal, 1, player);
+  assert.equal(rejectedMine.success, false);
+  assert.equal(rejectedMine.state.audit.at(-1)?.actor, player);
+  assert.equal(rejectedMine.state.audit.at(-1)?.outcome, 'rejected');
+  state = succeed(manufacture(state, 'ore-to-metal', 1, player));
+  assert.equal(state.audit.at(-1)?.actor, player);
+  state = succeed(transferWarehouseToPort(state, metal, 1, player));
+  assert.equal(state.audit.at(-1)?.actor, player);
+  state = succeed(prepareVessel(state, 'audited', 2, { entries: [] }, registry));
+  assert.equal(state.audit.at(-1)?.actor, registry);
+  state = succeed(loadCargo(state, 'audited', metal, 1, player));
+  assert.equal(state.audit.at(-1)?.actor, player);
+  state = succeed(unloadCargo(state, 'audited', metal, 1, player));
+  assert.equal(state.audit.at(-1)?.actor, player);
+  state = succeed(exitVessel(state, 'audited', registry));
+  assert.equal(state.audit.at(-1)?.actor, registry);
+  assert.equal(succeed(mineOre(initial(), ore, 1)).audit.at(-1)?.actor, 'system');
+});
+
+test('variety port policy denies load and unload of the exact canonical variety without mutation', () => {
+  const player = 'https://authority.example/actors/player';
+  const registry = 'https://authority.example/actors/registry';
+  const deniedPolicy: Policy = { ...policy, varietyPortPolicy: { [metal]: 'deny' } };
+  let state = createTerritoryState(deniedPolicy, [{ variety: territoryAProduction.ore, mass: 2 }, { variety: territoryAProduction.metal, mass: 1 }]);
+  state = succeed(mineOre(state, ore, 2, player));
+  state = succeed(manufacture(state, 'ore-to-metal', 1, player));
+  state = succeed(transferWarehouseToPort(state, metal, 1, player));
+  state = succeed(prepareVessel(state, 'permit-vessel', 5, { entries: [] }, registry));
+  const beforeLoad = state;
+  const deniedLoad = loadCargo(state, 'permit-vessel', metal, 1, player);
+  assert.equal(deniedLoad.success, false);
+  assert.deepEqual(deniedLoad.state.portInventory, beforeLoad.portInventory);
+  assert.deepEqual(deniedLoad.state.vessels, beforeLoad.vessels);
+  assert.equal(deniedLoad.state.audit.at(-1)?.actor, player);
+  assert.equal(deniedLoad.state.audit.at(-1)?.outcome, 'rejected');
+  assert.match(String(deniedLoad.state.audit.at(-1)?.details.error), /denied/i);
+
+  let inbound = createTerritoryState(deniedPolicy, [{ variety: territoryAProduction.ore, mass: 2 }, { variety: territoryAProduction.metal, mass: 1 }]);
+  inbound = succeed(prepareVessel(inbound, 'inbound', 5, { entries: [{ variety: metal, count: 1, data: {} }] }, registry));
+  const beforeUnload = inbound;
+  const deniedUnload = unloadCargo(inbound, 'inbound', metal, 1, player);
+  assert.equal(deniedUnload.success, false);
+  assert.deepEqual(deniedUnload.state.portInventory, beforeUnload.portInventory);
+  assert.deepEqual(deniedUnload.state.vessels, beforeUnload.vessels);
+  assert.equal(deniedUnload.state.audit.at(-1)?.actor, player);
+  assert.equal(deniedUnload.state.audit.at(-1)?.outcome, 'rejected');
+});
+
+test('variety port policy allows an explicit allow and treats a missing entry as allow', () => {
+  const player = 'https://authority.example/actors/player';
+  const registry = 'https://authority.example/actors/registry';
+  const allowOreMissingMetal: Policy = { ...policy, varietyPortPolicy: { [ore]: 'allow' } };
+  let state = createTerritoryState(allowOreMissingMetal, [{ variety: territoryAProduction.ore, mass: 2 }, { variety: territoryAProduction.metal, mass: 1 }]);
+  state = succeed(mineOre(state, ore, 2, player));
+  state = succeed(manufacture(state, 'ore-to-metal', 1, player));
+  state = succeed(transferWarehouseToPort(state, metal, 1, player));
+  state = succeed(prepareVessel(state, 'allowed', 5, { entries: [] }, registry));
+  state = succeed(loadCargo(state, 'allowed', metal, 1, player));
+  assert.equal(state.audit.at(-1)?.actor, player);
+  assert.equal(state.audit.at(-1)?.outcome, 'accepted');
+  state = succeed(unloadCargo(state, 'allowed', metal, 1, player));
+  assert.equal(state.audit.at(-1)?.actor, player);
+  assert.equal(state.audit.at(-1)?.outcome, 'accepted');
+  assert.equal(state.portInventory[metal], 1);
 });
 
 test('admission validates cargo and rejects duplicate Item IDs; mining requires configured mine production', () => {

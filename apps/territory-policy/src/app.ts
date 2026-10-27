@@ -178,19 +178,19 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
       if (!Number.isSafeInteger(input.count) || (input.count as number) < 1) { send(400, { error: 'invalid-input' }); return true; }
       if (url.pathname === '/local/mine') {
         if (input.variety !== undefined && input.variety !== ore.id) { send(400, { error: 'invalid-input' }); return true; }
-        const result = await territory.mine(ore.id, input.count as number); send(result.success ? 200 : 409, result); return true;
+        const result = await territory.mine(ore.id, input.count as number, player); send(result.success ? 200 : 409, result); return true;
       }
       if (url.pathname === '/local/manufacture') {
         if (input.recipe !== 'ore-to-metal') { send(400, { error: 'invalid-input' }); return true; }
-        const result = await territory.manufacture(input.recipe, input.count as number); send(result.success ? 200 : 409, result); return true;
+        const result = await territory.manufacture(input.recipe, input.count as number, player); send(result.success ? 200 : 409, result); return true;
       }
       if (url.pathname === '/local/transfer') {
         if (!isVariety(input.variety, ids) || !['to-port', 'to-warehouse'].includes(String(input.direction))) { send(400, { error: 'invalid-input' }); return true; }
-        const result = input.direction === 'to-port' ? await territory.transferWarehouseToPort(input.variety, input.count as number) : await territory.transferPortToWarehouse(input.variety, input.count as number);
+        const result = input.direction === 'to-port' ? await territory.transferWarehouseToPort(input.variety, input.count as number, player) : await territory.transferPortToWarehouse(input.variety, input.count as number, player);
         send(result.success ? 200 : 409, result); return true;
       }
       if (typeof input.vessel !== 'string' || !isVariety(input.variety, ids) || !possessesActiveVisit((await territory.ledger), input.vessel, player)) { send(403, { error: 'forbidden' }); return true; }
-      const result = url.pathname.endsWith('/load') ? await territory.load(input.vessel, input.variety, input.count as number) : await territory.unload(input.vessel, input.variety, input.count as number);
+      const result = url.pathname.endsWith('/load') ? await territory.load(input.vessel, input.variety, input.count as number, player) : await territory.unload(input.vessel, input.variety, input.count as number, player);
       send(result.success ? 200 : 409, result); return true;
     }
     send(404, { error: 'not-found' });
@@ -279,6 +279,13 @@ function validPolicy(value: Record<string, unknown>, ids: PolicyAppIds): boolean
   const count = (item: unknown): item is number => Number.isSafeInteger(item) && (item as number) >= 0;
   const record = (item: unknown): item is Record<string, unknown> => !!item && typeof item === 'object' && !Array.isArray(item);
   const variety = (item: string): boolean => item === ids.varieties.ore || item === ids.varieties.metal;
+  const absoluteUri = (item: unknown): item is string => {
+    if (typeof item !== 'string' || !URL.canParse(item)) return false;
+    const uri = new URL(item);
+    return (uri.protocol === 'http:' || uri.protocol === 'https:') && !uri.username && !uri.password;
+  };
+  const varietyPortPolicy = (item: unknown): boolean => item === undefined ||
+    (record(item) && Object.entries(item).every(([key, decision]) => absoluteUri(key) && (decision === 'allow' || decision === 'deny')));
   const limits = (item: unknown): boolean => record(item) && Object.entries(item).every(([key, amount]) => variety(key) && count(amount));
   if (!Array.isArray(value.recipes)) return false;
   const recipes = value.recipes;
@@ -291,5 +298,6 @@ function validPolicy(value: Record<string, unknown>, ids: PolicyAppIds): boolean
   return typeof value.miningPermitted === 'boolean' && count(value.miningQuota) && count(value.oreReserve) &&
     Array.isArray(value.manufacturePermits) && value.manufacturePermits.every((entry) => typeof entry === 'string' && recipeIds.has(entry)) &&
     limits(value.warehouseLimits) && limits(value.portLimits) && record(value.decisions) &&
-    Object.values(value.decisions).every((decision) => decision === 'allow' || decision === 'deny');
+    Object.values(value.decisions).every((decision) => decision === 'allow' || decision === 'deny') &&
+    varietyPortPolicy(value.varietyPortPolicy);
 }

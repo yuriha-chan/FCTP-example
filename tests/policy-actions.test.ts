@@ -56,6 +56,42 @@ test('policy action discovery previews exact local rules without exposing or mut
   await assert.rejects(discoverPolicyActions({ actor, player: 'https://registry.example/actors/other', vessel, origin, ids: { actor, ports: [], routes: [], areas: [], map: `${origin}/map`, varieties: { ore: ore.id, metal: metal.id }, assets: [] }, territory, fetcher }), { status: 403 });
 });
 
+test('policy action previews honor a denied canonical Variety and remain read-only', async () => {
+  const origin = 'https://deny.example';
+  const actor = `${origin}/actors/territory`;
+  const player = 'https://registry.example/actors/player';
+  const vessel = 'https://registry.example/objects/vessels/denied';
+  const registry = 'https://registry.example/actors/registry';
+  const ore = { id: `${origin}/objects/varieties/ore`, name: 'Ore', holder: actor, mass: 2, version: '1' };
+  const metal = { id: `${origin}/objects/varieties/metal`, name: 'Metal', holder: actor, mass: 1, version: '1' };
+  const policy = {
+    miningPermitted: true, miningQuota: 1, oreReserve: 1, manufacturePermits: [], recipes: [], warehouseLimits: {}, portLimits: {},
+    decisions: {}, varietyPortPolicy: { [metal.id]: 'deny' as const }
+  };
+  const live = createTerritoryState(policy, [{ variety: ore, mass: 2 }, { variety: metal, mass: 1 }]);
+  live.portInventory[ore.id] = 1;
+  live.portInventory[metal.id] = 1;
+  live.vessels[vessel] = { capacity: 5, manifest: { entries: [{ variety: metal.id, count: 1, data: {} }] } };
+  const ledger: PolicyTerritoryLedger = {
+    state: live, admission: { registryAcceptance: [registry], territoryAcceptance: [], mismatchPolicy: 'reject', publicPorts: [] },
+    visits: { [vessel]: { vessel, possessor: player, registry, entryRequest: `${origin}/entry/1`, port: `${origin}/objects/ports/east`, route: `${origin}/objects/routes/approach`, departed: false, cargo: { entries: [{ variety: metal.id, count: 1, data: {} }] } } },
+    decisions: {}, processed: []
+  };
+  const territory = { get ledger() { return Promise.resolve(structuredClone(ledger)); } } as never;
+  const before = structuredClone(live);
+  const result = await discoverPolicyActions({
+    actor, player, vessel, origin, territory,
+    ids: { actor, ports: [`${origin}/objects/ports/east`, `${origin}/objects/ports/west`], routes: [`${origin}/objects/routes/approach`, `${origin}/objects/routes/coastal`], areas: [], map: `${origin}/map`, varieties: { ore: ore.id, metal: metal.id }, assets: [] },
+    fetcher: async () => { throw new Error('persisted visit should avoid fetch'); }
+  });
+  assert.equal(result.actions.find((action) => action.id === 'load-ore')?.available, true);
+  assert.equal(result.actions.find((action) => action.id === 'load-metal')?.available, false);
+  assert.match(result.actions.find((action) => action.id === 'load-metal')?.reason ?? '', /denied/i);
+  assert.equal(result.actions.find((action) => action.id === 'unload-metal')?.available, false);
+  assert.match(result.actions.find((action) => action.id === 'unload-metal')?.reason ?? '', /denied/i);
+  assert.deepEqual(live, before);
+});
+
 test('policy HTTP action examples execute through an authenticated Player and real Registry', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-policy-actions-'));
   const authorityOrigin = `http://127.0.0.1:${await freePort()}`;

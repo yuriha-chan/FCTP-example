@@ -1,5 +1,5 @@
 import type { CargoManifest, FCTPActor, URI } from '@fctp/protocol';
-import { configuredOrigin, mapText, getAuthenticated, isRecord, loadConfig, localRequest as rawLocalRequest, portListings, readText, resolveInput, resolveReference, sdk, territoryResources, verifyExit, type BrowserLocalActionDiscovery } from './client.js';
+import { configuredOrigin, mapText, getAuthenticated, isRecord, loadConfig, localRequest as rawLocalRequest, portListings, readTextPublicThenAuthenticated, resolveInput, resolveReference, sdk, territoryResources, verifyExit, type BrowserLocalActionDiscovery } from './client.js';
 import { setupAuthoring } from './authoring.js';
 
 const byId = <T extends HTMLElement>(id: string): T => {
@@ -199,7 +199,7 @@ async function discoverTerritory(uri: string): Promise<void> {
   });
 }
 
-function appendResource(parent: HTMLElement, label: string, uri: string, actorId: string, kind: 'resource' | 'text' = 'resource'): void {
+function appendResource(parent: HTMLElement, label: string, uri: string, actorId: string, kind: 'resource' | 'text' = 'resource', onLoaded?: (value: unknown) => void): HTMLButtonElement {
   const button = document.createElement('button');
   button.type = 'button'; button.textContent = `${label}: ${uri}`; button.disabled = busy; button.dataset.resourceAction = 'true';
   button.addEventListener('click', () => {
@@ -207,22 +207,35 @@ function appendResource(parent: HTMLElement, label: string, uri: string, actorId
     field('resource-get-form', 'resourceActor').value = actorId;
     void task('resource-result', async () => {
       const token = session?.role === 'player' ? session.credential : value('authority-form', 'nativeToken') || nativeToken;
-      if (kind === 'text') {
-        if (token) return readText(uri, token, actorId);
-        const response = await fetch(uri, { headers: { Accept: 'text/plain' }, cache: 'no-store' });
-        if (!response.ok) throw new Error(`Resource request failed: ${response.status}`);
-        return response.text();
-      }
-      return sdk.get(uri as URI, { ...(token ? { nativeToken: token, resourceServer: actorId as URI } : {}), cache: false });
+      const result = kind === 'text'
+        ? await readTextPublicThenAuthenticated(uri, actorId, token || undefined)
+        : await sdk.get(uri as URI, { ...(token ? { nativeToken: token, resourceServer: actorId as URI } : {}), cache: false });
+      onLoaded?.(result);
+      return result;
     });
   });
   parent.append(button);
+  return button;
+}
+
+function appendCreationMedia(parent: HTMLElement, collection: unknown, actorId: string): void {
+  for (const existing of [...parent.querySelectorAll<HTMLButtonElement>('button[data-creation-media="true"]')]) existing.remove();
+  if (!isRecord(collection)) return;
+  const items = Array.isArray(collection.orderedItems) ? collection.orderedItems : Array.isArray(collection.items) ? collection.items : [];
+  for (const item of items) {
+    if (!isRecord(item)) continue;
+    for (const entry of Array.isArray(item.media) ? item.media : []) {
+      if (!isRecord(entry) || typeof entry.url !== 'string') continue;
+      const button = appendResource(parent, `Asset text ${String(item.name ?? '')}`, entry.url, actorId, 'text');
+      button.dataset.creationMedia = 'true';
+    }
+  }
 }
 
 async function renderActorResources(actor: FCTPActor & Record<string, unknown>): Promise<void> {
   const panel = byId('resource-browser');
   for (const child of [...panel.children]) if (!(child instanceof HTMLButtonElement && child.dataset.resourceChoice === 'true')) child.remove();
-  if (typeof actor.creations === 'string') appendResource(panel, 'Published Player creations', actor.creations, actor.id);
+  if (typeof actor.creations === 'string') appendResource(panel, 'Published Player creations', actor.creations, actor.id, 'resource', (collection) => appendCreationMedia(panel, collection, actor.id));
   const native = session?.role === 'player' ? session.credential : value('authority-form', 'nativeToken') || nativeToken;
   const requestOptions = native ? { nativeToken: native } : {};
   let territory: Awaited<ReturnType<typeof territoryResources>>;

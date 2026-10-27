@@ -1,0 +1,54 @@
+{
+  "checkpoint": "policy-audit-variety",
+  "changedFiles": [
+    "apps/territory-policy/src/domain.ts",
+    "apps/territory-policy/src/territory.ts",
+    "apps/territory-policy/src/app.ts",
+    "tests/policy-domain.test.ts",
+    "tests/policy-territory.test.ts",
+    "tests/policy-app.test.ts",
+    "tests/policy-actions.test.ts",
+    "docs/handoffs/policy-audit-variety.md",
+    "docs/memos/policy-audit-variety.json"
+  ],
+  "apiFacts": {
+    "actorThreading": "mineOre, manufacture, transferWarehouseToPort, transferPortToWarehouse, loadCargo, unloadCargo, prepareVessel and exitVessel accept an optional trailing actor defaulting to system.",
+    "appAttribution": "Authenticated Player routes pass the Player URI; entry and departure pass the verified Registry sender and never fabricate a Player.",
+    "varietyPortPolicy": "Optional local Policy map keyed by canonical FCTP Variety URI; missing means allow; deny rejects load/unload before mutation with an actor-attributed audit entry.",
+    "policyValidation": "The app accepts only a record of safe absolute http/https URI keys without credentials and allow/deny values.",
+    "previews": "Action discovery still runs on cloned state with the default system actor and does not persist audit."
+  },
+  "verification": {
+    "build": {
+      "command": "npm run build",
+      "result": "passed"
+    },
+    "testSourceTypecheck": {
+      "command": "npm run typecheck:tests",
+      "result": "passed"
+    },
+    "focusedTests": [
+      { "command": "npx tsx --test tests/policy-domain.test.ts", "passed": 8, "failed": 0 },
+      { "command": "npx tsx --test tests/policy-territory.test.ts", "passed": 2, "failed": 0 },
+      { "command": "npx tsx --test tests/policy-app.test.ts", "passed": 1, "failed": 0 },
+      { "command": "npx tsx --test tests/policy-actions.test.ts", "passed": 3, "failed": 0 }
+    ],
+    "scopedEslint": {
+      "result": "passed",
+      "output": "none"
+    }
+  },
+  "scope": {
+    "broadGateRun": false,
+    "commitCreated": false,
+    "browserUiTested": false,
+    "bClientAuthorityOrSharedPackagesEdited": false,
+    "fctpObjectSemanticsChanged": false,
+    "productionExecutionClaimed": false
+  },
+  "limits": [
+    "The Variety permit is a local Territory A administrative policy, not an FCTP field.",
+    "Territory B does not implement the same permit mechanism in this unit.",
+    "No active-visit cargo request still fails at the adapter authorization layer without a domain audit entry."
+  ]
+}

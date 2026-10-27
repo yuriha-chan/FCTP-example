@@ -210,6 +210,21 @@ test('compiled browser authoring creates and verifies isolated Player creations 
   view = await control(session, view, 'Resolve Actor', 'submit');
   view = await control(session, view, 'Published Player creations:');
   for (const object of [asset, variety, grant]) assert.ok(view.markdown.includes(String(object.id)), `Expected public creation ${object.id} in rendered resource result:\n${view.markdown}`);
+  view = await control(session, view, 'Asset text Literal text Asset:');
+  assert.ok(view.markdown.includes(sourceText), `Expected Player-3 to read Player-2 Asset text:\n${view.markdown}`);
+  assert.doesNotMatch(view.markdown, /^# Injected heading$/m);
+
+  await authority.authority.server.store.transaction((state) => {
+    const authoring = state.domain.authoring as { players?: Record<string, { assets?: Array<{ id: string; media?: Array<{ url: string; mediaType: string }> }> }> } | undefined;
+    const stored = authoring?.players?.[player2]?.assets?.find((item) => item.id === asset.id);
+    assert.ok(stored, 'Expected the authored Asset in the authority store');
+    stored.media = [{ url: `${origins.authority}/objects/players/player-2/media/missing`, mediaType: 'text/plain' }];
+  });
+  view = await formField(session, view, 'Actor URI or WebFinger handle', player2);
+  view = await control(session, view, 'Resolve Actor', 'submit');
+  view = await control(session, view, 'Published Player creations:');
+  view = await control(session, view, 'Asset text Literal text Asset:');
+  assert.match(view.markdown, /Resource request failed: HTTP 404/, `Expected failed Asset text request to remain visible:\n${view.markdown}`);
 
   view = await session.select(refFor(view, 'Role'), 'authority-admin');
   view = await formField(session, view, 'Credential', adminSecret);

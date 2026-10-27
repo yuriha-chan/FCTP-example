@@ -87,12 +87,12 @@ export function installPolicyTerritory(host: Host, options: PolicyTerritoryOptio
     });
     return result;
   });
-  const cargoOperation = (operation: 'load' | 'unload', vessel: URI, variety: string, count: number): Promise<OperationResult> => serial(async () => {
+  const cargoOperation = (operation: 'load' | 'unload', vessel: URI, variety: string, count: number, actor?: string): Promise<OperationResult> => serial(async () => {
     const ledger = await get();
     const visit = ledger.visits[vessel];
     if (!visit || visit.departed) return { success: false, state: ledger.state, error: 'Vessel has no active visit' };
     const action = operation === 'load' ? loadCargo : unloadCargo;
-    const result = action(ledger.state, vessel, variety, count);
+    const result = action(ledger.state, vessel, variety, count, actor);
     if (!result.success) {
       await host.server.commit((domain) => { const current = ledgerFrom(domain, initial); current.state = result.state; domain.policyTerritory = current; });
       return result;
@@ -140,7 +140,7 @@ export function installPolicyTerritory(host: Host, options: PolicyTerritoryOptio
     const decision: EntryDecision = { request: request.id, accepted, verification: structuredClone(context.verification), ...(reason ? { reason } : {}), policy: { ...policy, admission: structuredClone(admission) }, ...(evidence ? { evidence: { verification: evidence.verification, binding: evidence.binding, difference: difference! } } : {}) };
     if (accepted) {
       const manifest = admission.mismatchPolicy === 'evidence' ? evidence!.exit!.cargo : request.cargo;
-      const result = prepareVessel(ledger.state, request.vessel.id, request.vessel.capacity, manifest);
+      const result = prepareVessel(ledger.state, request.vessel.id, request.vessel.capacity, manifest, context.senderActor);
       if (!result.success) { decision.accepted = false; decision.reason = result.error; }
       else {
         ledger.state = result.state;
@@ -181,7 +181,7 @@ export function installPolicyTerritory(host: Host, options: PolicyTerritoryOptio
       if (!active || active.departed || current.processed.includes(context.activityId)) return;
       active.departed = true;
       active.cargo = structuredClone(signed.cargo);
-      const exited = exitVessel(current.state, request.vessel);
+      const exited = exitVessel(current.state, request.vessel, context.senderActor);
       if (!exited.success) throw new Error(exited.error);
       current.state = exited.state;
       current.processed.push(context.activityId);
@@ -194,12 +194,12 @@ export function installPolicyTerritory(host: Host, options: PolicyTerritoryOptio
   return {
     get state() { return get().then((ledger) => ledger.state); },
     get ledger() { return get(); },
-    mine: (variety: string, count: number) => apply((state) => mineOre(state, variety, count)),
-    manufacture: (recipe: string, count: number) => apply((state) => manufacture(state, recipe, count)),
-    transferWarehouseToPort: (variety: string, count: number) => apply((state) => transferWarehouseToPort(state, variety, count)),
-    transferPortToWarehouse: (variety: string, count: number) => apply((state) => transferPortToWarehouse(state, variety, count)),
-    load: (vessel: URI, variety: string, count: number) => cargoOperation('load', vessel, variety, count),
-    unload: (vessel: URI, variety: string, count: number) => cargoOperation('unload', vessel, variety, count),
+    mine: (variety: string, count: number, actor?: string) => apply((state) => mineOre(state, variety, count, actor)),
+    manufacture: (recipe: string, count: number, actor?: string) => apply((state) => manufacture(state, recipe, count, actor)),
+    transferWarehouseToPort: (variety: string, count: number, actor?: string) => apply((state) => transferWarehouseToPort(state, variety, count, actor)),
+    transferPortToWarehouse: (variety: string, count: number, actor?: string) => apply((state) => transferPortToWarehouse(state, variety, count, actor)),
+    load: (vessel: URI, variety: string, count: number, actor?: string) => cargoOperation('load', vessel, variety, count, actor),
+    unload: (vessel: URI, variety: string, count: number, actor?: string) => cargoOperation('unload', vessel, variety, count, actor),
     updatePolicy: (policy: Policy, administrator: string) => apply((state) => changePolicy(state, policy, administrator)),
     updateAdmissionPolicy: (admission: Partial<PolicyTerritoryLedger['admission']>) => serial(async () => {
       await host.server.commit((domain) => {
