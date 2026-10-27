@@ -69,7 +69,7 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
   const enrollments = authorityOrigins.flatMap((authorityOrigin) => playerNames.map((name) => ({ home: `${authorityOrigin}/actors/home` as URI, player: `${authorityOrigin}/actors/${name}` as URI })));
   const homeByPlayer = new Map(enrollments.map(({ home, player }) => [player, home]));
   const playerIds = [...homeByPlayer.keys()];
-  const playerId = `${authorityOrigins[0]!}/actors/player` as URI;
+  const playerId = `${authorityOrigins[0]!}/actors/${playerNames[0]!}` as URI;
   const registryIds = authorityOrigins.map((authorityOrigin) => `${authorityOrigin}/actors/registry` as URI);
   const areas: Area[] = [
     { id: `${origin}/objects/areas/harbor`, name: 'Harbor District', territory: actorId },
@@ -256,7 +256,7 @@ function canonicalAuthorityOrigins(primary: string, additional: string[] | undef
 
 function canonicalPlayerNames(names: string[] | undefined): string[] {
   if (names === undefined) return ['player'];
-  if (!Array.isArray(names) || names.length === 0 || !names.includes('player') || names.some((name) => typeof name !== 'string' || !/^[A-Za-z0-9_-]+$/.test(name) || name.includes('.')) || new Set(names).size !== names.length) throw new TypeError('Invalid player names');
+  if (!Array.isArray(names) || names.length === 0 || names.some((name) => typeof name !== 'string' || !/^[A-Za-z0-9_-]+$/.test(name) || name.includes('.')) || new Set(names).size !== names.length) throw new TypeError('Invalid player names');
   return [...names];
 }
 

@@ -49,7 +49,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
   const enrollments = authorityOrigins.flatMap((authority) => playerNames.map((name) => ({ home: `${authority}/actors/home` as URI, player: `${authority}/actors/${name}` as URI })));
   const homeByPlayer = new Map(enrollments.map(({ home, player }) => [player, home]));
   const playerIds = [...homeByPlayer.keys()];
-  const playerId = `${authorityOrigins[0]!}/actors/player` as URI;
+  const playerId = `${authorityOrigins[0]!}/actors/${playerNames[0]!}` as URI;
   const registryIds = authorityOrigins.map((authority) => `${authority}/actors/registry` as URI);
   const routes = ids.routes.map((id, index) => ({
     '@context': ['https://www.w3.org/ns/activitystreams', 'https://fctp.example/context'],
@@ -241,7 +241,7 @@ function canonicalAuthorityOrigins(primary: string, additional: string[] | undef
 }
 function canonicalPlayerNames(names: string[] | undefined): string[] {
   if (names === undefined) return ['player'];
-  if (!Array.isArray(names) || names.length === 0 || !names.includes('player') || names.some((name) => typeof name !== 'string' || !/^[A-Za-z0-9_-]+$/.test(name) || name.includes('.')) || new Set(names).size !== names.length) throw new TypeError('Invalid player names');
+  if (!Array.isArray(names) || names.length === 0 || names.some((name) => typeof name !== 'string' || !/^[A-Za-z0-9_-]+$/.test(name) || name.includes('.')) || new Set(names).size !== names.length) throw new TypeError('Invalid player names');
   return [...names];
 }
 function isVariety(value: unknown, ids: PolicyAppIds): value is URI { return value === ids.varieties.ore || value === ids.varieties.metal; }

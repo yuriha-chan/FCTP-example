@@ -25,6 +25,7 @@ export interface Authority {
   readonly actors: AuthorityActors;
   readonly keys: Readonly<Record<string, GeneratedActorKey>>;
   readonly players: Readonly<Record<string, FCTPActor & Record<string, unknown>>>;
+  readonly primaryPlayerName: string;
   actor(role: AuthorityRole): AuthorityActors[AuthorityRole];
   key(role: AuthorityRole): GeneratedActorKey;
   registerActor(name: string, actor: FCTPActor & Record<string, unknown>): Promise<void>;
@@ -38,7 +39,8 @@ const roles: AuthorityRole[] = ['registry', 'home', 'player'];
 
 export async function createAuthority(options: CreateAuthorityOptions): Promise<Authority> {
   const playerNames = options.playerNames ?? ['player'];
-  if (!playerNames.includes('player') || new Set(playerNames).size !== playerNames.length || playerNames.some((name) => !/^[^.]+$/.test(name))) throw new TypeError('Player names must be unique, include player, and contain no dots');
+  if (playerNames.length === 0 || new Set(playerNames).size !== playerNames.length || playerNames.some((name) => !/^[^.]+$/.test(name))) throw new TypeError('Player names must be non-empty, unique, and contain no dots');
+  const primaryPlayerName = playerNames[0]!;
   const playerRoles = new Set(playerNames);
   const descriptors = [...roles.slice(0, 2).map((name) => ({ name, role: name })), ...playerNames.map((name) => ({ name, role: 'player' }))];
   const host = await createHost({
@@ -62,7 +64,8 @@ export async function createAuthority(options: CreateAuthorityOptions): Promise<
     actors,
     keys: host.keys,
     players,
-    actor: (role) => actors[role],
+    primaryPlayerName,
+    actor: (role) => role === 'player' ? actors[primaryPlayerName]! : actors[role],
     key: (role) => host.key(role),
     registerActor: async (name, actor) => {
       const key = host.keys[name];

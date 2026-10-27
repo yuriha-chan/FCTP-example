@@ -13,6 +13,7 @@ export interface CreateAuthorityAppOptions {
   fetcher?: typeof fetch;
   adoption?: boolean;
   playerNames?: string[];
+  vesselNames?: Record<string, string>;
 }
 
 export interface AuthorityAppIds {
@@ -48,8 +49,10 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
   const authoring = installAuthoring(authority, home, options.origin);
   const playerNames = options.playerNames ?? ['player'];
   const origin = options.origin.replace(/\/$/, '');
+  const vesselNames = playerNames.map((name, index) => options.vesselNames?.[name] ?? (index === 0 ? 'demo' : name));
+  if (new Set(vesselNames).size !== vesselNames.length || vesselNames.some((name) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name))) throw new TypeError('Vessel names must be unique and URL safe');
   const vessels = Object.fromEntries(playerNames.map((name, index) => [name, {
-    id: `${origin}/objects/vessels/${index === 0 ? 'demo' : name}`,
+    id: `${origin}/objects/vessels/${vesselNames[index]}`,
     registry: authority.actor('registry').id,
     possessor: authority.players[name]!.id,
     capacity: 100
@@ -69,7 +72,7 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
       home: authority.actor('home').id,
       player: authority.actor('player').id
     },
-    vessel: vessels.player!.id,
+    vessel: vessels[playerNames[0]!]!.id,
     players: Object.fromEntries(Object.entries(authority.players).map(([name, player]) => [name, player.id])),
     vessels: Object.fromEntries(Object.entries(vessels).map(([name, vessel]) => [name, vessel.id]))
   };
