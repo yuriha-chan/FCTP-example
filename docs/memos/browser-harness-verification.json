@@ -1,0 +1,85 @@
+{
+  "checkpoint": "bounded-browser-harness-mechanical-verification",
+  "command": "npm run build && npm run typecheck:tests, followed by focused harness test and scoped ESLint",
+  "runs": 2,
+  "stages": {
+    "build": {
+      "result": "passed",
+      "includes": [
+        "TypeScript project builds",
+        "apps/client TypeScript compilation",
+        "browser bundle via apps/demo/build-client.mjs"
+      ]
+    },
+    "testSourceTypecheck": {
+      "result": "passed",
+      "includes": ["tests/", "apps/client/"]
+    },
+    "eslint": {
+      "result": "passed",
+      "includes": ["packages", "apps", "tests"],
+      "fixes": [
+        "Changed knownSecrets from let to const",
+        "Expressed two literal indentation spaces as \\x20{2} in the regex"
+      ]
+    }
+  },
+  "conditionalFocusedTests": {
+    "run": true,
+    "results": [
+      {"command": "npx tsx --test tests/client-server.test.ts", "result": "passed", "passed": 1, "failed": 0, "cancelled": 0, "skipped": 0, "todo": 0},
+      {"command": "node --test run/browser-adapter.test.mjs", "result": "passed", "passed": 7, "failed": 0, "cancelled": 0, "skipped": 0, "todo": 0}
+    ],
+    "commands": [
+      "npx tsx --test tests/client-server.test.ts",
+      "node --test run/browser-adapter.test.mjs"
+    ]
+  },
+  "browser": {
+    "launched": true,
+    "dependencyInstallRetried": false,
+    "hostDependencies": "User confirmed installed",
+    "priorInstallDepsResult": "Failed: su authentication required",
+    "focusedHarnessTest": {
+      "command": "npx tsx --test tests/browser-harness.test.ts",
+      "result": "passed after test import correction",
+      "passed": 1,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "launch": "Chromium launched successfully",
+      "initialRuntimeFailure": "page.evaluate: ReferenceError: __name is not defined",
+      "initialFailureCause": "tsx/esbuild transforms of imported TypeScript source injected a Node-side helper into a serialized page.evaluate callback",
+      "correction": "tests/browser-harness.test.ts imports ../dist/apps/browser-harness/index.js, matching the compiled runtime imported by the production CLI",
+      "renderingCompleted": true
+    },
+    "compiledArtifacts": {
+      "checked": true,
+      "result": "dist/apps/browser-harness/index.js and dist/apps/browser-harness.tsbuildinfo were newer than apps/browser-harness/src/index.ts"
+    },
+    "verificationCommandsAfterCorrection": [
+      {"command": "npm run build", "result": "passed"},
+      {"command": "npm run typecheck:tests", "result": "passed"},
+      {"command": "npx tsx --test tests/browser-harness.test.ts", "result": "passed", "passed": 1, "failed": 0, "cancelled": 0, "skipped": 0, "todo": 0},
+      {"command": "npx eslint tests/browser-harness.test.ts", "result": "passed"}
+    ],
+    "buildBeforeTestRationale": "Production CLI imports tsc-emitted dist/apps/browser-harness/index.js; build-before-test ensures the focused test exercises this actual runtime, without tsx/esbuild's source transform helper in serialized browser functions."
+  },
+  "realClientBrowserIntegration": {
+    "verified": false,
+    "gaps": [
+      "Visible session bootstrap and exact Role label/ref resolution",
+      "Selected Player/vessel behavior",
+      "Discovery/action UI and operation status",
+      "Browser cleanup"
+    ]
+  },
+  "scope": {
+    "applicationSourcesIncluded": true,
+    "testSourcesIncluded": true,
+    "runtimeTestsRun": true,
+    "liveServicesOrFixedPortsUsed": false,
+    "roleOrTickChanged": false
+  }
+}

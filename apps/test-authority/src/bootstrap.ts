@@ -5,13 +5,14 @@ import type { GeneratedActorKey } from '@fctp/identity';
 import { createHost, FctpServer, type ActivityHandler, type FctpServerOptions } from '@fctp/server-base';
 
 export type AuthorityRole = 'registry' | 'home' | 'player';
-export type AuthorityActors = Record<AuthorityRole, FCTPActor & Record<string, unknown>>;
+export type AuthorityActors = Record<AuthorityRole, FCTPActor & Record<string, unknown>> & Record<string, FCTPActor & Record<string, unknown>>;
 
 export interface CreateAuthorityOptions {
   origin: string;
   storeFile: string;
   keyFile?: string;
   adminSecret?: string;
+  playerNames?: string[];
   fetcher?: typeof fetch;
   verifyInbound?: FctpServerOptions['verifyInbound'];
   authorizeResource?: FctpServerOptions['authorizeResource'];
@@ -22,7 +23,8 @@ export interface CreateAuthorityOptions {
 export interface Authority {
   readonly server: FctpServer;
   readonly actors: AuthorityActors;
-  readonly keys: Readonly<Record<AuthorityRole, GeneratedActorKey>>;
+  readonly keys: Readonly<Record<string, GeneratedActorKey>>;
+  readonly players: Readonly<Record<string, FCTPActor & Record<string, unknown>>>;
   actor(role: AuthorityRole): AuthorityActors[AuthorityRole];
   key(role: AuthorityRole): GeneratedActorKey;
   registerActor(role: AuthorityRole, actor: FCTPActor & Record<string, unknown>): Promise<void>;
@@ -35,11 +37,15 @@ export interface Authority {
 const roles: AuthorityRole[] = ['registry', 'home', 'player'];
 
 export async function createAuthority(options: CreateAuthorityOptions): Promise<Authority> {
+  const playerNames = options.playerNames ?? ['player'];
+  if (!playerNames.includes('player') || new Set(playerNames).size !== playerNames.length || playerNames.some((name) => !/^[^.]+$/.test(name))) throw new TypeError('Player names must be unique, include player, and contain no dots');
+  const playerRoles = new Set(playerNames);
+  const descriptors = [...roles.slice(0, 2).map((name) => ({ name, role: name })), ...playerNames.map((name) => ({ name, role: 'player' }))];
   const host = await createHost({
     origin: options.origin,
     storeFile: options.storeFile,
     ...(options.keyFile ? { keyFile: options.keyFile } : {}),
-    actors: roles.map((role) => ({ name: role, role })),
+    actors: descriptors,
     ...(options.fetcher ? { fetcher: options.fetcher } : {}),
     ...(options.verifyInbound ? { verifyInbound: options.verifyInbound } : {}),
     ...(options.authorizeResource ? { authorizeResource: options.authorizeResource } : {}),
@@ -50,16 +56,20 @@ export async function createAuthority(options: CreateAuthorityOptions): Promise<
     }
   });
   const actors = host.actors as AuthorityActors;
+  const players = Object.fromEntries(playerNames.map((name) => [name, actors[name]!])) as Record<string, FCTPActor & Record<string, unknown>>;
   return {
     server: host.server,
     actors,
-    keys: host.keys as Readonly<Record<AuthorityRole, GeneratedActorKey>>,
+    keys: host.keys,
+    players,
     actor: (role) => actors[role],
     key: (role) => host.key(role),
     registerActor: async (role, actor) => {
-      if (actor.role !== role) throw new TypeError(`Actor role must be ${role}`);
-      if (actor.id !== host.key(role).keyPair.controller || !actor.publicKeys.includes(host.key(role).keyPair.id)) throw new TypeError('Actor identity and public key must match the persisted authority key');
-      actors[role] = actor;
+      const name = role;
+      const key = host.keys[name];
+      if (!key || (playerRoles.has(name) ? actor.role !== 'player' : actor.role !== role)) throw new TypeError(`Actor role must be ${playerRoles.has(name) ? 'player' : role}`);
+      if (actor.id !== key.keyPair.controller || !actor.publicKeys.includes(key.keyPair.id)) throw new TypeError('Actor identity and public key must match the persisted authority key');
+      actors[name] = actor;
       await host.server.registerActor({ actor });
     },
     listen: (port = 0, address = '127.0.0.1') => host.listen(port, address),

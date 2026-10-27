@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "../../dist/apps/browser-harness",
+    "tsBuildInfoFile": "../../dist/apps/browser-harness.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"]
+}

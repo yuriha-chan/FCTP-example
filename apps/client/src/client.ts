@@ -9,6 +9,26 @@ export const sdk = new FctpClient();
 
 export interface ClientConfig { origins: { authority: string; policy: string; simulation: string }; actors?: Record<string, string> }
 
+export interface BrowserLocalAction {
+  id: string;
+  label: string;
+  available: boolean;
+  reason?: string;
+  request?: { method: 'GET' | 'POST'; href: string; body?: Record<string, unknown> };
+  effect: string;
+}
+
+export interface BrowserLocalActionDiscovery {
+  kind: 'registry' | 'policy' | 'simulation';
+  actor: string;
+  player: string;
+  vessel: string;
+  observedAt: string;
+  state: Record<string, unknown>;
+  actions: BrowserLocalAction[];
+  notes: string[];
+}
+
 export const fallbackConfig: ClientConfig = {
   origins: { authority: 'http://127.0.0.1:4100', policy: 'http://127.0.0.1:4101', simulation: 'http://127.0.0.1:4102' }
 };
@@ -157,6 +177,13 @@ export async function localRequest<T>(origin: string, path: string, options: { m
   if (response.status === 204) return undefined as T;
   const text = await response.text();
   return (text ? JSON.parse(text) : undefined) as T;
+}
+
+export function configuredOrigin(url: string, config: ClientConfig): string {
+  const target = new URL(url);
+  const origins = Object.values(config.origins).map((origin) => new URL(origin).origin);
+  if (!origins.includes(target.origin)) throw new TypeError(`Request origin is not configured: ${target.origin}`);
+  return target.origin;
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {

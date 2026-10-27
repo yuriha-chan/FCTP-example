@@ -18,6 +18,7 @@ export interface HomeOptions {
 
 export interface HomeService {
   readonly resources: ResourceClient;
+  authenticateNativeToken(token: string): Promise<URI | undefined>;
   issueNativeToken(playerActorId?: URI): Promise<string>;
   rotateNativeToken(playerActorId?: URI): Promise<string>;
   revoke(playerActorId: URI, resource: UsedResource): Promise<void>;
@@ -28,6 +29,7 @@ export interface HomeService {
 
 export function installHome(authority: Authority, options: HomeOptions = {}): HomeService {
   const playerActorId = options.playerActorId ?? authority.actor('player').id;
+  const playerActorIds = new Set(options.playerActorId ? [options.playerActorId] : Object.values(authority.players).map((player) => player.id));
   const resources = options.resourceClient ?? new ResourceClient(options.fetcher);
   const fetcher = options.fetcher ?? fetch;
   const playerQueues = new Map<URI, Promise<void>>();
@@ -43,7 +45,7 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
     return player ? structuredClone(player) : undefined;
   });
   const nextActivityId = (): URI => `${authority.actor('home').id}/activities/${randomBytes(16).toString('hex')}`;
-  const requirePlayer = (id: URI): void => { if (id !== playerActorId) throw new Error('unknown-local-player'); };
+  const requirePlayer = (id: URI): void => { if (!playerActorIds.has(id)) throw new Error('unknown-local-player'); };
 
   const issue = async (id: URI, rotate: boolean): Promise<string> => {
     requirePlayer(id);
@@ -82,6 +84,7 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
 
   const service: HomeService = {
     resources,
+    authenticateNativeToken: (token) => authenticateNativeToken(token, authority, playerActorIds),
     issueNativeToken: (id = playerActorId) => serializePlayer(id, () => issue(id, false)),
     rotateNativeToken: (id = playerActorId) => serializePlayer(id, () => issue(id, true)),
     revoke(id, resource) {
@@ -144,7 +147,8 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
       return true;
     }
     if (url.pathname === '/local/home/proxy' && request.method === 'GET') {
-      const playerId = await authenticateNativeToken(request, authority, playerActorId);
+      const header = request.headers.authorization ?? '';
+      const playerId = header.startsWith('Bearer ') ? await service.authenticateNativeToken(header.slice(7)) : undefined;
       if (!playerId) { sendJson(401, { error: 'unauthorized' }); return true; }
       const uri = url.searchParams.get('uri');
       const resourceActorId = url.searchParams.get('resourceActor');
@@ -183,17 +187,18 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
   return service;
 }
 
-async function authenticateNativeToken(request: IncomingMessage, authority: Authority, playerActorId: URI): Promise<URI | undefined> {
-  const header = request.headers.authorization ?? '';
-  if (!header.startsWith('Bearer ')) return undefined;
-  const supplied = Buffer.from(header.slice(7));
-  const stored = await authority.server.store.read((state) => {
+async function authenticateNativeToken(token: string, authority: Authority, playerActorIds: ReadonlySet<URI>): Promise<URI | undefined> {
+  const supplied = Buffer.from(token);
+  return authority.server.store.read((state) => {
     const home = state.domain.home as HomeState | undefined;
-    return home?.players[playerActorId]?.nativeToken;
+    for (const playerActorId of playerActorIds) {
+      const stored = home?.players[playerActorId]?.nativeToken;
+      if (!stored) continue;
+      const expected = Buffer.from(stored);
+      if (supplied.length === expected.length && timingSafeEqual(supplied, expected)) return playerActorId;
+    }
+    return undefined;
   });
-  if (!stored) return undefined;
-  const expected = Buffer.from(stored);
-  return supplied.length === expected.length && timingSafeEqual(supplied, expected) ? playerActorId : undefined;
 }
 
 async function resolveResourceActor(id: string, fetcher: typeof fetch): Promise<UsedResource> {

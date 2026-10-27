@@ -1,0 +1,70 @@
+{
+  "checkpoint": "browser-final-integrated-verification",
+  "requiredCommand": "timeout 180s npm test",
+  "requiredCommandInvocations": 1,
+  "requiredCommandResult": "passed",
+  "stages": {
+    "build": {
+      "result": "passed",
+      "includes": [
+        "TypeScript project builds",
+        "apps/client TypeScript compilation",
+        "browser bundle via apps/demo/build-client.mjs"
+      ]
+    },
+    "testSourceTypecheck": {
+      "result": "passed",
+      "includes": ["tests/", "apps/client/"]
+    },
+    "eslint": {
+      "result": "passed",
+      "includes": ["packages", "apps", "tests"]
+    },
+    "runtimeTests": {
+      "result": "passed",
+      "passed": 77,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "includes": [
+        "generic browser harness",
+        "real-DOM browser gameplay",
+        "browser CLI lifecycle"
+      ]
+    }
+  },
+  "conditionalChecks": {
+    "adapterTest": {
+      "command": "node --test run/browser-adapter.test.mjs",
+      "result": "passed",
+      "passed": 7,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0
+    },
+    "eslint": {
+      "command": "npx eslint run/browser.mjs run/browser-worker.mjs run/browser-transport.mjs run/browser-adapter.test.mjs",
+      "result": "passed",
+      "output": "none"
+    }
+  },
+  "browserEvidence": {
+    "sessionsAndSpawnedFixturesCleanup": "tested by fixture cleanup",
+    "gameplayExit": "mandatory independent ExitEvent proof and exact Registry berth EntryRequest checks passed",
+    "cliCorrectedRoleAssertion": "passed within integrated runtime suite"
+  },
+  "scope": {
+    "isolatedTestFixtures": true,
+    "liveRoleplayConfigurationOrStoresTouched": false,
+    "fixedPortsUsed": false,
+    "liveRolesOrTicksTouched": false,
+    "deploymentInferred": false,
+    "commitCreated": false
+  },
+  "limits": [
+    "Does not establish roleplay deployment or production-world behavior.",
+    "B gameplay and broader administrator/discovery coverage are outside the documented browser gameplay test."
+  ]
+}

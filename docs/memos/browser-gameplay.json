@@ -1,0 +1,65 @@
+{
+  "checkpoint": "isolated-real-browser-gameplay-integration",
+  "ownedPaths": [
+    "tests/browser-gameplay.test.ts",
+    "docs/handoffs/browser-gameplay.md",
+    "docs/memos/browser-gameplay.json"
+  ],
+  "fixture": {
+    "realFactories": [
+      "createAuthorityApp with five Players",
+      "createPolicyApp",
+      "createSimulationApp",
+      "startClientServer serving shared built client bundle"
+    ],
+    "ports": "four dynamically selected free concrete loopback ports",
+    "stores": "temporary isolated directory",
+    "harnessImport": "../dist/apps/browser-harness/index.js",
+    "browserGameplay": "rendered DOM controls and refs only",
+    "apiSetup": "issue Player-2/Player-3 credentials and deliver signed Home token digests",
+    "cleanup": "close sessions, client server and service hosts before removing temporary directory"
+  },
+  "coverage": {
+    "nondefaultPlayerAndVessel": true,
+    "credentialMasking": true,
+    "isolatedPlayer3Context": true,
+    "visibleUnavailableReasonAndPersistentDisabledAction": true,
+    "aMineManufactureTransfer": true,
+    "advertisedAEntryUsesRegistryAndSelectedVessel": true,
+    "boundedWaitForActiveABerth": true,
+    "uiLoadAndServerStateMutationIsolation": true,
+    "registryDiscoveryCurrentADepartureNotB": true,
+    "aDepartureActionThroughRenderedUI": true,
+    "signedExit": "mandatory within a bounded wait; independently verify cryptography, key attribution, expected issuer and exact Registry berth EntryRequest binding; assert exact exit vessel, Registry identity and cargo equality with the loaded vessel manifest; timeout reports redacted Registry and Territory domain/event/rejection state"
+  },
+  "verification": {
+    "sequence": [
+      "npx tsx --test tests/browser-gameplay.test.ts",
+      "npm run typecheck:tests",
+      "npx eslint tests/browser-gameplay.test.ts"
+    ],
+    "build": "not rerun; prior build artifact used and no application sources changed",
+    "testTypecheck": "passed; tests/ and apps/client/; initial run found a test-only state typing error, corrected locally before the final ordered run",
+    "focusedTest": {
+      "result": "passed",
+      "passed": 1,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "chromium": "launched; mandatory signed ExitEvent observed and verified"
+    },
+    "eslint": "passed; tests/browser-gameplay.test.ts",
+    "applicationSemanticBug": "No application sources changed or examined for repair; assigned test acceptance passed"
+  },
+  "scope": {
+    "liveGameplayStoresOrFixedPorts": false,
+    "roleplayConfigurationChanged": false,
+    "ticksAdvanced": false,
+    "otherSourcesChangedForThisUnit": false,
+    "commitCreated": false
+  },
+  "gaps": [
+    "B gameplay, administrator UI, and all discovery action kinds are not covered."
+  ]
+}

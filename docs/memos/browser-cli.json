@@ -1,0 +1,68 @@
+{
+  "checkpoint": "spawned-browser-cli-isolated-lifecycle",
+  "ownedPaths": [
+    "run/browser.mjs",
+    "run/browser-worker.mjs",
+    "tests/browser-cli.test.ts",
+    "docs/handoffs/browser-cli.md",
+    "docs/memos/browser-cli.json"
+  ],
+  "runtimeOverride": {
+    "environment": "FCTP_BROWSER_CONFIG_ROOT",
+    "default": "run/",
+    "covers": [
+      "runtime-config.json",
+      "role credentials",
+      "daemon sockets",
+      "startup diagnostics",
+      "browser audit"
+    ],
+    "helper": "runtimeConfigRoot exported by run/browser.mjs and imported by run/browser-worker.mjs",
+    "relativePathBase": "repository root",
+    "compiledHarnessAndStaticAssets": "remain rooted under repository"
+  },
+  "fixture": {
+    "factories": [
+      "five-Player test Authority",
+      "Territory A policy app",
+      "Territory B simulation app"
+    ],
+    "ports": "three dynamically selected loopback ports",
+    "configAndCredentials": "temporary isolated config root; Player-2/Player-3 token digests delivered to A and B",
+    "cli": "spawned current Node executable, role credentials absent from argv",
+    "cleanup": "t.after closes daemons/services and removes temporary fixture"
+  },
+  "observations": {
+    "player2OpenAndSessionMasking": true,
+    "separateProcessViewRetainsSession": true,
+    "renderedARefreshAndMine": true,
+    "readOnlyServerLedgerObservedMineEffect": true,
+    "reloadRebootstrap": true,
+    "player3SeparateIdentity": true,
+    "administrator1PolicyControlsObserved": true,
+    "chromiumLaunched": true
+  },
+  "verification": {
+    "nodeSyntax": "passed",
+    "eslint": "passed; run/browser.mjs and run/browser-worker.mjs",
+    "testTypecheck": "passed; npm run typecheck:tests -- --pretty false (tests/ and apps/client/)",
+    "focusedTest": {
+      "command": "npx tsx --test tests/browser-cli.test.ts",
+      "invocations": 1,
+      "result": "failed",
+      "exactFailure": "Expected Role: Policy administrator, actual rendered text was Role: policy-admin",
+      "correction": "test expectation changed to Role: policy-admin after the sole run; not rerun"
+    }
+  },
+  "gaps": [
+    "Focused test not rerun after correcting the visible role-text expectation; final focused status is unverified.",
+    "No Territory B gameplay control/action was clicked."
+  ],
+  "scope": {
+    "rootBuild": false,
+    "packageScriptsOrRootConfigChanged": false,
+    "currentRunConfigChanged": false,
+    "liveServicesWorldRolesOrTicksTouched": false,
+    "commitCreated": false
+  }
+}
