@@ -3,6 +3,7 @@ import { createInboundVerifier } from '@fctp/server-base';
 import { createAuthority, type Authority } from './bootstrap.js';
 import { installHome, type HomeService } from './home.js';
 import { installRegistry, type Registry } from './registry.js';
+import { installAuthoring, type AuthoringService } from './authoring.js';
 
 export interface CreateAuthorityAppOptions {
   origin: string;
@@ -25,6 +26,7 @@ export interface AuthorityApp {
   authority: Authority;
   home: HomeService;
   registry: Registry;
+  authoring: AuthoringService;
   ids: AuthorityAppIds;
 }
 
@@ -43,6 +45,7 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
     })
   });
   const home = installHome(authority, { fetcher });
+  const authoring = installAuthoring(authority, home, options.origin);
   const playerNames = options.playerNames ?? ['player'];
   const origin = options.origin.replace(/\/$/, '');
   const vessels = Object.fromEntries(playerNames.map((name, index) => [name, {
@@ -70,6 +73,9 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
     players: Object.fromEntries(Object.entries(authority.players).map(([name, player]) => [name, player.id])),
     vessels: Object.fromEntries(Object.entries(vessels).map(([name, vessel]) => [name, vessel.id]))
   };
+  for (const [name, actor] of Object.entries(authority.players)) {
+    await authority.registerActor(name, { ...actor, creations: `${origin}/objects/players/${encodeURIComponent(name)}/creations` });
+  }
   for (const vessel of Object.values(vessels)) {
     const state = await registry.state(vessel.id);
     if (!state.vessel || state.vessel.id !== vessel.id) throw new Error('Registry vessel identity does not match the authority origin');
@@ -93,6 +99,9 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
       vessels: ids.vessels,
       endpoints: [
         { method: 'GET', path: '/local/info', authentication: 'none' },
+        { method: 'GET', path: '/local/authoring', authentication: 'native Player' },
+        { method: 'POST', path: '/local/authoring/assets', authentication: 'native Player' },
+        { method: 'POST', path: '/local/authoring/varieties', authentication: 'native Player' },
         { method: 'GET', path: '/local/home/endpoints', authentication: 'none' },
         { method: 'GET', path: '/local/registry/actions?vessel=<URI>', authentication: 'native Player; owned vessel' },
         { method: 'POST', path: '/local/home/issue', authentication: 'admin' },
@@ -105,5 +114,5 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
     }));
     return true;
   });
-  return { authority, home, registry, ids };
+  return { authority, home, registry, authoring, ids };
 }

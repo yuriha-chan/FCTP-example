@@ -1,5 +1,6 @@
 import type { CargoManifest, FCTPActor, URI } from '@fctp/protocol';
 import { configuredOrigin, mapText, getAuthenticated, isRecord, loadConfig, localRequest as rawLocalRequest, portListings, readText, resolveInput, resolveReference, sdk, territoryResources, verifyExit, type BrowserLocalActionDiscovery } from './client.js';
+import { setupAuthoring } from './authoring.js';
 
 const byId = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -82,6 +83,14 @@ async function task<T>(output: string, action: () => Promise<T>, refresh?: () =>
     document.documentElement.dataset.clientBusy = 'false';
   }
 }
+
+const authoring = setupAuthoring({
+  authorityOrigin: config.origins.authority,
+  getSession: () => session ? { role: session.role, player: session.player, credential: session.credential } : undefined,
+  request: localRequest,
+  task: (output, action, refresh) => { void task(output, action, refresh); },
+  getPublicResource: (uri) => sdk.get(uri as URI, { cache: false })
+});
 
 const actionOutputs: Record<string, string> = {
   'discover-registry': 'registry-discovery', 'discover-policy': 'policy-discovery', 'discover-simulation': 'simulation-discovery',
@@ -207,6 +216,7 @@ function appendResource(parent: HTMLElement, label: string, uri: string, actorId
 async function renderActorResources(actor: FCTPActor & Record<string, unknown>): Promise<void> {
   const panel = byId('resource-browser');
   for (const child of [...panel.children]) if (!(child instanceof HTMLButtonElement && child.dataset.resourceChoice === 'true')) child.remove();
+  if (typeof actor.creations === 'string') appendResource(panel, 'Published Player creations', actor.creations, actor.id);
   const native = session?.role === 'player' ? session.credential : value('authority-form', 'nativeToken') || nativeToken;
   const requestOptions = native ? { nativeToken: native } : {};
   let territory: Awaited<ReturnType<typeof territoryResources>>;
@@ -330,6 +340,7 @@ form('session-form').addEventListener('submit', (event) => {
     const resourcePanel = byId('resource-browser');
     for (const child of [...resourcePanel.children]) if (!(child instanceof HTMLButtonElement && child.dataset.resourceChoice === 'true')) child.remove();
     session = { role, player, vessel, credential };
+    authoring.sessionChanged();
     credentialField.value = '';
     if (role === 'player') field('policy-operation-form', 'vessel').value = vessel;
     applyRoleScope();

@@ -1,0 +1,68 @@
+{
+  "checkpoint": "compiled-browser-player-authoring",
+  "ownedPaths": [
+    "tests/browser-authoring.test.ts",
+    "docs/handoffs/browser-authoring.md",
+    "docs/memos/browser-authoring.json"
+  ],
+  "fixture": {
+    "harnessImport": "../dist/apps/browser-harness/index.js",
+    "realServices": [
+      "createAuthorityApp",
+      "createPolicyApp",
+      "createSimulationApp",
+      "startClientServer with complete ClientServerConfig"
+    ],
+    "ports": "four dynamically selected concrete loopback ports",
+    "stores": "temporary isolated directory",
+    "credentialProvisioning": "Authority /local/home/issue API for Player-2 and Player-3",
+    "playerVessels": "authority.ids.vessels",
+    "authoringInteraction": "rendered browser refs and forms only",
+    "cleanup": "close browser sessions and Client, B, A, Authority services before removing temporary directory"
+  },
+  "coverage": {
+    "literalInertHtmlAssetAndNewlines": true,
+    "exactLiteralVisibleTextAndNoRenderedInjectedHeading": true,
+    "publicTextPlainMediaFetch": true,
+    "fractionalMassVarietyWithCompleteProductionArea": true,
+    "AssetGrantGranteeAndReferences": true,
+    "retrievedObjectProofCryptographyAndKeyAttribution": true,
+    "archivedCreateActivityProofsAndAttribution": true,
+    "publicCreationsCatalogAndOutboxWithoutDelivery": true,
+    "invalidProductionPreservesFormAndDoesNotMutate": true,
+    "sessionSwitchClearsPrivateOutputsDraftsAndAssetOptions": true,
+    "newPlayerCatalogIsEmpty": true,
+    "administratorCannotAccessPlayerAuthoringControls": true,
+    "oldPublicObjectsRemainFetchable": true
+  },
+  "findings": {
+    "activityArchive": "state.outboxArchive",
+    "assetGrantRecipientField": "grantee",
+    "areaFields": ["id", "name", "territory"],
+    "nameFieldDisambiguation": "occurrence within Player creations section",
+    "activityVerification": "independently verify archived Activities and retrieved objects"
+  },
+  "verification": {
+    "required": [
+      "npm run build",
+      "npm run typecheck:tests",
+      "npx tsx --test tests/browser-authoring.test.ts",
+      "npx tsx --test tests/player-authoring.test.ts",
+      "npx eslint tests/browser-authoring.test.ts apps/client/src/authoring.ts"
+    ],
+    "completed": [
+      { "command": "npm run build", "result": "passed" },
+      { "command": "npm run typecheck:tests", "result": "passed" },
+      { "command": "npx tsx --test tests/browser-authoring.test.ts", "result": "passed", "tests": 1 },
+      { "command": "npx tsx --test tests/player-authoring.test.ts", "result": "passed", "tests": 1 },
+      { "command": "npx eslint tests/browser-authoring.test.ts apps/client/src/authoring.ts", "result": "passed" }
+    ]
+  },
+  "scope": {
+    "applicationSourcesChanged": false,
+    "liveServicesOrStoresUsed": false,
+    "roleplayOperationsOrTicksRun": false,
+    "commitCreated": false
+  },
+  "blocker": null
+}

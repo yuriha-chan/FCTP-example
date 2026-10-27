@@ -27,7 +27,7 @@ export interface Authority {
   readonly players: Readonly<Record<string, FCTPActor & Record<string, unknown>>>;
   actor(role: AuthorityRole): AuthorityActors[AuthorityRole];
   key(role: AuthorityRole): GeneratedActorKey;
-  registerActor(role: AuthorityRole, actor: FCTPActor & Record<string, unknown>): Promise<void>;
+  registerActor(name: string, actor: FCTPActor & Record<string, unknown>): Promise<void>;
   listen(port?: number, host?: string): Promise<{ port: number; close: () => Promise<void> }>;
   startWorkers(intervalMs?: number): void;
   stopWorkers(): Promise<void>;
@@ -64,13 +64,13 @@ export async function createAuthority(options: CreateAuthorityOptions): Promise<
     players,
     actor: (role) => actors[role],
     key: (role) => host.key(role),
-    registerActor: async (role, actor) => {
-      const name = role;
+    registerActor: async (name, actor) => {
       const key = host.keys[name];
-      if (!key || (playerRoles.has(name) ? actor.role !== 'player' : actor.role !== role)) throw new TypeError(`Actor role must be ${playerRoles.has(name) ? 'player' : role}`);
+      if (!key || (playerRoles.has(name) ? actor.role !== 'player' : actor.role !== name)) throw new TypeError(`Actor role must be ${playerRoles.has(name) ? 'player' : name}`);
       if (actor.id !== key.keyPair.controller || !actor.publicKeys.includes(key.keyPair.id)) throw new TypeError('Actor identity and public key must match the persisted authority key');
       actors[name] = actor;
       await host.server.registerActor({ actor });
+      if (playerRoles.has(name)) players[name] = actor;
     },
     listen: (port = 0, address = '127.0.0.1') => host.listen(port, address),
     startWorkers: (intervalMs = 1000) => host.startWorkers(intervalMs),

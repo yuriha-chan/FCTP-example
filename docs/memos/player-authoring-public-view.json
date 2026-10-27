@@ -1,0 +1,45 @@
+{
+  "checkpoint": "player-authoring-public-view-diagnosis",
+  "ownedPaths": [
+    "tests/browser-authoring.test.ts",
+    "docs/handoffs/player-authoring-public-view.md",
+    "docs/memos/player-authoring-public-view.json"
+  ],
+  "diagnosis": {
+    "assertionIsValid": true,
+    "visibleError": "Error: Failed to execute 'fetch' on 'Window': Illegal invocation",
+    "failedResourceResult": "Failed to execute 'fetch' on 'Window': Illegal invocation",
+    "firstMissingObject": "http://127.0.0.1:34005/objects/players/player-2/c10bf5e391b48164f2a438da99b02b85",
+    "observedCollectionResponseInRenderedPage": false,
+    "verifiedCause": "ResourceClient.get invokes its stored fetcher as this.fetcher(...), binding this to the ResourceClient instance; the browser Window fetch implementation rejects that receiver.",
+    "actorResolutionSucceeded": true,
+    "serverCollectionContract": "HTTP 200 ActivityStreams OrderedCollection; orderedItems contains the Player catalog Asset, Variety, and AssetGrant objects.",
+    "priorTestEvidence": "The test directly fetched the public collection before the DOM criterion and asserted orderedItems.length === 3, but did not inspect the IDs.",
+    "causalFinding": "The rendered resource click fails at fetch invocation before a collection response can be rendered; this does not establish missing public collection objects.",
+    "minimalFixRecommendation": "Invoke the ResourceClient fetcher with the global/Window receiver or bind it when ResourceClient is constructed; preserve the rendered-DOM assertion."
+  },
+  "verification": {
+    "command": "npx tsx --test tests/browser-authoring.test.ts",
+    "invocations": 1,
+    "result": "failed-at-diagnostic-assertion",
+    "compiledBundleRebuilt": false,
+    "testCount": 1,
+    "passed": 0,
+    "failed": 1,
+    "diagnosticMarkdownIncluded": true
+  },
+  "resolution": {
+    "implementationChange": "packages/resources/src/index.ts stores the fetcher in a local variable and invokes it directly.",
+    "renderedDomAssertionRetained": true,
+    "focusedBrowserTest": "passed",
+    "fullGate": "timeout 180s npm test passed 81/81"
+  },
+  "scope": {
+    "implementationSourcesChanged": false,
+    "testAssertionWeakened": false,
+    "directApiReadUsedAsDomSubstitute": false,
+    "broadGateRun": false,
+    "liveRoleplayOrTerritoryTick": false,
+    "commitCreated": false
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "checkpoint": "player-authoring-final-integration",
+  "ownedPaths": [
+    "tests/browser-authoring.test.ts",
+    "docs/handoffs/player-authoring-final-verification.md",
+    "docs/memos/player-authoring-final-verification.json"
+  ],
+  "integrationAssertions": {
+    "hostedPlayerCreationsMatchesServedActor": true,
+    "publicCollectionBrowsedThroughRenderedActorForm": true,
+    "publicCollectionContainsAuthoredAssetVarietyAndGrant": true,
+    "publicBrowsingDistinctFromPlayer3PrivateSessionIsolation": true
+  },
+  "verification": {
+    "command": "timeout 180s npm test",
+    "result": "passed",
+    "completedStages": ["build including browser bundle", "test-source typecheck", "ESLint", "runtime tests"],
+    "runtimeTests": {"total": 81, "passed": 81, "failed": 0, "cancelled": 0, "skipped": 0, "todo": 0},
+    "previousFailure": {
+      "diagnosis": "ResourceClient invoked its stored fetch as a method, causing browser Illegal invocation.",
+      "repair": "packages/resources/src/index.ts copies the fetcher to a local variable before invoking it.",
+      "domAssertionRetained": true
+    },
+    "focusedChecksAfterRepair": "passed",
+    "testSourceTypecheck": "passed",
+    "eslint": "passed",
+    "gitDiffCheck": "passed",
+    "memoJsonParsed": true
+  },
+  "scope": {
+    "applicationSourcesChangedByVerification": false,
+    "authoringFormsExercisedThroughCompiledBrowser": true,
+    "liveServicesOrStoresUsed": false,
+    "roleplayOperationsOrTicksRun": false,
+    "restartPerformed": false,
+    "commitCreated": false
+  }
+}

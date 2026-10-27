@@ -6,6 +6,14 @@ All routes below are local demo APIs under `/local/`, not standardized FCTP endp
 
 `GET /local/info` and `GET /local/home/endpoints` are public discovery routes. `GET /local/registry/state` requires the authority admin credential and returns Registry state including vessel, requests, events, cargo and ExitEvent references.
 
+### Player authoring
+
+The experimental authoring routes use the authenticated Player's native token (`Authorization: Bearer <nativeToken>`), never a caller-supplied Player, creator, holder, object ID, or administrator credential. Responses are `Cache-Control: no-store`. `GET /local/authoring` returns `{ actor, assets, varieties, grants }` for only that Player. `POST /local/authoring/assets` accepts `{ name: string, text: string }` and returns `201 { asset, activity }`. `name` must be nonempty; `text` is stored as inert text and exposed through the Asset's single `text/plain` media URI.
+
+`POST /local/authoring/varieties` accepts `{ name: string, mass: number, version: string, asset?: URI, production?: Production[] }` and returns `201 { variety, activity, grant? }`. Name and version must be nonempty, mass must be finite and positive (fractional values are accepted), and production defaults to `[]` and is validated against the protocol runtime `Production` shape while retaining extension fields. If `asset` is supplied, it must be an Asset authored and held by this same Player; success creates a corresponding `AssetGrant` for the Player and Variety in the same commit, returned as `grant`.
+
+Missing or invalid native authentication returns `401`; malformed JSON, non-object bodies, invalid fields, and unsupported top-level keys return `400` without authoring mutation. A reference to an Asset not owned by the authenticated Player returns `403` without mutation. Signing and persistence failures propagate as server failures. The Player Actor exposes a public `creations` link to `/objects/players/<name>/creations`, an OrderedCollection of that Player's published Assets, Varieties, and AssetGrants. The objects, collection, text media, and public Outbox are public resources; native-auth catalog scoping does not make published output secret. Local publication records signed Create Activities in the Player Outbox with an empty recipient list and does not enqueue delivery. No remote subscriber delivery is implied. Optional Production is descriptive data: it does not install a Territory rule or generate cargo.
+
 | Route | Credential | Request | Response |
 |---|---|---|---|
 | `POST /local/home/issue` | Authority admin | Optional `{ "actor": "<Player URI>" }` | `200 { actor, nativeToken }` |

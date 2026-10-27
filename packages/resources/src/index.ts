@@ -19,7 +19,8 @@ export class ResourceClient {
     const headers = new Headers({ Accept: options.accept ?? 'application/ld+json, application/json' });
     if (options.token) headers.set('Authorization', `Bearer ${options.token}`);
     if (cached?.etag) headers.set('If-None-Match', cached.etag);
-    const response = await this.fetcher(uri, { method: 'GET', headers, ...(options.signal ? { signal: options.signal } : {}), cache: 'no-store' });
+    const fetcher = this.fetcher;
+    const response = await fetcher(uri, { method: 'GET', headers, ...(options.signal ? { signal: options.signal } : {}), cache: 'no-store' });
     if (response.status === 304 && cached) return { value: structuredClone(cached.body) as T, ...(cached.etag ? { etag: cached.etag } : {}), notModified: true };
     if (!response.ok) throw resourceError(response.status);
     const body = await response.json() as T;

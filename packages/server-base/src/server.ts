@@ -142,17 +142,26 @@ export class FctpServer {
 
   async commit<T>(domainMutation: (domain: Record<string, unknown>, state: StoreState) => T, outgoing: Array<{
     actorId: URI; recipientActorId: URI; inbox: URI; object: Record<string, unknown>; activityId: URI
-  }> = []): Promise<T> {
+  }> = [], publications: Array<{ actorId: URI; object: Record<string, unknown>; activityId: URI }> = []): Promise<T> {
     const activities = await Promise.all(outgoing.map(async (message) => {
       const raw = createActivity({ id: message.activityId, actor: message.actorId, object: message.object, to: message.recipientActorId });
       const activity = await this.#signActivity(message.actorId, raw);
       return { message, activity, payload: JSON.stringify(activity) };
+    }));
+    const localActivities = await Promise.all(publications.map(async (publication) => {
+      const raw = createActivity({ id: publication.activityId, actor: publication.actorId, object: publication.object, to: [] });
+      const activity = await this.#signActivity(publication.actorId, raw);
+      return { publication, activity, payload: JSON.stringify(activity) };
     }));
     return this.store.transaction((state) => {
       const result = domainMutation(state.domain, state);
       for (const { message, activity, payload } of activities) {
         if (!state.actors[message.actorId]) throw new Error(`Unknown local Actor: ${message.actorId}`);
         enqueue(state, { actorId: message.actorId, inbox: message.inbox, activityId: message.activityId, object: message.object, activity, payload });
+      }
+      for (const { publication, activity, payload } of localActivities) {
+        if (!state.actors[publication.actorId]) throw new Error(`Unknown local Actor: ${publication.actorId}`);
+        archivePublication(state, { actorId: publication.actorId, activityId: publication.activityId, object: publication.object, activity, payload });
       }
       return result;
     });
@@ -381,16 +390,20 @@ export function createCredentialStoreFromSnapshot(snapshot: Record<string, Crede
 
 function hash(value: unknown): string { return createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('base64url'); }
 function enqueue(state: StoreState, entry: { actorId: URI; inbox: URI; activityId: URI; object: Record<string, unknown>; activity: Activity; payload: string }): void {
+  if (!archivePublication(state, entry)) return;
+  state.outbox.push({ id: entry.activityId, actorId: entry.actorId, inbox: entry.inbox, activity: structuredClone(entry.activity) as Record<string, unknown>, payload: entry.payload, attempts: 0, nextAttemptAt: Date.now() });
+}
+function archivePublication(state: StoreState, entry: { actorId: URI; activityId: URI; object: Record<string, unknown>; activity: Activity; payload: string }): boolean {
   const archived = state.outboxArchive.find((item) => item.actorId === entry.actorId && item.activity.id === entry.activityId);
   if (archived) {
     if (JSON.stringify(archived.activity) !== entry.payload) throw new TypeError('Conflicting reuse of outgoing Activity ID');
-    return;
+    return false;
   }
   const objectId = typeof entry.object.id === 'string' ? entry.object.id : undefined;
   if (objectId && state.objects[objectId] !== undefined && hash(state.objects[objectId]) !== hash(entry.object)) throw new TypeError('Conflicting reuse of outgoing object ID');
   if (objectId) state.objects[objectId] = structuredClone(entry.object);
-  state.outbox.push({ id: entry.activityId, actorId: entry.actorId, inbox: entry.inbox, activity: structuredClone(entry.activity) as Record<string, unknown>, payload: entry.payload, attempts: 0, nextAttemptAt: Date.now() });
   state.outboxArchive.push({ actorId: entry.actorId, activity: structuredClone(entry.activity) as Record<string, unknown> });
+  return true;
 }
 function safeEqual(left: string, right: string): boolean {
   const a = Buffer.from(left); const b = Buffer.from(right);

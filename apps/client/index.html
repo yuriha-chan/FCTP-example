@@ -40,6 +40,26 @@
         </div>
         <p id="operation-status" role="status" aria-live="polite" aria-atomic="true" data-state="idle">Ready.</p>
       </section>
+      <section data-roles="player" aria-labelledby="authoring-title">
+        <h2 id="authoring-title">Player creations</h2>
+        <p>Create text Assets and Variety definitions for your Player. Production JSON is descriptive data; it does not install a Territory recipe.</p>
+        <button id="refresh-authoring" type="button" data-action="refresh-authoring">Refresh my creations</button>
+        <form id="asset-authoring-form" aria-label="Create text Asset">
+          <label>Name<input name="name" required></label>
+          <label>Text<textarea name="text" rows="6"></textarea></label>
+          <button>Create Asset</button>
+        </form>
+        <form id="variety-authoring-form" aria-label="Create Variety">
+          <label>Name<input name="name" required></label>
+          <label>Mass<input name="mass" type="number" step="any" min="0" required></label>
+          <label>Version<input name="version" value="1.0" required></label>
+          <label>Optional own Asset<select name="asset"><option value="">None</option></select></label>
+          <label>Production JSON · descriptive, not installed<textarea name="production" rows="6" spellcheck="false">[]</textarea></label>
+          <button>Create Variety</button>
+        </form>
+        <div id="authoring-result" aria-live="polite"></div>
+        <div id="authoring-catalog" aria-live="polite"></div>
+      </section>
       <section>
         <h2>Actor and Territory resources</h2>
         <form id="actor-form">

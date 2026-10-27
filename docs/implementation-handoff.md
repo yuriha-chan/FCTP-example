@@ -21,7 +21,7 @@
 - All four initial files were untracked. Preserve them as user work.
 - No repository-local `AGENTS.md` was found.
 - The interrupted foundation task selected npm workspaces, TypeScript project builds, ESLint, tsx/Node tests, Node HTTP, and a JSON snapshot store. Pinned dependencies are in `package-lock.json`.
-- Shared packages, authority workflows, both distinct Territory apps, browser Client, and launcher exist. Integrated launcher/browser bundle and complete suite verification are the current final gate.
+- Shared packages, authority workflows, both distinct Territory apps, browser Client, launcher, and Player authoring exist. The latest authoring-inclusive `timeout 180s npm test` gate passed all 81 runtime tests; see the current checkpoint below.
 - Context7 is unavailable. The user explicitly selected “Waive Context7 requirement” and authorized implementation using available tools and official documentation without Context7.
 
 ## Implementation plan
@@ -62,7 +62,7 @@
 - Environment verified: Node v24.22.1; npm 11.19.1.
 - `docs/handoffs/foundation.md` contains the exported API summary, security defaults, explicit worker lifecycle, check results, and coverage limits. Supervisor reviewed this document and `server-base/src/server.ts`; generic handlers receive verification reports and must explicitly enforce application requirements.
 - `createInboundVerifier` is exported from server-base; see `docs/handoffs/verification.md`. Supervisor ran typecheck → lint → tests sequentially; all passed (10 tests). Package runtime exports use compiled `dist/`, so tests must follow the build, not run concurrently with it.
-- Generic persistent hosting is `createHost` in server-base; `createAuthority` delegates to it. See `docs/handoffs/host.md`. Its initial integration check exposed previously unchecked test type errors; a bounded verification repair is pending.
+- Generic persistent hosting is `createHost` in server-base; `createAuthority` delegates to it. See `docs/handoffs/host.md`. An early integration check exposed test type errors, which were subsequently covered by later passing broad gates; that early blocker is historical, not an active foundation blocker.
 - A's immediate rule-based ledger and B's mutable tick/facility ledger exist in each app's `src/domain.ts`; see their domain handoffs. Supervisor found and delegated cargo identity/mass/global reservation repairs. A explicitly rejects anonymous conversion of rich cargo; B retains structured quantity buckets. B's focused repair checks passed. They remain distinct economic implementations.
 - Supervisor mechanical checks are delegated by user requirement. Supervisor reviews specification interpretation, domain boundaries, duplicated abstractions, and patch-work integration.
 
@@ -77,7 +77,15 @@
 
 ## Final integration findings
 
-- Fresh bounded gate: exactly one `timeout 180s npm test` run exited 0. Build (TypeScript project builds, browser client compilation and browser esbuild bundle), test-source typechecking, ESLint and all 61 runtime tests passed; 0 failed, 0 cancelled, 0 skipped, 0 todo. See `docs/handoffs/final-verification.md` and `docs/memos/final-verification.json` for exact scope.
+- Historical pre-browser gate: `docs/handoffs/final-verification.md` recorded 61 passing runtime tests. The later pre-authoring browser gate is `docs/handoffs/browser-final-verification.md`: build, test-source typechecking, ESLint, and all 77 runtime tests passed. The 77-test result predates Player authoring and does not represent an authoring-inclusive broad gate.
 - The integrated host worker retry test, inbox recovery, message fixtures, actual-HTTP circulation and outage-recovery tests, and launcher HTTP/static/shutdown tests passed. The old immediate retry expectation and leaked-listener failure are superseded by this measured integrated result.
 - Reusable outage API finding remains: `FctpServer.resolveRecipientInbox(actorId)` validates and persists the remote Actor plus absolute inbox URI in `remoteActors`; cached known-recipient routing permits local commit during outage, while an unknown recipient requires online resolution. Simulation retains the `registryInbox` override. Details are in `docs/handoffs/delivery-outage.md`.
-- The test helper's URL issue is resolved: the launcher test resolves relative routes with `new URL(path, base)` and fetches absolute Actor/map identifiers directly. HTTP responses for actual client assets and shutdown passed in the integrated run; no browser/DOM behavior was tested. This gate does not establish full protocol/profile compliance.
+- The test helper's URL issue is resolved: the launcher test resolves relative routes with `new URL(path, base)` and fetches absolute Actor/map identifiers directly. HTTP responses for actual client assets and shutdown passed in that launcher test. The earlier 61-test gate alone had no browser/DOM coverage; the later 77-test pre-authoring browser gate added harness and real-DOM gameplay coverage. Neither gate establishes full protocol/profile compliance.
+
+## Current Player authoring and documentation checkpoint
+
+- Native-auth authoring API, public creation collection/Outbox convention, immutable text-only creation, same-owner Asset linking/grants, validation errors, and descriptive Production boundary are recorded in `docs/api.md` and `docs/implementation-conventions.md`.
+- Player-facing forms and the unchanged rendered-form browser harness workflow are described in `docs/client-walkthrough.md`. Protocol/acceptance traceability and current verification scope are in `docs/spec-mapping.md` and `docs/limitations.md`.
+- Current bounded handoffs: `docs/handoffs/player-authoring-contract.md`, `docs/handoffs/local-publication.md`, `docs/handoffs/player-authoring-server.md`, `docs/handoffs/player-authoring-client.md`, and `docs/handoffs/browser-authoring.md`. Browser integration evidence is in `docs/handoffs/browser-final-verification.md`.
+- The final authoring-inclusive `timeout 180s npm test` gate exited 0: build including browser bundle, test-source typechecking, ESLint, and all 81 runtime tests passed. The rendered browser authoring fixture creates, verifies, and publicly browses Player creations through actual DOM controls. The observed public-view failure was a shared browser `fetch` receiver bug in `packages/resources/src/index.ts`, now fixed; diagnosis and resolution are in `docs/handoffs/player-authoring-public-view.md`. Exact final results: `docs/handoffs/player-authoring-final-verification.md` and its JSON memo.
+- This gate does not establish full FCTP profile conformance or complete manual browser UI coverage.

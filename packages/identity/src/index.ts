@@ -32,6 +32,10 @@ const fctpTerms = {
   mass: 'fctp:mass', capacity: 'fctp:capacity', count: 'fctp:count', revision: 'fctp:revision', tokenDigest: 'fctp:tokenDigest',
   tokenRevoke: 'fctp:tokenRevoke', cargo: 'fctp:cargo', entries: { '@id': 'fctp:entries', '@container': '@list' }, data: { '@id': 'fctp:data', '@type': '@json' },
   journey: 'fctp:journey', destination: 'fctp:destination',
+  Asset: 'fctp:Asset', Variety: 'fctp:Variety', Production: 'fctp:Production', AssetGrant: 'fctp:AssetGrant',
+  media: { '@id': 'fctp:media', '@type': '@id', '@container': '@set' }, production: { '@id': 'fctp:production', '@container': '@list' },
+  version: 'fctp:version', duration: 'fctp:duration', yield: { '@id': 'fctp:yield', '@container': '@list' }, probability: 'fctp:probability',
+  ingredients: { '@id': 'fctp:ingredients', '@container': '@list' }, location: { '@id': 'fctp:location', '@type': '@id', '@container': '@set' }, grantee: { '@id': 'fctp:grantee', '@type': '@id' },
   as: 'https://www.w3.org/ns/activitystreams#'
 };
 

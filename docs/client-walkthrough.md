@@ -12,4 +12,10 @@ After applying a Player session, refresh **Registry**, **Territory A**, or **Ter
 
 The other visible sections provide Actor/resource retrieval, Registry entry/departure and signed ExitEvent verification, A's immediate production and vessel cargo controls, and B's scheduled production/cargo jobs. B jobs progress only when its administrator advances ticks. Administrative policy, facility, and tick controls are shown for their assigned role. The exact current control labels and refs are in each live CLI snapshot; see [the browser harness guide](browser-harness.md) for operating them safely.
 
+## Player creations
+
+With a Player session applied, use **Player creations** to **Refresh my creations**, create a text Asset with its **Name** and **Text**, or create a Variety with **Name**, **Mass**, **Version**, optional own **Asset**, and **Production JSON**. Mass may be fractional and positive. Production defaults to `[]` and is descriptive data only; creating a Variety does not install a Territory rule or generate cargo. A same-Player Asset selection creates an AssetGrant linking that Asset to the Variety. The results and refreshed own catalog expose the created IDs and details; Asset text is displayed as text, not interpreted as HTML.
+
+The section is visible only for a Player role and session changes clear its private draft/catalog state. The browser harness operates these same rendered forms through their existing form controls and refs; the harness does not replace them with alternate authoring inputs or operations. Published objects, the Actor's `creations` collection, Outbox entries, and Asset text media are public resources even though the local authoring catalog is scoped to the authenticated Player. The authoring HTTP contract and error behavior are in [the API reference](api.md).
+
 This walkthrough describes the current session form and role-scoped controls. The older multi-password Test authority login and administrator input instructions are not the browser session setup.
