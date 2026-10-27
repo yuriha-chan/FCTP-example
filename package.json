@@ -9,8 +9,8 @@
     "build": "tsc -b && tsc -p apps/client/tsconfig.json --pretty false && node apps/demo/build-client.mjs",
     "typecheck": "tsc -b --pretty false && tsc -p apps/client/tsconfig.json --pretty false",
     "typecheck:tests": "tsc -p tests/tsconfig.json --pretty false && tsc -p apps/client/tsconfig.json --pretty false",
-    "lint": "eslint packages apps tests",
-    "test": "npm run build && npm run typecheck:tests && npm run lint && tsx --test tests/**/*.test.ts",
+    "lint": "eslint packages apps scripts tests",
+    "test": "npm run build && npm run typecheck:tests && npm run lint && tsx --test tests/**/*.test.ts tests/**/*.test.mjs",
     "dev": "npm run build && tsx apps/demo/src/cli.ts",
     "start": "node dist/apps/demo/src/cli.js"
   },
@@ -19,7 +19,7 @@
     "@types/node": "24.10.0",
     "esbuild": "0.25.12",
     "eslint": "9.39.1",
-    "playwright": "1.56.1",
+    "playwright": "1.64.1",
     "tsx": "4.20.6",
     "typescript": "5.9.3",
     "typescript-eslint": "8.48.1"

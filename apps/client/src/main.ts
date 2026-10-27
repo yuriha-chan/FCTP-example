@@ -1,6 +1,7 @@
 import type { CargoManifest, FCTPActor, URI } from '@fctp/protocol';
 import { configuredOrigin, mapText, getAuthenticated, isRecord, loadConfig, localRequest as rawLocalRequest, portListings, readTextPublicThenAuthenticated, resolveInput, resolveReference, sdk, territoryResources, verifyExit, type BrowserLocalActionDiscovery } from './client.js';
 import { setupAuthoring } from './authoring.js';
+import { formatActionReason, formatActor, formatDiscovery, formatPolicyState, formatRegistryState, formatResult, formatSimulationState, formatVerification } from './presentation.js';
 
 const byId = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -14,10 +15,11 @@ const field = (formId: string, name: string): HTMLInputElement | HTMLTextAreaEle
   return element;
 };
 const value = (formId: string, name: string): string => field(formId, name).value.trim();
-const show = (id: string, content: unknown): void => { byId(id).textContent = typeof content === 'string' ? content : JSON.stringify(content, null, 2); };
-const jsonField = (formId: string, name: string): unknown => JSON.parse(value(formId, name));
+const show = (id: string, content: unknown): void => { byId(id).textContent = formatResult(content); };
 const numberField = (formId: string, name: string): number => {
-  const result = Number(value(formId, name));
+  const raw = value(formId, name);
+  if (!raw) throw new TypeError(`${name} is required`);
+  const result = Number(raw);
   if (!Number.isSafeInteger(result) || result < 0) throw new TypeError(`${name} must be a nonnegative integer`);
   return result;
 };
@@ -40,6 +42,57 @@ let simulationInfo: Record<string, unknown> = {};
 type SessionRole = 'player' | 'policy-admin' | 'simulation-admin' | 'authority-admin';
 let session: { role: SessionRole; player: string; vessel: string; credential: string } | undefined;
 let busy = false;
+let policySnapshot: Record<string, unknown> = {};
+let admissionSnapshot: Record<string, unknown> = {};
+let simulationConfigSnapshot: Record<string, unknown> = {};
+let policyAdminReady = false;
+let simulationAdminReady = false;
+let policyCargoAvailable = false;
+let simulationCargoAvailable = false;
+let simulationCurrentEntryRequest = '';
+
+function updateControlAvailability(): void {
+  document.querySelectorAll<HTMLButtonElement>('[data-action="policy-update"], [data-action="admission-update"]').forEach((button) => { button.disabled = busy || !policyAdminReady || session?.role !== 'policy-admin'; });
+  document.querySelectorAll<HTMLButtonElement>('[data-action="facilities-update"], [data-action="simulation-tick"]').forEach((button) => { button.disabled = busy || !simulationAdminReady || session?.role !== 'simulation-admin'; });
+  document.querySelectorAll<HTMLButtonElement>('[data-cargo-control]').forEach((button) => {
+    const available = button.dataset.action?.startsWith('policy-') ? policyCargoAvailable : simulationCargoAvailable;
+    button.disabled = busy || !available || session?.role !== 'player';
+  });
+}
+
+function resetAdminState(): void {
+  policyAdminReady = false;
+  simulationAdminReady = false;
+  policyCargoAvailable = false;
+  simulationCargoAvailable = false;
+  simulationCurrentEntryRequest = '';
+  policySnapshot = {};
+  admissionSnapshot = {};
+  simulationConfigSnapshot = {};
+  for (const name of ['miningQuota', 'oreReserve', 'policyAdvanced', 'admissionAdvanced']) field('policy-admin-form', name).value = '';
+  for (const name of ['miningCapacity', 'manufacturingSlots', 'manufacturingTime', 'portCapacity', 'berthCapacity']) field('simulation-admin-form', name).value = '';
+  for (const name of ['miningPermitted', 'manufacturePermitted', 'orePortPolicy', 'metalPortPolicy', 'mismatchPolicy']) field('policy-admin-form', name).value = '';
+  field('simulation-admin-form', 'miningEnabled').value = '';
+  field('policy-admin-form', 'policyMode').value = 'common';
+  field('policy-admin-form', 'admissionMode').value = 'common';
+  field('simulation-operation-form', 'entryRequest').value = '';
+  field('simulation-operation-form', 'cargo').value = '';
+  field('policy-operation-form', 'vessel').value = '';
+  field('policy-operation-form', 'cargoVariety').value = '';
+  syncAdminModes();
+  (field('policy-admin-form', 'publicEast') as HTMLInputElement).checked = false;
+  (field('policy-admin-form', 'publicWest') as HTMLInputElement).checked = false;
+  updateControlAvailability();
+}
+
+function syncAdminModes(): void {
+  const policyAdvanced = value('policy-admin-form', 'policyMode') === 'advanced';
+  byId('policy-common-controls').hidden = policyAdvanced;
+  byId('policy-advanced').hidden = !policyAdvanced;
+  const admissionAdvanced = value('policy-admin-form', 'admissionMode') === 'advanced';
+  byId('admission-common-controls').hidden = admissionAdvanced;
+  byId('admission-advanced').hidden = !admissionAdvanced;
+}
 
 const credentialFor = (role: SessionRole): string => {
   if (!session || session.role !== role || !session.credential) throw new Error(`Apply a ${role} session first`);
@@ -80,6 +133,7 @@ async function task<T>(output: string, action: () => Promise<T>, refresh?: () =>
     controls.forEach((control) => { control.disabled = disabled.get(control) ?? false; });
     document.querySelectorAll<HTMLButtonElement>('button[data-discovered-action]').forEach((button) => { button.disabled = button.dataset.unavailable === 'true'; });
     document.querySelectorAll<HTMLButtonElement>('button[data-resource-action]').forEach((button) => { button.disabled = false; });
+    updateControlAvailability();
     document.documentElement.dataset.clientBusy = 'false';
   }
 }
@@ -96,10 +150,8 @@ const actionOutputs: Record<string, string> = {
   'discover-registry': 'registry-discovery', 'discover-policy': 'policy-discovery', 'discover-simulation': 'simulation-discovery',
   'issue-token': 'registry-state', 'rotate-token': 'registry-state', 'digest-request': 'registry-state', 'revoke-token': 'registry-state', 'refresh-fleet': 'registry-fleet',
   'registry-entry': 'registry-state', 'registry-departure': 'registry-state', 'registry-adoption': 'registry-state', 'refresh-authority': 'registry-state',
-  'policy-update': 'policy-result', 'admission-update': 'policy-result', 'policy-mine': 'policy-result', 'policy-manufacture': 'policy-result',
-  'policy-transfer': 'policy-result', 'policy-load': 'policy-result', 'policy-unload': 'policy-result', 'refresh-policy': 'policy-state',
-  'facilities-update': 'simulation-result', 'simulation-tick': 'simulation-result', 'simulation-mine': 'simulation-result',
-  'simulation-manufacture': 'simulation-result', 'simulation-load': 'simulation-result', 'simulation-unload': 'simulation-result', 'refresh-simulation': 'simulation-state'
+  'policy-update': 'policy-result', 'admission-update': 'policy-result', 'policy-mine': 'policy-result', 'policy-manufacture': 'policy-result', 'policy-transfer': 'policy-result', 'policy-load': 'policy-result', 'policy-unload': 'policy-result', 'refresh-policy': 'policy-state',
+  'facilities-update': 'simulation-result', 'simulation-tick': 'simulation-result', 'simulation-mine': 'simulation-result', 'simulation-manufacture': 'simulation-result', 'simulation-load': 'simulation-result', 'simulation-unload': 'simulation-result', 'refresh-simulation': 'simulation-state'
 };
 
 function addAction(action: string, handler: () => Promise<void>): void {
@@ -118,9 +170,8 @@ async function refreshAuthority(): Promise<void> {
   registrySnapshot = await localRequest<Record<string, unknown>>(config.origins.authority, `/local/registry/state?${query}`, { token: session.role === 'player' ? playerToken() : authorityAdmin() });
   const cargo = registrySnapshot.cargo as CargoManifest | undefined;
   const output = byId('registry-state');
-  output.textContent = JSON.stringify({ ...registrySnapshot, declaredCargo: cargo }, null, 2);
   const vessel = isRecord(registrySnapshot.vessel) ? registrySnapshot.vessel.id : undefined;
-  if (typeof vessel === 'string') field('policy-operation-form', 'vessel').value = vessel;
+  output.textContent = formatRegistryState({ ...registrySnapshot, declaredCargo: cargo }, typeof vessel === 'string' ? vessel : undefined);
   const exitUris = Array.isArray(registrySnapshot.exitEvidence) ? registrySnapshot.exitEvidence.filter((uri): uri is string => typeof uri === 'string') : [];
   for (const uri of exitUris) {
     const button = document.createElement('button');
@@ -136,38 +187,170 @@ async function refreshFleet(): Promise<void> {
   show('registry-fleet', fleet);
 }
 
+function populatePolicyAdmin(policy: Record<string, unknown>, admission: Record<string, unknown>): void {
+  policySnapshot = structuredClone(policy);
+  admissionSnapshot = structuredClone(admission);
+  const form = 'policy-admin-form';
+  (field(form, 'miningPermitted') as HTMLSelectElement).value = String(policy.miningPermitted === true);
+  field(form, 'miningQuota').value = String(policy.miningQuota ?? 0);
+  field(form, 'oreReserve').value = String(policy.oreReserve ?? 0);
+  field(form, 'policyAdvanced').value = JSON.stringify(policy, null, 2);
+  field(form, 'admissionAdvanced').value = JSON.stringify(admission, null, 2);
+  const permits = Array.isArray(policy.manufacturePermits) ? policy.manufacturePermits : [];
+  (field(form, 'manufacturePermitted') as HTMLSelectElement).value = String(permits.includes('ore-to-metal'));
+  const varietyPolicy = isRecord(policy.varietyPortPolicy) ? policy.varietyPortPolicy : {};
+  const ids = isRecord(policyInfo.ids) ? policyInfo.ids : {};
+  const varieties = isRecord(ids.varieties) ? ids.varieties : {};
+  const ore = typeof varieties.ore === 'string' ? varieties.ore : '';
+  const metal = typeof varieties.metal === 'string' ? varieties.metal : '';
+  (field(form, 'orePortPolicy') as HTMLSelectElement).value = varietyPolicy[ore] === 'deny' ? 'deny' : 'allow';
+  (field(form, 'metalPortPolicy') as HTMLSelectElement).value = varietyPolicy[metal] === 'deny' ? 'deny' : 'allow';
+  (field(form, 'mismatchPolicy') as HTMLSelectElement).value = String(admission.mismatchPolicy ?? 'reject');
+  const publicPorts = Array.isArray(admission.publicPorts) ? admission.publicPorts : [];
+  const ports = Array.isArray(ids.ports) ? ids.ports : [];
+  (field(form, 'publicEast') as HTMLInputElement).checked = typeof ports[0] === 'string' && publicPorts.includes(ports[0]);
+  (field(form, 'publicWest') as HTMLInputElement).checked = typeof ports[1] === 'string' && publicPorts.includes(ports[1]);
+}
+
+function policyBody(): Record<string, unknown> {
+  const form = 'policy-admin-form';
+  if (!policyAdminReady || session?.role !== 'policy-admin') throw new Error('Refresh Territory A settings in this administrator session before updating policy');
+  if (value(form, 'policyMode') === 'advanced') return parseAdminObject(value(form, 'policyAdvanced'), 'policy');
+  const body = structuredClone(policySnapshot);
+  body.miningPermitted = value(form, 'miningPermitted') === 'true';
+  body.miningQuota = numberField(form, 'miningQuota');
+  body.oreReserve = numberField(form, 'oreReserve');
+  const recipes = Array.isArray(body.recipes) ? body.recipes : [];
+  const permitted = Array.isArray(body.manufacturePermits) ? body.manufacturePermits.filter((entry) => typeof entry === 'string') : [];
+  body.manufacturePermits = value(form, 'manufacturePermitted') === 'true'
+    ? [...new Set([...permitted, 'ore-to-metal'].filter((entry) => recipes.some((recipe) => isRecord(recipe) && recipe.id === entry)))]
+    : permitted.filter((entry) => entry !== 'ore-to-metal');
+  const ids = isRecord(policyInfo.ids) ? policyInfo.ids : {};
+  const varieties = isRecord(ids.varieties) ? ids.varieties : {};
+  const policies = isRecord(body.varietyPortPolicy) ? structuredClone(body.varietyPortPolicy) : {};
+  for (const [key, name] of [['ore', 'orePortPolicy'], ['metal', 'metalPortPolicy']] as const) {
+    const uri = varieties[key];
+    if (typeof uri !== 'string') continue;
+    policies[uri] = value(form, name);
+  }
+  body.varietyPortPolicy = policies;
+  return body;
+}
+
+function admissionBody(): Record<string, unknown> {
+  const form = 'policy-admin-form';
+  if (!policyAdminReady || session?.role !== 'policy-admin') throw new Error('Refresh Territory A settings in this administrator session before updating admission');
+  if (value(form, 'admissionMode') === 'advanced') return parseAdminObject(value(form, 'admissionAdvanced'), 'admission');
+  const body: Record<string, unknown> = { ...structuredClone(admissionSnapshot), mismatchPolicy: value(form, 'mismatchPolicy') };
+  const ids = isRecord(policyInfo.ids) ? policyInfo.ids : {};
+  const ports = Array.isArray(ids.ports) ? ids.ports.filter((port): port is string => typeof port === 'string') : [];
+  const prior = Array.isArray(body.publicPorts) ? body.publicPorts.filter((port): port is string => typeof port === 'string') : [];
+  const displayed = ports.slice(0, 2);
+  const publicPorts = prior.filter((port) => !displayed.includes(port));
+  if ((field(form, 'publicEast') as HTMLInputElement).checked && ports[0]) publicPorts.push(ports[0]);
+  if ((field(form, 'publicWest') as HTMLInputElement).checked && ports[1]) publicPorts.push(ports[1]);
+  return { ...body, publicPorts };
+}
+
+function parseAdminObject(raw: string, label: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(raw);
+  if (!isRecord(parsed)) throw new TypeError(`${label} must be a JSON object`);
+  return parsed;
+}
+
 async function refreshPolicy(): Promise<void> {
   if (!session) throw new Error('Apply a session first');
+  const currentSession = session;
+  if (currentSession.role === 'policy-admin') policyAdminReady = false;
+  if (currentSession.role === 'player') policyCargoAvailable = false;
+  updateControlAvailability();
   const token = session.role === 'player' ? await localPlayerToken(territoryIds.policy) : policyAdmin();
   const result = await localRequest<Record<string, unknown>>(config.origins.policy, '/local/state', { token });
   const state = isRecord(result.state) ? result.state : result;
-  const policy = isRecord(state.policy) ? state.policy : undefined;
-  const admission = isRecord(result.admission) ? result.admission : undefined;
-  if (policy) field('policy-admin-form', 'policy').value = JSON.stringify(policy, null, 2);
-  if (admission) field('policy-admin-form', 'admission').value = JSON.stringify(admission, null, 2);
-  const ids = isRecord(policyInfo.ids) ? policyInfo.ids : {};
-  const varieties = isRecord(ids.varieties) ? ids.varieties : {};
-  if (typeof varieties.metal === 'string') field('policy-operation-form', 'variety').value ||= varieties.metal;
-  if (typeof varieties.metal === 'string') field('policy-operation-form', 'cargoVariety').value ||= varieties.metal;
-  show('policy-state', result);
+  const policy = isRecord(state.policy) ? state.policy : {};
+  const admission = isRecord(result.admission) ? result.admission : {};
+  if (currentSession.role === 'policy-admin') {
+    populatePolicyAdmin(policy, admission);
+    policyAdminReady = true;
+  }
+  if (currentSession.role === 'player' && session === currentSession) {
+    field('policy-operation-form', 'vessel').value = currentSession.vessel;
+    const ids = isRecord(policyInfo.ids) ? policyInfo.ids : {};
+    const varieties = isRecord(ids.varieties) ? ids.varieties : {};
+    if (typeof varieties.metal === 'string') field('policy-operation-form', 'cargoVariety').value ||= varieties.metal;
+    const visits = isRecord(result.visits) ? result.visits : {};
+    const visit = visits[currentSession.vessel];
+    const vessels = isRecord(state.vessels) ? state.vessels : {};
+    policyCargoAvailable = isRecord(visit) && visit.vessel === currentSession.vessel && visit.possessor === currentSession.player && visit.departed !== true && isRecord(vessels[currentSession.vessel]);
+  }
+  show('policy-state', formatPolicyState(result, currentSession.vessel));
+  updateControlAvailability();
+}
+
+function populateSimulationAdmin(config: Record<string, unknown>): void {
+  simulationConfigSnapshot = structuredClone(config);
+  const form = 'simulation-admin-form';
+  (field(form, 'miningEnabled') as HTMLSelectElement).value = String(config.miningEnabled === true);
+  field(form, 'miningCapacity').value = String(config.miningCapacity ?? 1);
+  field(form, 'manufacturingSlots').value = String(config.manufacturingSlots ?? 1);
+  field(form, 'manufacturingTime').value = String(config.manufacturingTime ?? 1);
+  field(form, 'portCapacity').value = String(config.portCapacity ?? 0);
+  field(form, 'berthCapacity').value = String(config.berthCapacity ?? 0);
+}
+
+function facilitiesBody(): Record<string, unknown> {
+  if (!simulationAdminReady || session?.role !== 'simulation-admin') throw new Error('Refresh Territory B settings in this administrator session before updating facilities');
+  if (!Object.keys(simulationConfigSnapshot).length) throw new Error('Territory B facility snapshot is unavailable');
+  const form = 'simulation-admin-form';
+  return {
+    mining: { enabled: value(form, 'miningEnabled') === 'true', capacity: numberField(form, 'miningCapacity') },
+    manufacturing: { slots: numberField(form, 'manufacturingSlots'), time: numberField(form, 'manufacturingTime') },
+    port: { capacity: numberField(form, 'portCapacity'), berths: numberField(form, 'berthCapacity') }
+  };
 }
 
 async function refreshSimulation(): Promise<void> {
   if (!session) throw new Error('Apply a session first');
   const currentSession = session;
+  if (currentSession.role === 'simulation-admin') simulationAdminReady = false;
+  if (currentSession.role === 'player') {
+    simulationCargoAvailable = false;
+    simulationCurrentEntryRequest = '';
+    field('simulation-operation-form', 'entryRequest').value = '';
+  }
+  updateControlAvailability();
   const token = currentSession.role === 'player' ? await localPlayerToken(territoryIds.simulation) : simulationAdmin();
   const result = await localRequest<Record<string, unknown>>(config.origins.simulation, '/local/state', { token });
-  const visits = isRecord(result.visits) ? result.visits : {};
-  const activeVisit = Object.values(visits).filter((visit) => {
-    if (!isRecord(visit)) return false;
-    const request = isRecord(visit.request) ? visit.request : {};
-    const requestVessel = isRecord(request.vessel) ? request.vessel : {};
-    const vesselId = typeof visit.vessel === 'string' ? visit.vessel : requestVessel.id;
-    const possessor = typeof visit.possessor === 'string' ? visit.possessor : requestVessel.possessor;
-    return visit.decision && isRecord(visit.decision) && visit.decision.accepted === true && vesselId === currentSession.vessel && possessor === currentSession.player && visit.exited !== true;
-  }).at(-1);
-  if (isRecord(activeVisit) && isRecord(activeVisit.request) && typeof activeVisit.request.id === 'string') field('simulation-operation-form', 'entryRequest').value = activeVisit.request.id;
-  show('simulation-state', result);
+  const simulation = isRecord(result.simulation) ? result.simulation : {};
+  const currentConfig = isRecord(simulation.config) ? simulation.config : {};
+  if (currentSession.role === 'simulation-admin') {
+    populateSimulationAdmin(currentConfig);
+    simulationAdminReady = true;
+  }
+  if (currentSession.role === 'player' && session === currentSession) {
+    if (!value('simulation-operation-form', 'cargo')) {
+      const ids = isRecord(simulationInfo.ids) ? simulationInfo.ids : {};
+      const varieties = isRecord(ids.varieties) ? ids.varieties : {};
+      if (typeof varieties.importedMetal === 'string') field('simulation-operation-form', 'cargo').value = JSON.stringify({ entries: [{ variety: varieties.importedMetal, count: 1, data: {} }] }, null, 2);
+    }
+    const visits = isRecord(result.visits) ? Object.values(result.visits) : [];
+    const visit = visits.find((candidate) => {
+      if (!isRecord(candidate) || candidate.exited === true || candidate.possessor !== currentSession.player) return false;
+      const request = isRecord(candidate.request) ? candidate.request : {};
+      const requestVessel = isRecord(request.vessel) ? request.vessel : {};
+      return requestVessel.id === currentSession.vessel && isRecord(candidate.decision) && candidate.decision.accepted === true;
+    });
+    const simState = isRecord(result.simulation) ? result.simulation : {};
+    const vessels = Array.isArray(simState.vessels) ? simState.vessels : [];
+    const berthed = isRecord(visit) && vessels.some((vessel) => isRecord(vessel) && vessel.id === visit.simulationVessel && vessel.status === 'berthed');
+    if (berthed && isRecord(visit) && isRecord(visit.request) && typeof visit.request.id === 'string') {
+      simulationCurrentEntryRequest = visit.request.id;
+      field('simulation-operation-form', 'entryRequest').value = simulationCurrentEntryRequest;
+      simulationCargoAvailable = true;
+    }
+  }
+  show('simulation-state', formatSimulationState(result, currentSession.vessel));
+  updateControlAvailability();
 }
 
 async function verifySelectedExit(): Promise<void> {
@@ -179,7 +362,7 @@ async function verifySelectedExit(): Promise<void> {
     const exitCargo = exit.cargo;
     const comparison = isRecord(declared) && isRecord(exitCargo) ? sdk.compareManifests(declared as CargoManifest, exitCargo as CargoManifest) : undefined;
     const sideBySide = { ...result, registryDeclaredCargo: declared, exitEventCargo: exitCargo, descriptiveDifference: comparison };
-    return sideBySide;
+    return formatVerification(sideBySide);
   });
 }
 
@@ -187,7 +370,7 @@ async function discoverActor(): Promise<void> {
   await task('actor-result', async () => {
     const resolution = await resolveInput(value('actor-form', 'actor'));
     await renderActorResources(resolution.actor as FCTPActor & Record<string, unknown>);
-    return { source: resolution.source, actor: resolution.actor };
+    return `${formatActor(resolution.actor as Record<string, unknown>)}\nResolved through ${resolution.source}.`;
   });
 }
 
@@ -195,7 +378,7 @@ async function discoverTerritory(uri: string): Promise<void> {
   await task('actor-result', async () => {
     const resolution = await sdk.resolveActor(uri as URI);
     await renderActorResources(resolution.actor as FCTPActor & Record<string, unknown>);
-    return { source: resolution.source, actor: resolution.actor };
+    return `${formatActor(resolution.actor as Record<string, unknown>)}\nResolved through ${resolution.source}.`;
   });
 }
 
@@ -304,28 +487,23 @@ function renderDiscovery(id: string, result: BrowserLocalActionDiscovery): void 
   const panel = byId(id);
   panel.replaceChildren();
   const state = document.createElement('pre');
-  state.textContent = JSON.stringify({ observedAt: result.observedAt, state: result.state, notes: result.notes }, null, 2);
+  state.textContent = formatDiscovery(result);
   panel.append(state);
   for (const action of result.actions) {
     const item = document.createElement('article');
     const title = document.createElement('h4'); title.textContent = action.label;
     const effect = document.createElement('p'); effect.textContent = `Effect: ${action.effect}`;
     item.append(title, effect);
-    if (action.reason) { const reason = document.createElement('p'); reason.textContent = `Blocked: ${action.reason}`; item.append(reason); }
-    if (action.request) {
-      const details = document.createElement('pre');
-      details.textContent = JSON.stringify(action.request, null, 2);
-      item.append(details);
-    }
+    if (action.reason) { const reason = document.createElement('p'); reason.textContent = `Blocked: ${formatActionReason(action.reason)}`; item.append(reason); }
     const button = document.createElement('button');
     button.type = 'button'; button.dataset.action = 'discovered'; button.dataset.discoveredAction = 'true'; button.dataset.unavailable = String(!action.available || !action.request); button.dataset.roles = 'player'; button.textContent = action.label; button.disabled = busy || !action.available || !action.request;
     button.setAttribute('aria-label', `${action.available ? 'Run' : 'Unavailable'}: ${action.label}`);
-    button.addEventListener('click', () => void task(id, async () => {
+    button.addEventListener('click', () => void task(result.kind === 'registry' ? 'registry-state' : result.kind === 'policy' ? 'policy-result' : 'simulation-result', async () => {
       if (!action.available || !action.request || !session) throw new Error(action.reason ?? 'Action is unavailable');
       const targetOrigin = configuredOrigin(action.request.href, config);
       const token = targetOrigin === new URL(config.origins.authority).origin ? playerToken() : await localPlayerToken(targetOrigin === new URL(config.origins.policy).origin ? territoryIds.policy : territoryIds.simulation);
-      const response = await localRequest<unknown>(targetOrigin, action.request.href.replace(targetOrigin, ''), { method: action.request.method, ...(action.request.body ? { body: action.request.body } : {}), token });
-      return { requestAccepted: true, response, note: 'Delivery acknowledgement does not establish Territory business completion.' };
+      await localRequest<unknown>(targetOrigin, action.request.href.replace(targetOrigin, ''), { method: action.request.method, ...(action.request.body ? { body: action.request.body } : {}), token });
+      return 'Request accepted. Refresh the relevant state to see whether the Territory completed it.';
     }, () => result.kind === 'registry' ? refreshAuthority() : result.kind === 'policy' ? refreshPolicy() : refreshSimulation()));
     item.append(button);
     panel.append(item);
@@ -355,13 +533,13 @@ form('session-form').addEventListener('submit', (event) => {
     nativeToken = '';
     field('authority-form', 'nativeToken').value = '';
     registrySnapshot = {};
+    resetAdminState();
     for (const id of ['registry-state', 'policy-state', 'simulation-state', 'registry-discovery', 'policy-discovery', 'simulation-discovery', 'policy-result', 'simulation-result', 'exit-result', 'actor-result', 'resource-result']) byId(id).replaceChildren();
     const resourcePanel = byId('resource-browser');
     for (const child of [...resourcePanel.children]) if (!(child instanceof HTMLButtonElement && child.dataset.resourceChoice === 'true')) child.remove();
     session = { role, player, vessel, credential };
     authoring.sessionChanged();
     credentialField.value = '';
-    if (role === 'player') field('policy-operation-form', 'vessel').value = vessel;
     applyRoleScope();
     const status = byId('session-status');
     status.textContent = `Session applied: ${role}${player ? ` · Player ${player}` : ''}${vessel ? ` · vessel ${vessel}` : ''}. Credential held in page memory.`;
@@ -417,21 +595,21 @@ addAction('refresh-authority', async () => refreshAuthority());
 addAction('refresh-fleet', async () => refreshFleet());
 
 addAction('policy-update', async () => {
-  const policy = jsonField('policy-admin-form', 'policy');
-  const result = await localRequest(config.origins.policy, '/local/admin/policy', { method: 'POST', token: policyAdmin(), body: policy });
-  show('policy-result', result); await refreshPolicy();
+  await localRequest(config.origins.policy, '/local/admin/policy', { method: 'POST', token: policyAdmin(), body: policyBody() });
+  show('policy-result', 'Policy updated. The refreshed state below reflects the new local rules.');
+  await refreshPolicy();
 });
 addAction('admission-update', async () => {
-  const admission = jsonField('policy-admin-form', 'admission');
-  const result = await localRequest(config.origins.policy, '/local/admin/admission', { method: 'POST', token: policyAdmin(), body: admission });
-  show('policy-result', result); await refreshPolicy();
+  await localRequest(config.origins.policy, '/local/admin/admission', { method: 'POST', token: policyAdmin(), body: admissionBody() });
+  show('policy-result', 'Admission policy updated. The refreshed state below reflects the new local rules.');
+  await refreshPolicy();
 });
 addAction('policy-mine', async () => {
   const result = await localRequest(config.origins.policy, '/local/mine', { method: 'POST', token: await localPlayerToken(territoryIds.policy), body: { count: numberField('policy-operation-form', 'mineCount') } });
   show('policy-result', result); await refreshPolicy();
 });
 addAction('policy-manufacture', async () => {
-  const result = await localRequest(config.origins.policy, '/local/manufacture', { method: 'POST', token: await localPlayerToken(territoryIds.policy), body: { count: numberField('policy-operation-form', 'manufactureCount'), recipe: 'ore-to-metal' } });
+  const result = await localRequest(config.origins.policy, '/local/manufacture', { method: 'POST', token: await localPlayerToken(territoryIds.policy), body: { count: numberField('policy-operation-form', 'manufactureCount'), recipe: value('policy-operation-form', 'recipe') } });
   show('policy-result', result); await refreshPolicy();
 });
 addAction('policy-transfer', async () => {
@@ -439,32 +617,38 @@ addAction('policy-transfer', async () => {
   show('policy-result', result); await refreshPolicy();
 });
 for (const operation of ['load', 'unload'] as const) addAction(`policy-${operation}`, async () => {
-  const result = await localRequest(config.origins.policy, `/local/${operation}`, { method: 'POST', token: await localPlayerToken(territoryIds.policy), body: { vessel: value('policy-operation-form', 'vessel'), variety: value('policy-operation-form', 'cargoVariety'), count: numberField('policy-operation-form', 'cargoCount') } });
+  if (!policyCargoAvailable || session?.role !== 'player') throw new Error('Refresh Territory A and confirm your current berth before cargo handling');
+  const result = await localRequest(config.origins.policy, `/local/${operation}`, { method: 'POST', token: await localPlayerToken(territoryIds.policy), body: { vessel: session.vessel, variety: value('policy-operation-form', 'cargoVariety'), count: numberField('policy-operation-form', 'cargoCount') } });
   show('policy-result', result); await refreshPolicy();
 });
 addAction('refresh-policy', async () => refreshPolicy());
 
 addAction('facilities-update', async () => {
-  const result = await localRequest(config.origins.simulation, '/local/admin/facilities', { method: 'POST', token: simulationAdmin(), body: jsonField('simulation-admin-form', 'facilities') });
-  show('simulation-result', result); await refreshSimulation();
+  await localRequest(config.origins.simulation, '/local/admin/facilities', { method: 'POST', token: simulationAdmin(), body: facilitiesBody() });
+  show('simulation-result', 'Facility settings updated. Future jobs use the new limits.');
+  await refreshSimulation();
 });
 addAction('simulation-tick', async () => {
-  const result = await localRequest(config.origins.simulation, '/local/admin/tick', { method: 'POST', token: simulationAdmin(), body: {} });
-  show('simulation-result', { tickAdvanced: true, state: result }); await refreshSimulation();
+  await localRequest(config.origins.simulation, '/local/admin/tick', { method: 'POST', token: simulationAdmin(), body: {} });
+  show('simulation-result', 'Advanced one local tick. Refresh to inspect completed work.');
+  await refreshSimulation();
 });
 addAction('simulation-mine', async () => {
   const result = await localRequest<{ job: string }>(config.origins.simulation, '/local/mine', { method: 'POST', token: await localPlayerToken(territoryIds.simulation), body: { count: numberField('simulation-operation-form', 'mineCount'), duration: numberField('simulation-operation-form', 'mineDuration') } });
   show('simulation-result', { scheduledJob: result.job, completion: 'Not complete until later ticks; state refreshed.' }); await refreshSimulation();
 });
 addAction('simulation-manufacture', async () => {
-  const result = await localRequest<{ job: string }>(config.origins.simulation, '/local/manufacture', { method: 'POST', token: await localPlayerToken(territoryIds.simulation), body: { recipe: value('simulation-operation-form', 'recipe'), count: numberField('simulation-operation-form', 'manufactureCount') } });
+  const result = await localRequest<{ job: string }>(config.origins.simulation, '/local/manufacture', { method: 'POST', token: await localPlayerToken(territoryIds.simulation), body: { count: numberField('simulation-operation-form', 'manufactureCount'), recipe: value('simulation-operation-form', 'recipe') } });
   show('simulation-result', { scheduledJob: result.job, completion: 'Not complete until later ticks; state refreshed.' }); await refreshSimulation();
 });
 for (const operation of ['load', 'unload'] as const) addAction(`simulation-${operation}`, async () => {
-  const result = await localRequest<{ job: string }>(config.origins.simulation, `/local/${operation}`, { method: 'POST', token: await localPlayerToken(territoryIds.simulation), body: { entryRequest: value('simulation-operation-form', 'entryRequest'), cargo: jsonField('simulation-operation-form', 'cargo'), duration: numberField('simulation-operation-form', 'duration') } });
+  if (!simulationCargoAvailable || !simulationCurrentEntryRequest || session?.role !== 'player') throw new Error('Refresh Territory B and confirm your current berth before cargo handling');
+  const result = await localRequest<{ job: string }>(config.origins.simulation, `/local/${operation}`, { method: 'POST', token: await localPlayerToken(territoryIds.simulation), body: { entryRequest: simulationCurrentEntryRequest, cargo: JSON.parse(value('simulation-operation-form', 'cargo')) as unknown, duration: numberField('simulation-operation-form', 'duration') } });
   show('simulation-result', { scheduledJob: result.job, completion: 'Not complete until later ticks; state refreshed.' }); await refreshSimulation();
 });
 addAction('refresh-simulation', async () => refreshSimulation());
+
+for (const name of ['policyMode', 'admissionMode']) field('policy-admin-form', name).addEventListener('change', syncAdminModes);
 
 byId('connection-status').textContent = `Connected to authority ${config.origins.authority}, Territory A ${territoryIds.policy}, Territory B ${territoryIds.simulation}.`;
 field('registry-form', 'territory').value = territoryIds.policy;
@@ -494,14 +678,18 @@ void task('connection-status', async () => {
       if (name === 'policy') policyInfo = info;
       else simulationInfo = info;
       const ids = isRecord(info.ids) ? info.ids : {};
-      if (name === 'policy' && isRecord(ids.varieties) && typeof ids.varieties.metal === 'string') {
-        field('policy-operation-form', 'variety').value = ids.varieties.metal;
-        field('policy-operation-form', 'cargoVariety').value = ids.varieties.metal;
-      }
-      if (name === 'simulation' && isRecord(ids.varieties) && typeof ids.varieties.importedMetal === 'string') {
-        field('simulation-operation-form', 'cargo').value = JSON.stringify({ entries: [{ variety: isRecord(ids.varieties) ? ids.varieties.importedMetal : '', count: 1, data: {} }] }, null, 2);
+      const varieties = isRecord(ids.varieties) ? ids.varieties : {};
+      if (name === 'policy') {
+        if (typeof varieties.metal === 'string') {
+          field('policy-operation-form', 'variety').value = varieties.metal;
+          field('policy-operation-form', 'cargoVariety').value = varieties.metal;
+        }
+      } else if (typeof varieties.importedMetal === 'string') {
+        field('simulation-operation-form', 'cargo').value = JSON.stringify({ entries: [{ variety: varieties.importedMetal, count: 1, data: {} }] }, null, 2);
       }
     }));
     setupDestinationFields();
+    syncAdminModes();
+    updateControlAvailability();
     return 'Service configuration loaded. Apply a session to refresh private state.';
 });

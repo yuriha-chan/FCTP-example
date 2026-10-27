@@ -36,9 +36,9 @@ export async function discoverPolicyActions(input: {
   const preview = (id: string, label: string, request: NonNullable<LocalAction['request']>, effect: string, run: (copy: TerritoryState) => { success: boolean; error?: string }, vesselScoped = false): void => {
     const cloned = structuredClone(state);
     const result = run(cloned);
-    const reason = !result.success ? result.error ?? 'blocked-by-local-domain-rules' : undefined;
     const blockedByVisit = vesselScoped && !visit;
-    actions.push({ id, label, available: !reason && !blockedByVisit, ...(reason || blockedByVisit ? { reason: reason ?? 'no-persisted-local-visit' } : {}), request, effect });
+    const reason = blockedByVisit ? 'no-persisted-local-visit' : !result.success ? result.error ?? 'blocked-by-local-domain-rules' : undefined;
+    actions.push({ id, label, available: !reason, ...(reason ? { reason } : {}), request, effect });
   };
   const post = (path: string, body: Record<string, unknown>) => ({ method: 'POST' as const, href: `${input.origin}/local/${path}`, body });
   preview('mine-ore', 'Mine one ore', post('mine', { variety: input.ids.varieties.ore, count: 1 }), 'Consumes one unit of shared reserve/quota and adds shared warehouse stock.', (copy) => mineOre(copy, input.ids.varieties.ore, 1));

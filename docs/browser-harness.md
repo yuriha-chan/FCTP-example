@@ -1,6 +1,6 @@
 # Browser-backed CLI
 
-`node run/browser.mjs` is the role gameplay interface for the active browser-backed run. It drives the real FCTP HTML/JavaScript client through visible controls. The adapter does not call application functions or construct gameplay HTTP requests. Do not use `node run/game.mjs` as a parallel gameplay path for active roleplay; that CLI and its API manuals are historical provenance and remain for supervisor/archive tooling. Board and observer archive commands are separate tools, not browser gameplay commands.
+`node scripts/browser.mjs` is the canonical role gameplay interface for the active browser-backed run. It drives the real FCTP HTML/JavaScript client through visible controls. The adapter does not call application functions or construct gameplay HTTP requests. `run/browser.mjs` remains a compatibility wrapper. Do not use `node run/game.mjs` as a parallel gameplay path for active roleplay; that CLI and its API manuals are historical provenance and remain for supervisor/archive tooling. Board and observer archive commands are separate tools, not browser gameplay commands.
 
 ## Install and build
 
@@ -26,15 +26,16 @@ To isolate config/runtime files for a test run, set `FCTP_BROWSER_CONFIG_ROOT` t
 ## Commands
 
 ```text
-node run/browser.mjs <role> open
-node run/browser.mjs <role> view
-node run/browser.mjs <role> fill <ref> <text>
-node run/browser.mjs <role> select <ref> <value>
-node run/browser.mjs <role> click <ref>
-node run/browser.mjs <role> submit <ref>
-node run/browser.mjs <role> back
-node run/browser.mjs <role> reload
-node run/browser.mjs <role> close
+node scripts/browser.mjs <role> open
+node scripts/browser.mjs <role> view
+node scripts/browser.mjs <role> fill <ref> <text>
+node scripts/browser.mjs <role> select <ref> <value>
+node scripts/browser.mjs <role> click <ref>
+node scripts/browser.mjs <role> submit <ref>
+node scripts/browser.mjs <role> batch '<JSON array>'
+node scripts/browser.mjs <role> back
+node scripts/browser.mjs <role> reload
+node scripts/browser.mjs <role> close
 ```
 
 `open` starts a role session if needed, applies that role through the visible **Browser session** form, and prints the page. `view` prints a fresh snapshot. `fill` fills a visible input/textarea; `select` selects a visible option; `click` activates a visible button or link; `submit` uses the visible submit control's actual form submission and browser validation/events. These operations print the resulting live snapshot. `back` uses browser history. `reload` reloads the page and reapplies the same role through the session form with fresh refs. `close` ends the active browser and static server; call it while that role daemon is running.
@@ -42,11 +43,38 @@ node run/browser.mjs <role> close
 Example:
 
 ```sh
-node run/browser.mjs player-2 open
-node run/browser.mjs player-2 view
+node scripts/browser.mjs player-2 open
+node scripts/browser.mjs player-2 view
 ```
 
-Use the refs printed by the latest snapshot. Every successful operation that returns a snapshot replaces the prior ref set—including `fill` and `select`. Resolve the desired ref again from that returned snapshot before the next operation. A stale/unknown ref fails; it never resolves to a different control. Disabled, hidden, wrong-kind, or non-submit controls cannot be operated with a ref. Do not cache refs across `view`, navigation, reload, or an action.
+Use refs printed by the latest snapshot. Single operations replace the prior ref set. Batch accepts 1–32 `{command,ref,value?}` steps (`value` is required only for `fill`/`select`), applies them sequentially against the starting handles, settles after each, and returns one fresh final snapshot. Example: `node scripts/browser.mjs player-2 batch '[{"command":"fill","ref":"<name-ref>","value":"Ada"},{"command":"select","ref":"<choice-ref>","value":"b"},{"command":"submit","ref":"<submit-ref>"}]'`. Validate all syntax before acting. If a step fails, later steps are skipped, starting refs are invalidated, and the error identifies the failing step and possible partial execution; no rollback occurs. Controls created/replaced during a batch need a later snapshot. Hidden, detached, disabled, wrong-kind, or stale controls fail rather than resolving elsewhere. Refs are compact session/generation/ordinal tokens, never DOM identifiers.
+
+### Saving and narrowing CLI output
+
+For longer sessions, retain full snapshots and mutation results in the launch-provided `ROLE_DIR`, the existing private directory assigned to your role. Do not write into historical run directories or a shared temporary directory. Redirect to a temporary file and move it into place only on success, leaving stderr visible and the previous known-good snapshot intact if capture fails:
+
+```sh
+ROLE_DIR='<launch-provided role-private directory>'
+node scripts/browser.mjs player-2 view > "$ROLE_DIR/browser.snapshot.tmp" && mv "$ROLE_DIR/browser.snapshot.tmp" "$ROLE_DIR/browser.snapshot.txt"
+sed -n '/Registry/,+24p' "$ROLE_DIR/browser.snapshot.txt"
+```
+
+Choose the heading and line range that match the rendered content you need. If a section is missing from this excerpt, inspect the full snapshot or capture a fresh one; an excerpt does not establish that the section is absent. Save mutation output as well, since it contains the fresh snapshot and refs:
+
+```sh
+cp "$ROLE_DIR/browser.snapshot.txt" "$ROLE_DIR/browser.before.txt"
+REF='<ref from the latest full snapshot>'
+node scripts/browser.mjs player-2 click "$REF" > "$ROLE_DIR/browser.after.tmp" && mv "$ROLE_DIR/browser.after.tmp" "$ROLE_DIR/browser.after.txt" && diff -u "$ROLE_DIR/browser.before.txt" "$ROLE_DIR/browser.after.txt"
+```
+
+`diff` exit status 1 means there are differences; a status greater than 1 means the comparison failed. Chain capture, move, and diff with `&&` so a failed capture cannot compare a stale after-file. Operations invalidate prior refs on success and batch failure, even when output is redirected, piped, or trimmed. Use refs from the newest full saved output before the next operation; unchanged text in a diff does not authorize reuse of an old ref. For a quick excerpt directly from the CLI, `set -o pipefail` preserves browser command failures through the pipeline:
+
+```sh
+set -o pipefail
+node scripts/browser.mjs player-2 view | sed -n '/Registry/,+24p'
+```
+
+Use a direct pipeline only to inspect output, not as the source of refs for an action; capture a new full snapshot before acting. Keep stderr visible and inspect the full saved output when errors or unavailable reasons could affect an action. These techniques apply only to rendered client output; do not use HTTP/DOM bypasses or inspect credential stores or other role notes. The [gameplay manual](../run/manuals/browser.md#save-and-inspect-snapshots) has the same snapshot workflow in operator context.
 
 Ordinary visible input/select values appear in snapshots as page content (for example, a selected URI, count, or textarea value). Password inputs and controls whose labels/names indicate password, secret, token, or credential are shown as `[REDACTED]`; known values entered into sensitive fields are also masked if echoed elsewhere on the page and are redacted from worker errors. The run adapter bootstraps credentials internally, without putting them in CLI arguments or snapshots. Do not pass credentials or other secrets to `fill`: shell command arguments may be visible to local process inspection. The session form clears its credential field after applying the session.
 
@@ -60,6 +88,6 @@ The static client server receives public service origins and Actor IDs only. The
 
 ## Verification status and limitations
 
-The generic DOM harness check passed. The actual Player-2 browser integration passed A production, load, departure for the current berth, and the mandatory signed ExitEvent assertion. The spawned CLI test's assertion was corrected to wait for the final gate; that gate is pending, so this guide does not claim a final broad verification. The compiled build must precede browser tests. No browser tests or full gate are part of this documentation checkpoint.
+The bounded broad gate `timeout 180s npm test` passed: build (including browser bundle), test-source typechecking, ESLint, and 104 runtime tests, including eight migrated browser CLI adapter tests. CLI spawn checks use canonical tracked `scripts/browser*.mjs` sources. `git diff --check` was clean. Runtime coverage included rendered client controls, restored Player/administrator controls, browser CLI sessions and batching, authoring, and gameplay. This automated evidence does not claim human UI acceptance or full client-flow coverage.
 
-The browser integration currently covers a bounded Player-2/A path and does not establish every B/admin action or all client flows. The older `run/game.mjs` and `run/manuals/player.md` document the API CLI contract; for active roleplay their gameplay instructions are superseded by this browser boundary and are retained as historical provenance. Supervisor/archive tooling may still use its separately authorized interfaces.
+The browser integration checks remain bounded and do not establish every B/admin action or all client flows. The older `run/game.mjs` and `run/manuals/player.md` document the API CLI contract; for active roleplay their gameplay instructions are superseded by this browser boundary and are retained as historical provenance. Supervisor/archive tooling may still use its separately authorized interfaces.

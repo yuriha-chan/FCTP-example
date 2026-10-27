@@ -1,0 +1,196 @@
+{
+  "checkpoint": "cargo-control-repair-verification",
+  "workingDirectory": "/app",
+  "changedFiles": [
+    "apps/client/index.html",
+    "apps/client/src/main.ts",
+    "tests/browser-gameplay.test.ts"
+  ],
+  "focusedCommands": [
+    {
+      "order": 1,
+      "command": "npm run build",
+      "result": "passed"
+    },
+    {
+      "order": 2,
+      "command": "npm run typecheck:tests",
+      "result": "passed"
+    },
+    {
+      "order": 3,
+      "command": "npx tsx --test tests/browser-gameplay.test.ts",
+      "result": "passed",
+      "tests": 1,
+      "pass": 1,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "durationMs": 10063.174501
+    },
+    {
+      "order": 4,
+      "command": "npx eslint apps/client/src/main.ts tests/browser-gameplay.test.ts",
+      "result": "passed",
+      "diagnostics": 0
+    }
+  ],
+  "integratedGate": {
+    "command": "timeout 180s npm test",
+    "workingDirectory": "/app",
+    "commandRuns": 1,
+    "exitStatus": 0,
+    "timeoutFired": false,
+    "stages": {
+      "build": {
+        "command": "npm run build",
+        "result": "passed"
+      },
+      "testSourceTypecheck": {
+        "command": "npm run typecheck:tests",
+        "result": "passed"
+      },
+      "eslint": {
+        "command": "npm run lint",
+        "result": "passed",
+        "diagnostics": 0
+      },
+      "runtimeTests": {
+        "command": "tsx --test tests/**/*.test.ts",
+        "result": "passed",
+        "tests": 85,
+        "suites": 0,
+        "pass": 85,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "durationMs": 60181.475092
+      }
+    }
+  },
+  "disabledAssertions": {
+    "sourceFile": "tests/browser-gameplay.test.ts",
+    "lines": [129, 130, 131, 132],
+    "labels": [
+      "Load vessel",
+      "Unload vessel",
+      "Schedule load",
+      "Schedule unload"
+    ],
+    "executed": true,
+    "skipped": false,
+    "todo": false,
+    "evidence": "The assertions are unconditional inside the single non-skipped browser gameplay test, which passed in both the focused run and the integrated gate."
+  },
+  "gitDiffCheck": {
+    "result": "clean",
+    "exitStatus": 0,
+    "output": ""
+  },
+  "scope": {
+    "sourceCodeEdited": false,
+    "testCodeEdited": false,
+    "alternativeCommandsRunAfterFailure": false,
+    "browserUiAcceptanceClaimed": false,
+    "commitCreated": false
+  },
+  "aCargoReasonRepair": {
+    "checkpoint": "a-cargo-reason-repair-verification",
+    "workingDirectory": "/app",
+    "changedFiles": [
+      "apps/territory-policy/src/actions.ts",
+      "tests/browser-gameplay.test.ts"
+    ],
+    "focusedCommands": [
+      {
+        "order": 1,
+        "command": "npm run build",
+        "result": "passed",
+        "exitStatus": 0
+      },
+      {
+        "order": 2,
+        "command": "npm run typecheck:tests",
+        "result": "passed",
+        "exitStatus": 0
+      },
+      {
+        "order": 3,
+        "command": "npx tsx --test tests/browser-gameplay.test.ts",
+        "result": "passed",
+        "tests": 1,
+        "suites": 0,
+        "pass": 1,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "durationMs": 11456.84708
+      },
+      {
+        "order": 4,
+        "command": "npx eslint apps/territory-policy/src/actions.ts tests/browser-gameplay.test.ts",
+        "result": "passed",
+        "diagnostics": 0
+      }
+    ],
+    "integratedGate": {
+      "command": "timeout 180s npm test",
+      "workingDirectory": "/app",
+      "commandRuns": 1,
+      "exitStatus": 0,
+      "timeoutFired": false,
+      "stages": {
+        "build": {
+          "command": "npm run build",
+          "result": "passed"
+        },
+        "testSourceTypecheck": {
+          "command": "npm run typecheck:tests",
+          "result": "passed"
+        },
+        "eslint": {
+          "command": "npm run lint",
+          "result": "passed",
+          "diagnostics": 0
+        },
+        "runtimeTests": {
+          "command": "tsx --test tests/**/*.test.ts",
+          "result": "passed",
+          "tests": 85,
+          "suites": 0,
+          "pass": 85,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0,
+          "todo": 0,
+          "durationMs": 56398.797273
+        }
+      }
+    },
+    "noPersistedLocalVisitAssertion": {
+      "sourceFile": "tests/browser-gameplay.test.ts",
+      "line": 138,
+      "assertion": "assert.match(view.markdown, /Blocked: no-persisted-local-visit/);",
+      "enclosingTestLine": 54,
+      "executed": true,
+      "skipped": false,
+      "todo": false,
+      "evidence": "The assertion is unconditional inside the single non-skipped browser gameplay test, which passed in both the focused run and the integrated gate."
+    },
+    "pairedSourceChange": {
+      "sourceFile": "apps/territory-policy/src/actions.ts",
+      "lines": "36-40",
+      "summary": "The vessel-visit blocker now takes precedence and emits no-persisted-local-visit."
+    },
+    "scope": {
+      "sourceCodeEdited": false,
+      "testCodeEdited": false,
+      "alternativeCommandsRunAfterFailure": false,
+      "browserUiAcceptanceClaimed": false,
+      "commitCreated": false
+    }
+  }
+}

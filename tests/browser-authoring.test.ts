@@ -27,15 +27,15 @@ function refFor(view: TextView, label: string, within?: string, occurrence = 0):
   const markdown = within === 'Player creations'
     ? view.markdown.split('# Player creations')[1]?.split('\n# ')[0] ?? ''
     : within ? view.markdown.split(`## ${within}`)[1]?.split('\n## ')[0] ?? '' : view.markdown;
-  const matches = [...markdown.matchAll(new RegExp(`^.*(?:${escapeRegExp(label)})[\\s\\S]*?\\[([\\da-f]+-[\\da-z]+)\\](?: \\(disabled\\))?$`, 'gm'))];
+  const matches = [...markdown.matchAll(new RegExp(`^.*(?:${escapeRegExp(label)})[\\s\\S]*?\\[([A-Za-z0-9-]+)\\](?: \\(disabled\\))?$`, 'gm'))];
   assert.ok(matches.length > occurrence, `Expected control ${occurrence + 1} labelled ${label}${within ? ` in ${within}` : ''}, found ${matches.length}`);
   return matches[occurrence]![1]!;
 }
 
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-async function control(session: BrowserSession, view: TextView, label: string, operation: 'click' | 'submit' = 'click', within?: string): Promise<TextView> {
-  return session[operation](refFor(view, label, within));
+async function control(session: BrowserSession, view: TextView, label: string, operation: 'click' | 'submit' = 'click', within?: string, occurrence = 0): Promise<TextView> {
+  return session[operation](refFor(view, label, within, occurrence));
 }
 
 async function formField(session: BrowserSession, view: TextView, label: string, value: string, within?: string, occurrence = 0): Promise<TextView> {
@@ -116,7 +116,8 @@ test('compiled browser authoring creates and verifies isolated Player creations 
   assert.equal(asset.holder, player2);
   assert.match(view.markdown, /View text Asset:/);
   view = await control(session, view, 'Fetch Asset:');
-  assert.match(view.markdown, /"type": "Asset"/);
+  assert.match(view.markdown, /Type: Asset\./);
+  assert.match(view.markdown, /Name: Literal text Asset\./);
   view = await control(session, view, 'Refresh my creations');
   view = await control(session, view, 'View text Asset:');
   assert.ok(view.markdown.includes(sourceText));
@@ -127,16 +128,38 @@ test('compiled browser authoring creates and verifies isolated Player creations 
   view = await formField(session, view, 'Mass', '2.75', 'Player creations');
   view = await formField(session, view, 'Version', '3.1', 'Player creations');
   view = await session.select(refFor(view, 'Optional own Asset', 'Player creations'), String(asset.id));
-  view = await formField(session, view, 'Production JSON · descriptive, not installed', '[{"type":"manufacture","duration":2,"ingredients":[{"variety":"https://example.test/raw","count":3,"data":{}}],"location":[{"id":"https://example.test/area","name":"Test Area","territory":"https://example.test/territory"}],"yield":[{"probability":0.75,"count":2,"data":{}}]}]', 'Player creations');
+  view = await session.select(refFor(view, 'Production authoring mode', 'Player creations'), 'structured');
+  view = await control(session, view, 'Add Production entry', 'click', 'Player creations');
+  view = await session.select(refFor(view, 'Production kind', 'Player creations'), 'manufacture');
+  view = await formField(session, view, 'Production time in ticks', '2', 'Player creations');
+  view = await control(session, view, 'Add ingredient', 'click', 'Player creations');
+  view = await formField(session, view, 'Variety URI', 'https://example.test/raw', 'Player creations');
+  view = await formField(session, view, 'Count (Stack)', '3', 'Player creations');
+  view = await formField(session, view, 'Data JSON object', '{"grade":"high"}', 'Player creations');
+  view = await control(session, view, 'Add location', 'click', 'Player creations');
+  view = await formField(session, view, 'Area ID URI', 'https://example.test/area', 'Player creations');
+  view = await formField(session, view, 'Area name', 'Test Area', 'Player creations');
+  view = await formField(session, view, 'Territory URI', 'https://example.test/territory', 'Player creations');
+  view = await formField(session, view, 'Optional tool URI', 'https://example.test/tool', 'Player creations');
+  view = await control(session, view, 'Add yield', 'click', 'Player creations');
+  view = await formField(session, view, 'Probability', '0.75', 'Player creations');
+  view = await formField(session, view, 'Count', '2', 'Player creations', 1);
+  view = await control(session, view, 'Add Production entry', 'click', 'Player creations');
+  view = await session.select(refFor(view, 'Production kind', 'Player creations', 1), 'mine');
+  view = await formField(session, view, 'Production time in ticks', '4', 'Player creations', 1);
+  view = await control(session, view, 'Add yield', 'click', 'Player creations', 1);
+  view = await formField(session, view, 'Probability', '1.5', 'Player creations', 1);
+  view = await formField(session, view, 'Count', '1', 'Player creations', 2);
+  view = await formField(session, view, 'Data JSON object', '{"source":"second"}', 'Player creations', 2);
   const outboxBeforeFailure = await authority.authority.server.store.read((state) => state.outboxArchive.length);
-  view = await formField(session, view, 'Production JSON · descriptive, not installed', '{', 'Player creations');
+  view = await formField(session, view, 'Data JSON object', '[]', 'Player creations', 1);
   view = await control(session, view, 'Create Variety', 'submit');
-  assert.match(view.markdown, /JSON|unexpected|position/i);
+  assert.match(view.markdown, /data|object/i);
   assert.match(view.markdown, /Fractional variety/);
   assert.equal((await authority.authority.server.store.read((state) => state.outboxArchive.length)), outboxBeforeFailure);
   assert.equal((await authority.authoring.catalog(player2)).varieties.length, 0);
 
-  view = await formField(session, view, 'Production JSON · descriptive, not installed', '[{"type":"manufacture","duration":2,"ingredients":[{"variety":"https://example.test/raw","count":3,"data":{}}],"location":[{"id":"https://example.test/area","name":"Test Area","territory":"https://example.test/territory"}],"yield":[{"probability":0.75,"count":2,"data":{}}]}]', 'Player creations');
+  view = await formField(session, view, 'Data JSON object', '{}', 'Player creations', 1);
   view = await control(session, view, 'Create Variety', 'submit');
   const privateCatalog = await authority.authoring.catalog(player2);
   assert.equal(privateCatalog.varieties.length, 1);
@@ -146,7 +169,10 @@ test('compiled browser authoring creates and verifies isolated Player creations 
   assert.equal(variety.mass, 2.75);
   assert.equal(variety.holder, player2);
   assert.equal(variety.asset, asset.id);
-  assert.deepEqual(variety.production, [{ type: 'manufacture', duration: 2, ingredients: [{ variety: 'https://example.test/raw', count: 3, data: {} }], location: [{ id: 'https://example.test/area', name: 'Test Area', territory: 'https://example.test/territory' }], yield: [{ probability: 0.75, count: 2, data: {} }] }]);
+  assert.deepEqual(variety.production, [
+    { type: 'manufacture', duration: 2, tool: 'https://example.test/tool', ingredients: [{ variety: 'https://example.test/raw', count: 3, data: { grade: 'high' } }], location: [{ id: 'https://example.test/area', name: 'Test Area', territory: 'https://example.test/territory' }], yield: [{ probability: 0.75, count: 2, data: {} }] },
+    { type: 'mine', duration: 4, yield: [{ probability: 1.5, count: 1, data: { source: 'second' } }] }
+  ]);
   assert.equal(grant.asset, asset.id);
   assert.equal(grant.variety, variety.id);
   assert.equal(grant.grantee, player2);
@@ -156,16 +182,26 @@ test('compiled browser authoring creates and verifies isolated Player creations 
   assert.match(view.markdown, /Fractional variety/);
   view = await control(session, view, 'Refresh my creations');
   view = await control(session, view, 'Fetch Grant:');
-  assert.match(view.markdown, /AssetGrant/);
+  assert.match(view.markdown, /Type: AssetGrant\./);
   view = await control(session, view, 'Refresh my creations');
+
+  view = await session.select(refFor(view, 'Production authoring mode', 'Player creations'), 'advanced');
+  const advancedProduction = [{ type: 'mine', duration: 0, yield: [{ probability: 1.5, count: 0, data: { unusual: true } }], extension: { retained: 'yes' } }];
+  view = await formField(session, view, 'Advanced Production JSON array · authoritative while this mode is selected', JSON.stringify(advancedProduction), 'Player creations');
+  view = await formField(session, view, 'Name', 'Advanced variety', 'Player creations', 1);
+  view = await formField(session, view, 'Mass', '1', 'Player creations');
+  view = await control(session, view, 'Create Variety', 'submit');
+  const advancedVariety = (await authority.authoring.catalog(player2)).varieties[1]!;
+  assert.deepEqual(advancedVariety.production, advancedProduction);
 
   const actor = await fetch(player2).then((response) => response.json());
   assert.equal(authority.authority.players['player-2']?.creations, actor.creations);
   const key = await fetch(`${origins.authority}/keys/player-2`).then((response) => response.json());
   const loader = createLocalDocumentLoader(new Map([[String(key.id), key]]));
-  const verifiedObjects = [asset, variety, grant];
+  const verifiedObjects = [asset, variety, grant, advancedVariety];
   for (const object of verifiedObjects) {
     const retrieved = await fetch(String(object.id)).then((response) => response.json());
+    if (retrieved.type === 'Variety' && retrieved.id === variety.id) assert.deepEqual(retrieved.production, variety.production);
     assert.equal((await verifyProofCryptography(retrieved, loader)).verified, true);
     const attribution = await verifyKeyAttribution(retrieved, actor, loader);
     assert.equal(attribution.attributed, true);
@@ -183,22 +219,28 @@ test('compiled browser authoring creates and verifies isolated Player creations 
   assert.equal(await mediaResponse.text(), sourceText);
   const archived = await authority.authority.server.store.read((state) => state.outboxArchive);
   const activities = archived.map((entry) => entry.activity);
-  assert.equal(activities.length, 3);
+  assert.equal(activities.length, 4);
   for (const activity of activities) {
     assert.equal((await verifyProofCryptography(activity, loader)).verified, true);
     assert.equal((await verifyKeyAttribution(activity, actor, loader)).attributed, true);
   }
   const creations = await fetch(`${origins.authority}/objects/players/player-2/creations`).then((response) => response.json()) as { orderedItems: string[] };
-  assert.equal(creations.orderedItems.length, 3);
+  assert.equal(creations.orderedItems.length, 4);
   const outbox = await fetch(`${origins.authority}/actors/player-2/outbox`).then((response) => response.json()) as { totalItems: number };
-  assert.equal(outbox.totalItems, 3);
+  assert.equal(outbox.totalItems, 4);
   assert.equal(await authority.authority.server.store.read((state) => state.outbox.length), 0);
 
   view = await control(session, view, 'Refresh my creations');
   view = await formField(session, view, 'Text', 'private unsent draft', 'Player creations');
   view = await formField(session, view, 'Name', 'Private unsent name', 'Player creations', 1);
+  view = await session.select(refFor(view, 'Production authoring mode', 'Player creations'), 'structured');
+  view = await control(session, view, 'Add Production entry', 'click', 'Player creations');
+  view = await control(session, view, 'Add ingredient', 'click', 'Player creations');
+  view = await formField(session, view, 'Variety URI', 'https://example.test/private', 'Player creations');
+  view = await session.select(refFor(view, 'Production authoring mode', 'Player creations'), 'advanced');
+  view = await formField(session, view, 'Advanced Production JSON array · authoritative while this mode is selected', '[{"type":"mine","duration":3,"yield":[{"probability":1.5,"count":0,"data":{"extension":true}}],"extension":{"preserve":"yes"}}]', 'Player creations');
   view = await login(session, view, player3, vessel3, nativeTokens.get('player-3')!);
-  assert.doesNotMatch(view.markdown, /Literal text Asset|Fractional variety|private unsent draft|Private unsent name/);
+  assert.doesNotMatch(view.markdown, /Literal text Asset|Fractional variety|private unsent draft|Private unsent name|extension/);
   assert.match(view.markdown, /Name: {2}\[/);
   assert.match(view.markdown, /Text: {2}\[/);
   assert.match(view.markdown, /Optional own Asset: {2}\{\*None=/);

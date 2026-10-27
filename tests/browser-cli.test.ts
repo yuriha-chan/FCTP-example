@@ -23,16 +23,26 @@ async function freePort(): Promise<number> {
 }
 
 function refFor(markdown: string, label: string): string {
-  const matches = [...markdown.matchAll(new RegExp(`^.*${escapeRegExp(label)}.*?\\[([\\da-f]+-[\\da-z]+)\\](?: \\(disabled\\))?$`, 'gm'))];
+  const matches = [...markdown.matchAll(new RegExp(`^.*${escapeRegExp(label)}.*?\\[([\\da-f]{6}-[\\da-z]+-[\\da-z]+)\\](?: \\(disabled\\))?$`, 'gm'))];
   assert.equal(matches.length, 1, `Expected one control labelled ${label}, found ${matches.length}`);
   return matches[0]![1]!;
 }
 
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
+test('CLI rejects malformed batches before connecting to a role daemon', async () => {
+  for (const source of [
+    '[]',
+    '[{"command":"fill","ref":"abc-1-1"}]',
+    '[{"command":"submit","ref":"abc-1-2","value":"extra"}]',
+    '[{"command":"click","ref":"abc-1-1","unexpected":true}]',
+    'not-json'
+  ]) await assert.rejects(cli('/does-not-exist', ['player-1', 'batch', source]));
+});
+
 async function cli(configRoot: string, args: string[]): Promise<string> {
   return new Promise((resolveOutput, reject) => {
-    const child = spawn(process.execPath, [resolve('run/browser.mjs'), ...args], {
+    const child = spawn(process.execPath, [resolve('scripts/browser.mjs'), ...args], {
       cwd: process.cwd(),
       env: { ...process.env, FCTP_BROWSER_CONFIG_ROOT: configRoot },
       stdio: ['ignore', 'pipe', 'pipe']
@@ -137,10 +147,13 @@ test('spawned browser CLI keeps isolated Player and administrator daemon session
   assert.doesNotMatch(view, new RegExp(escapeRegExp(nativeTokens.get('player-2')!)));
   view = await cli(configRoot, ['player-2', 'view']);
   assert.match(view, new RegExp(`Player ${escapeRegExp(authority.ids.players['player-2']!)}.*vessel ${escapeRegExp(authority.ids.vessels['player-2']!)}`));
-  const refreshed = await cli(configRoot, ['player-2', 'click', refFor(view, 'Refresh A state and actions')]);
-  assert.match(refreshed, /Mine ore/);
-  const mined = await cli(configRoot, ['player-2', 'click', refFor(refreshed, 'Mine ore')]);
-  assert.match(mined, /Completed\./);
+  const refreshed = await cli(configRoot, ['player-2', 'batch', JSON.stringify([{ command: 'click', ref: refFor(view, 'Refresh A state and actions') }])]);
+  assert.match(refreshed, /Mine one ore/);
+  const mined = await cli(configRoot, ['player-2', 'batch', JSON.stringify([
+    { command: 'click', ref: refFor(refreshed, 'Mine one ore') },
+    { command: 'click', ref: refFor(refreshed, 'Mine one ore') }
+  ])]);
+  assert.match(mined, /Request accepted\./);
   const policyState = await policy.host.server.store.read((store) => structuredClone(store.domain.policyTerritory)) as { state?: { rawInventory?: Record<string, number> } };
   assert.equal(policyState.state?.rawInventory?.[policy.ids.varieties.ore], 2, 'the rendered Mine action changes actual Territory A state');
 
@@ -159,7 +172,7 @@ test('spawned browser CLI keeps isolated Player and administrator daemon session
   assert.match(administrator, /Role: policy-admin/);
   assert.match(administrator, /Update policy/);
   assert.match(administrator, /Update admission/);
-  assert.doesNotMatch(administrator, /Configure facilities|Advance one tick|Send Registry entry request|Mine ore/);
+  assert.doesNotMatch(administrator, /Configure facilities|Advance one tick|Send Registry entry request|Mine one ore/);
   assert.match(administrator, /Credential: \[REDACTED\]/);
   assert.doesNotMatch(administrator, new RegExp(escapeRegExp(adminSecret)));
 });

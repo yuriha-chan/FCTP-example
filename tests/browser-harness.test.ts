@@ -19,6 +19,9 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelector('#status').textContent = 'Saved';
     document.documentElement.dataset.clientBusy = 'false';
   });
+  document.querySelector('#name').addEventListener('input', (event) => {
+    if (event.target.value === 'hide-choice') document.querySelector('#choice').classList.add('hidden');
+  });
   document.querySelector('#nav').addEventListener('click', (event) => {
     if (event.target.matches('a')) return;
     document.querySelector('#status').textContent = 'Clicked';
@@ -68,14 +71,14 @@ test('renders visible DOM, handles real controls, rejects stale refs and isolate
   assert.match(result.markdown, /nested link/);
   assert.match(result.markdown, /line one\n\x20{2}line two/);
   assert.doesNotMatch(result.markdown, /Hidden text|concealed|hidden descendant/);
-  const nameRef = result.markdown.match(/Name: .*?\[([\da-f]+-[\da-z]+)\]/)?.[1];
-  const credentialRef = result.markdown.match(/Credential: .*?\[([\da-f]+-[\da-z]+)\]/)?.[1];
-  const selectRef = result.markdown.match(/Choice: .*?\[([\da-f]+-[\da-z]+)\]/)?.[1];
-  const submitRef = result.markdown.match(/Save \[([\da-f]+-[\da-z]+)\]/)?.[1];
-  const disabledRef = result.markdown.match(/Unavailable \[([\da-f]+-[\da-z]+)\]/)?.[1];
-  const notSubmitRef = result.markdown.match(/Not submit \[([\da-f]+-[\da-z]+)\]/)?.[1];
-  const clickRef = result.markdown.match(/Click handler \[([\da-f]+-[\da-z]+)\]/)?.[1];
-  const linkRef = result.markdown.match(/\[Next page\]\([^)]*\) \[([\da-f]+-[\da-z]+)\]/)?.[1];
+  const nameRef = result.markdown.match(/Name: .*?\[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
+  const credentialRef = result.markdown.match(/Credential: .*?\[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
+  const selectRef = result.markdown.match(/Choice: .*?\[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
+  const submitRef = result.markdown.match(/Save \[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
+  const disabledRef = result.markdown.match(/Unavailable \[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
+  const notSubmitRef = result.markdown.match(/Not submit \[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
+  const clickRef = result.markdown.match(/Click handler \[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
+  const linkRef = result.markdown.match(/\[Next page\]\([^)]*\) \[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
   assert(nameRef && credentialRef && selectRef && submitRef && disabledRef && notSubmitRef && clickRef && linkRef);
   await assert.rejects(session.click(disabledRef), /visible enabled/);
   await assert.rejects(session.submit(disabledRef), /visible enabled/);
@@ -84,30 +87,30 @@ test('renders visible DOM, handles real controls, rejects stale refs and isolate
   assert.match(result.markdown, /Name: Ada/);
   await assert.rejects(session.fill(nameRef, 'stale'), /stale/);
   result = await session.view();
-  const refreshedNameRef = result.markdown.match(/Name: .*?\[([\da-f]+-[\da-z]+)\]/)?.[1];
-  const refreshedCredentialRef = result.markdown.match(/Credential: .*?\[([\da-f]+-[\da-z]+)\]/)?.[1];
-  const refreshedSelectRef = result.markdown.match(/Choice: .*?\[([\da-f]+-[\da-z]+)\]/)?.[1];
-  const refreshedSubmitRef = result.markdown.match(/Save \[([\da-f]+-[\da-z]+)\]/)?.[1];
-  const refreshedClickRef = result.markdown.match(/Click handler \[([\da-f]+-[\da-z]+)\]/)?.[1];
-  const refreshedLinkRef = result.markdown.match(/\[Next page\]\([^)]*\) \[([\da-f]+-[\da-z]+)\]/)?.[1];
+  const refreshedNameRef = result.markdown.match(/Name: .*?\[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
+  const refreshedCredentialRef = result.markdown.match(/Credential: .*?\[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
+  const refreshedSelectRef = result.markdown.match(/Choice: .*?\[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
+  const refreshedSubmitRef = result.markdown.match(/Save \[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
+  const refreshedClickRef = result.markdown.match(/Click handler \[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
+  const refreshedLinkRef = result.markdown.match(/\[Next page\]\([^)]*\) \[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
   assert(refreshedNameRef && refreshedCredentialRef && refreshedSelectRef && refreshedSubmitRef && refreshedClickRef && refreshedLinkRef);
   result = await session.fill(refreshedCredentialRef, 'injected-secret');
   assert.doesNotMatch(result.markdown, /injected-secret/);
-  const currentSelectRef = result.markdown.match(/Choice: .*?\[([\da-f]+-[\da-z]+)\]/)?.[1];
+  const currentSelectRef = result.markdown.match(/Choice: .*?\[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
   assert(currentSelectRef);
   result = await session.select(currentSelectRef, 'b');
   assert.match(result.markdown, /\*Beta=b/);
-  const submit = result.markdown.match(/Save \[([\da-f]+-[\da-z]+)\]/)?.[1];
+  const submit = result.markdown.match(/Save \[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
   assert(submit);
   result = await session.submit(submit);
   assert.match(result.markdown, /Saved/);
   assert.match(received, /Ada/);
   assert.match(received, /injected-secret/);
-  const click = result.markdown.match(/Click handler \[([\da-f]+-[\da-z]+)\]/)?.[1];
+  const click = result.markdown.match(/Click handler \[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
   assert(click);
   result = await session.click(click);
   assert.match(result.markdown, /Clicked/);
-  const next = result.markdown.match(/\[Next page\]\([^)]*\) \[([\da-f]+-[\da-z]+)\]/)?.[1];
+  const next = result.markdown.match(/\[Next page\]\([^)]*\) \[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
   assert(next);
   result = await session.click(next);
   assert.match(result.markdown, /# Second page/);
@@ -115,18 +118,58 @@ test('renders visible DOM, handles real controls, rejects stale refs and isolate
   assert.match(result.markdown, /# Isolated form/);
   result = await session.reload();
   assert.match(result.markdown, /# Isolated form/);
-  const checkboxRef = result.markdown.match(/Enabled:.*?\[([\da-f]+-[\da-z]+)\]/)?.[1];
+  const checkboxRef = result.markdown.match(/Enabled:.*?\[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
   assert(checkboxRef);
   assert.match(result.markdown, /Enabled:.*\[checked\]/);
   result = await session.click(checkboxRef);
   assert.match(result.markdown, /Enabled:.*\[unchecked\]/);
-  const uncheckedCheckboxRef = result.markdown.match(/Enabled:.*?\[([\da-f]+-[\da-z]+)\]/)?.[1];
+  const uncheckedCheckboxRef = result.markdown.match(/Enabled:.*?\[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
   assert(uncheckedCheckboxRef);
   result = await session.click(uncheckedCheckboxRef);
   assert.match(result.markdown, /Enabled:.*\[checked\]/);
 
   const isolated = await createBrowserSession({ url: origin, allowedOrigins: [origin] });
   sessions.push(isolated);
-  assert.doesNotMatch((await isolated.view()).markdown, /Ada|injected-secret/);
+  const isolatedView = await isolated.view();
+  assert.doesNotMatch(isolatedView.markdown, /Ada|injected-secret/);
+  const isolatedName = isolatedView.markdown.match(/Name: .*?\[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
+  assert(isolatedName && isolatedName !== nameRef);
+  await assert.rejects(isolated.fill(nameRef!, 'cross-session'), /stale/);
   await assert.rejects(createBrowserSession({ url: origin, allowedOrigins: ['https://example.invalid'] }), /not allowed/);
+});
+
+test('batch uses one starting ref set, settles between actions, stops on failure, and returns compact fresh refs', async () => {
+  const session = await createBrowserSession({ url: origin, allowedOrigins: [origin] });
+  sessions.push(session);
+  const first = await session.view();
+  const ref = (label: string) => first.markdown.match(new RegExp(`${label}[^\\n]*?\\[([\\da-f]{6}-[\\da-z]+-[\\da-z]+)\\]`))?.[1];
+  const name = ref('Name:');
+  const choice = ref('Choice:');
+  const submit = ref('Save');
+  assert(name && choice && submit);
+  assert.ok(name.length <= 18, `compact ref length was ${name.length}`);
+  const result = await session.batch([
+    { command: 'fill', ref: name, value: 'Ada' },
+    { command: 'select', ref: choice, value: 'b' },
+    { command: 'fill', ref: name, value: 'Grace' },
+    { command: 'submit', ref: submit }
+  ]);
+  assert.match(result.markdown, /Saved/);
+  assert.match(received, /Grace/);
+  assert.match(received, /name="choice"\r\n\r\nb/);
+  await assert.rejects(session.fill(name, 'stale'), /stale/);
+
+  const beforeFailure = received;
+  const starting = await session.view();
+  const failureName = starting.markdown.match(/Name: .*?\[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
+  const failureChoice = starting.markdown.match(/Choice: .*?\[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
+  const failureSubmit = starting.markdown.match(/Save \[([\da-f]{6}-[\da-z]+-[\da-z]+)\]/)?.[1];
+  assert(failureName && failureChoice && failureSubmit);
+  await assert.rejects(session.batch([
+    { command: 'fill', ref: failureName, value: 'hide-choice' },
+    { command: 'select', ref: failureChoice, value: 'a' },
+    { command: 'submit', ref: failureSubmit }
+  ]), /Batch step 2 failed; partial execution may have occurred/);
+  assert.equal(received, beforeFailure);
+  await assert.rejects(session.click(failureSubmit), /stale/);
 });

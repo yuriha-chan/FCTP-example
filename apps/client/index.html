@@ -42,7 +42,7 @@
       </section>
       <section data-roles="player" aria-labelledby="authoring-title">
         <h2 id="authoring-title">Player creations</h2>
-        <p>Create text Assets and Variety definitions for your Player. Production JSON is descriptive data; it does not install a Territory recipe.</p>
+        <p>Create text Assets and Variety definitions for your Player. A Production description is published FCTP data; it does not install a Territory recipe.</p>
         <button id="refresh-authoring" type="button" data-action="refresh-authoring">Refresh my creations</button>
         <form id="asset-authoring-form" aria-label="Create text Asset">
           <label>Name<input name="name" required></label>
@@ -54,7 +54,12 @@
           <label>Mass<input name="mass" type="number" step="any" min="0" required></label>
           <label>Version<input name="version" value="1.0" required></label>
           <label>Optional own Asset<select name="asset"><option value="">None</option></select></label>
-          <label>Production JSON · descriptive, not installed<textarea name="production" rows="6" spellcheck="false">[]</textarea></label>
+          <label>Production authoring mode<select name="productionMode"><option value="structured">Structured controls</option><option value="advanced">Advanced Production JSON (authoritative)</option></select></label>
+          <div id="production-structured">
+            <div id="production-entries"></div>
+            <button type="button" data-production-add-entry>Add Production entry</button>
+          </div>
+          <div id="production-advanced" hidden><label>Advanced Production JSON array · authoritative while this mode is selected<textarea name="productionAdvanced" rows="8" spellcheck="false">[]</textarea></label></div>
           <button>Create Variety</button>
         </form>
         <div id="authoring-result" aria-live="polite"></div>
@@ -119,48 +124,82 @@
         <p>Local experimental API. Administrative policy/admission and immediate production are separate from shared FCTP resource operations.</p>
         <div class="columns">
           <form id="policy-admin-form" data-roles="policy-admin">
-            <label>Policy JSON<textarea name="policy" rows="10" spellcheck="false">{}</textarea></label>
+            <fieldset>
+              <legend>Common policy settings</legend>
+              <label>Policy editing mode<select name="policyMode"><option value="common">Common settings</option><option value="advanced">Advanced complete policy JSON (authoritative)</option></select></label>
+              <div id="policy-common-controls">
+              <label>Mining<select name="miningPermitted"><option value="true">Permitted</option><option value="false">Not permitted</option></select></label>
+              <label>Mining quota<input name="miningQuota" type="number" min="0"></label>
+              <label>Ore reserve<input name="oreReserve" type="number" min="0"></label>
+              <label>Ore-to-metal manufacture<select name="manufacturePermitted"><option value="true">Permitted</option><option value="false">Not permitted</option></select></label>
+              <label>Ore port handling<select name="orePortPolicy"><option value="allow">Allowed</option><option value="deny">Denied</option></select></label>
+              <label>Metal port handling<select name="metalPortPolicy"><option value="allow">Allowed</option><option value="deny">Denied</option></select></label>
+              </div>
+              <div id="policy-advanced" hidden><label>Complete policy JSON · authoritative while this mode is selected<textarea name="policyAdvanced" rows="12" spellcheck="false">{}</textarea></label></div>
+            </fieldset>
+            <fieldset>
+              <legend>Common admission settings</legend>
+              <label>Admission editing mode<select name="admissionMode"><option value="common">Common settings</option><option value="advanced">Advanced complete admission JSON (authoritative)</option></select></label>
+              <div id="admission-common-controls">
+              <label>Admitted cargo mismatch<select name="mismatchPolicy"><option value="reject">Reject entry</option><option value="declared">Prefer Registry declaration</option><option value="evidence">Prefer evidence</option></select></label>
+              <label><input name="publicEast" type="checkbox"> East Haven is public</label>
+              <label><input name="publicWest" type="checkbox"> West Haven is public</label>
+              </div>
+              <div id="admission-advanced" hidden><label>Complete admission JSON · authoritative while this mode is selected<textarea name="admissionAdvanced" rows="8" spellcheck="false">{}</textarea></label></div>
+            </fieldset>
             <button type="button" data-action="policy-update">Update policy</button>
-            <label>Admission JSON<textarea name="admission" rows="6" spellcheck="false">{}</textarea></label>
             <button type="button" data-action="admission-update">Update admission</button>
             <button type="button" data-action="refresh-policy">Refresh policy and inventory view</button>
           </form>
           <div><h3>Territory-owned inventory, production and admission decisions</h3><pre id="policy-state"></pre></div>
         </div>
-        <form id="policy-operation-form" class="grid-form" data-roles="player">
-          <label>Ore count<input name="mineCount" type="number" min="1" value="2"></label><button type="button" data-action="policy-mine">Mine ore</button>
-          <label>Manufacture count<input name="manufactureCount" type="number" min="1" value="1"></label><button type="button" data-action="policy-manufacture">Manufacture ore-to-metal</button>
-          <label>Transfer direction<select name="direction"><option value="to-port">Warehouse to port</option><option value="to-warehouse">Port to warehouse</option></select></label>
-          <label>Variety URI<input name="variety"></label><label>Count<input name="transferCount" type="number" min="1" value="1"></label><button type="button" data-action="policy-transfer">Transfer inventory</button>
-          <label>Vessel URI<input name="vessel"></label><label>Cargo variety URI<input name="cargoVariety"></label><label>Cargo count<input name="cargoCount" type="number" min="1" value="1"></label>
-          <button type="button" data-action="policy-load">Load vessel</button><button type="button" data-action="policy-unload">Unload vessel</button>
-          <button type="button" data-action="refresh-policy">Refresh inventory and completion view</button>
-        </form>
+        <details data-roles="player" open>
+          <summary>Custom Territory A operations</summary>
+          <p>Direct local controls use your current Player and selected vessel; cargo remains unavailable until refresh confirms your current local berth.</p>
+          <form id="policy-operation-form" class="grid-form">
+            <label>Mine ore quantity<input name="mineCount" type="number" min="1" value="1"></label><button type="button" data-action="policy-mine">Mine selected quantity</button>
+            <label>Manufacture recipe<select name="recipe"><option value="ore-to-metal">Ore to metal</option></select></label><label>Manufacture quantity<input name="manufactureCount" type="number" min="1" value="1"></label><button type="button" data-action="policy-manufacture">Manufacture quantity</button>
+            <label>Transfer direction<select name="direction"><option value="to-port">Warehouse to port</option><option value="to-warehouse">Port to warehouse</option></select></label>
+            <label>Transfer variety URI<input name="variety" required></label><label>Transfer quantity<input name="transferCount" type="number" min="1" value="1"></label><button type="button" data-action="policy-transfer">Transfer quantity</button>
+            <label>Vessel URI<input name="vessel" readonly></label><label>Cargo variety URI<input name="cargoVariety" required></label><label>Cargo quantity<input name="cargoCount" type="number" min="1" value="1"></label>
+            <button type="button" data-action="policy-load" data-cargo-control disabled>Load vessel cargo</button><button type="button" data-action="policy-unload" data-cargo-control disabled>Unload vessel cargo</button>
+            <button type="button" data-action="refresh-policy">Refresh inventory and completion view</button>
+          </form>
+        </details>
+        <p>Playable Territory operations are listed under <strong>Current state and available actions</strong> above.</p>
         <pre id="policy-result" aria-live="polite"></pre>
       </section>
 
       <section>
         <h2>Territory B · Facilities and discrete ticks</h2>
-        <p>Local experimental API. Production and cargo handling create scheduled jobs; use tick and refresh to observe completion. B cargo uses an <code>entryRequest</code> URI and rich CargoManifest.</p>
+        <p>Local experimental API. Production and cargo handling create scheduled jobs; use tick and refresh to observe completion.</p>
         <div class="columns">
           <form id="simulation-admin-form" data-roles="simulation-admin">
-            <label>Facilities JSON<textarea name="facilities" rows="8" spellcheck="false">{}</textarea></label>
+            <label>Mining<select name="miningEnabled"><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+            <label>Mining capacity<input name="miningCapacity" type="number" min="1"></label>
+            <label>Manufacturing slots<input name="manufacturingSlots" type="number" min="1"></label>
+            <label>Manufacturing time in ticks<input name="manufacturingTime" type="number" min="1"></label>
+            <label>Port capacity<input name="portCapacity" type="number" min="0"></label>
+            <label>Berths<input name="berthCapacity" type="number" min="0"></label>
             <button type="button" data-action="facilities-update">Configure facilities</button>
             <button type="button" data-action="simulation-tick">Advance one tick</button>
             <button type="button" data-action="refresh-simulation">Refresh facilities and inventory view</button>
           </form>
           <div><h3>Territory-owned facilities, jobs, cargo, decisions and evidence/trust</h3><pre id="simulation-state"></pre></div>
         </div>
-        <form id="simulation-operation-form" class="grid-form" data-roles="player">
-          <label>Mining count<input name="mineCount" type="number" min="1" value="2"></label><label>Mining duration in ticks<input name="mineDuration" type="number" min="0" value="1"></label>
-          <button type="button" data-action="simulation-mine">Start mining</button>
-          <label>Manufacture recipe<select name="recipe"><option value="native">Native ore to metal</option><option value="imported">Imported A metal to refined</option></select></label><label>Manufacture count<input name="manufactureCount" type="number" min="1" value="1"></label>
-          <button type="button" data-action="simulation-manufacture">Start manufacture</button>
-          <label>EntryRequest URI<input name="entryRequest"></label><label>Cargo manifest JSON<textarea name="cargo" rows="4" spellcheck="false">{"entries":[{"variety":"https://example.invalid/varieties/metal","count":1,"data":{}}]}</textarea></label>
-          <label>Handling duration in ticks<input name="duration" type="number" min="0" value="1"></label>
-          <button type="button" data-action="simulation-load">Schedule load</button><button type="button" data-action="simulation-unload">Schedule unload</button>
-          <button type="button" data-action="refresh-simulation">Refresh inventory and completion view</button>
-        </form>
+        <details data-roles="player" open>
+          <summary>Custom Territory B operations</summary>
+          <p>Mining and manufacturing are scheduled; cargo handling requires a refreshed accepted current berth. Cargo manifests are deliberately entered as JSON.</p>
+          <form id="simulation-operation-form" class="grid-form">
+            <label>Mining quantity<input name="mineCount" type="number" min="1" value="1"></label><label>Mining duration in ticks<input name="mineDuration" type="number" min="1" value="1"></label><button type="button" data-action="simulation-mine">Schedule mining</button>
+            <label>Manufacture recipe<select name="recipe"><option value="native">Native ore to metal</option><option value="imported">Imported A metal to refined</option></select></label><label>Manufacture quantity<input name="manufactureCount" type="number" min="1" value="1"></label><button type="button" data-action="simulation-manufacture">Schedule manufacture</button>
+            <label>Current EntryRequest URI<input name="entryRequest" readonly></label><label>Cargo manifest JSON<textarea name="cargo" rows="5" spellcheck="false">{"entries":[{"variety":"","count":1,"data":{}}]}</textarea></label>
+            <label>Handling duration in ticks<input name="duration" type="number" min="1" value="1"></label>
+            <button type="button" data-action="simulation-load" data-cargo-control disabled>Schedule load</button><button type="button" data-action="simulation-unload" data-cargo-control disabled>Schedule unload</button>
+            <button type="button" data-action="refresh-simulation">Refresh inventory and completion view</button>
+          </form>
+        </details>
+        <p>Playable Territory operations are listed under <strong>Current state and available actions</strong> above.</p>
         <pre id="simulation-result" aria-live="polite"></pre>
       </section>
 

@@ -1,0 +1,48 @@
+{
+  "checkpoint": "client-health-verification",
+  "command": "timeout 180s npm test",
+  "workingDirectory": "/app",
+  "commandRuns": 1,
+  "exitStatus": 0,
+  "timeoutFired": false,
+  "stages": {
+    "build": {
+      "result": "passed",
+      "includesBrowserBundle": true
+    },
+    "testSourceTypecheck": {
+      "result": "passed"
+    },
+    "eslint": {
+      "result": "passed",
+      "diagnostics": 0
+    },
+    "runtimeTests": {
+      "result": "passed",
+      "tests": 104,
+      "suites": 0,
+      "pass": 104,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "durationMs": 80397.556873,
+      "migratedBrowserAdapterTests": 8,
+      "migratedTestPath": "tests/browser-adapter.test.mjs",
+      "cliSpawnSources": "scripts/browser*.mjs"
+    }
+  },
+  "gitDiffCheck": {
+    "result": "clean",
+    "exitStatus": 0,
+    "output": ""
+  },
+  "scope": {
+    "sourceOrTestFilesEditedDuringVerification": false,
+    "alternativeCommandsRun": false,
+    "browserUiAcceptanceClaimed": false,
+    "worldLaunched": false,
+    "ticksAdvanced": false,
+    "commitCreated": false
+  }
+}
