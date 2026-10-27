@@ -3,6 +3,7 @@ import { checkExitEvidenceBinding, checkExpectedIssuer, createLocalDocumentLoade
 import { FctpClient } from '@fctp/client-sdk';
 import { ResourceError, selectMapRepresentation, type ResourceRequestOptions } from '@fctp/resources';
 import type { CargoManifest, ExitEvent, FCTPActor, MapDescriptor, URI } from '@fctp/protocol';
+import { identityDisplay } from './identity-display.js';
 
 export const asciiMapFormat = 'https://fctp.example/formats/ascii';
 export const sdk = new FctpClient();
@@ -89,20 +90,62 @@ export async function readText(uri: string, nativeToken: string, actorId: string
   return response.text();
 }
 
-export async function readTextPublicThenAuthenticated(uri: string, actorId: string, nativeToken?: string): Promise<string> {
+export async function readTextPublicThenAuthenticated(uri: string, actorId: string, nativeToken?: string, resolveAudience?: () => Promise<string>): Promise<string> {
   const response = await fetch(uri, { headers: { Accept: 'text/plain' }, cache: 'no-store' });
   if (response.ok) return response.text();
-  if (nativeToken && (response.status === 401 || response.status === 403)) return readText(uri, nativeToken, actorId);
+  if (nativeToken && (response.status === 401 || response.status === 403)) {
+    const audience = actorId || await resolveAudience?.();
+    if (audience) return readText(uri, nativeToken, audience);
+    throw new Error('The serving server could not be identified from known Actor links. Resolve an Actor that links to this resource first.');
+  }
   throw new ResourceError(response.status, response.status === 401 ? 'unauthorized' : response.status === 403 ? 'forbidden' : response.status === 404 ? 'not-found' : 'http-error');
 }
 
-export async function getAuthenticated<T>(uri: string, actorId: string, nativeToken: string, route: 'direct' | 'proxy', config: ClientConfig): Promise<T> {
-  if (route === 'direct') return sdk.get<T>(uri as URI, { nativeToken, resourceServer: actorId as URI, cache: false });
-  const response = await fetch(`${config.origins.authority}/local/home/proxy?${new URLSearchParams({ uri, resourceActor: actorId })}`, {
+const statusError = (status: number): ResourceError => new ResourceError(status, status === 401 ? 'unauthorized' : status === 403 ? 'forbidden' : status === 404 ? 'not-found' : 'http-error');
+
+export function resourceAudience(uri: string, explicitActor: string, provenance: ReadonlyMap<string, string | ReadonlySet<string>>, config: ClientConfig): string {
+  if (explicitActor) return explicitActor;
+  const known = provenance.get(uri);
+  if (known instanceof Set) {
+    if (known.size === 1) return [...known][0]!;
+    if (known.size > 1) throw new Error('Multiple Actors link to this resource. Open the resource from a specific Actor or use the advanced Actor override.');
+  } else if (typeof known === 'string') return known;
+  let origin: string;
+  try { origin = new URL(uri).origin; } catch { throw new TypeError('Enter a valid resource URL'); }
+  const candidates = Object.values(config.actors ?? {}).filter((actor) => {
+    try { return new URL(actor).origin === origin; } catch { return false; }
+  });
+  const unique = [...new Set(candidates)];
+  if (unique.length === 1) return unique[0]!;
+  throw new Error(unique.length > 1 ? 'The serving Actor is ambiguous for this server. Resolve an Actor that links to this resource first.' : 'The serving server could not be identified from known Actor links. Resolve an Actor that links to this resource first.');
+}
+
+export async function getAuthenticated<T>(uri: string, actorId: string, nativeToken: string, route: 'direct' | 'proxy', config: ClientConfig, provenance: ReadonlyMap<string, string | ReadonlySet<string>> = new Map(), linkedActor = '', resolveActor: (actor: URI) => Promise<unknown> = (actor) => sdk.resolveActor(actor)): Promise<T> {
+  const publicResponse = await fetch(uri, { headers: { Accept: 'application/ld+json, application/json, text/plain' }, cache: 'no-store' });
+  if (publicResponse.ok) {
+    const contentType = publicResponse.headers.get('content-type') ?? '';
+    if (contentType.startsWith('text/')) return await publicResponse.text() as T;
+    return await publicResponse.json() as T;
+  }
+  if (!nativeToken || publicResponse.status !== 401 && publicResponse.status !== 403) throw statusError(publicResponse.status);
+  const audience = linkedActor || resourceAudience(uri, actorId, provenance, config);
+  if (!linkedActor && !actorId && !provenance.has(uri)) {
+    const resolved = await resolveActor(audience as URI);
+    if (isRecord(resolved) && isRecord(resolved.actor)) identityDisplay.register(resolved.actor);
+  }
+  if (route === 'direct') {
+    const token = await deriveDiplomaticToken(nativeToken, audience as URI);
+    const authorized = await fetch(uri, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/ld+json, application/json, text/plain' }, cache: 'no-store' });
+    if (!authorized.ok) throw statusError(authorized.status);
+    if ((authorized.headers.get('content-type') ?? '').startsWith('text/')) return await authorized.text() as T;
+    return await authorized.json() as T;
+  }
+  const proxyResponse = await fetch(`${config.origins.authority}/local/home/proxy?${new URLSearchParams({ uri, resourceActor: audience })}`, {
     headers: { Authorization: `Bearer ${nativeToken}`, Accept: 'application/ld+json, application/json' }, cache: 'no-store'
   });
-  if (!response.ok) throw new ResourceError(response.status, response.status === 401 ? 'unauthorized' : response.status === 403 ? 'forbidden' : response.status === 404 ? 'not-found' : 'http-error');
-  return response.json() as Promise<T>;
+  if (!proxyResponse.ok) throw statusError(proxyResponse.status);
+  if ((proxyResponse.headers.get('content-type') ?? '').startsWith('text/')) return await proxyResponse.text() as T;
+  return await proxyResponse.json() as T;
 }
 
 export async function mapText(descriptor: MapDescriptor, actorId: string, nativeToken: string): Promise<{ format: string; text: string }> {

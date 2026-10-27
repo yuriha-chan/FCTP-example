@@ -123,7 +123,7 @@ test('real browser Player sessions discover and execute isolated A-to-Registry g
   sessions.push(playerSession);
   let view = await playerSession.view();
   view = await sessionLogin(playerSession, view, player2, vessel2, nativeTokens.get('player-2')!);
-  assert.match(view.markdown, new RegExp(`Player ${escapeRegExp(player2)}.*vessel ${escapeRegExp(vessel2)}`));
+  assert.match(view.markdown, /Player player-2.*vessel player-2/);
   assert.match(view.markdown, /Credential: \[REDACTED\]/);
   assert.doesNotMatch(view.markdown, new RegExp(escapeRegExp(nativeTokens.get('player-2')!)));
   view = await control(playerSession, view, 'Refresh A state and actions');

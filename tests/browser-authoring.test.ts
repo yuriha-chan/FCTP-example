@@ -114,12 +114,13 @@ test('compiled browser authoring creates and verifies isolated Player creations 
   const asset = catalog2.assets[0]!;
   assert.equal(asset.creator?.[0], player2);
   assert.equal(asset.holder, player2);
-  assert.match(view.markdown, /View text Asset:/);
-  view = await control(session, view, 'Fetch Asset:');
+  assert.match(view.markdown, /View text Asset/);
+  view = await control(session, view, 'Fetch Asset');
   assert.match(view.markdown, /Type: Asset\./);
   assert.match(view.markdown, /Name: Literal text Asset\./);
+  assert.match(view.markdown, /Technical addresses[\s\S]*objects\/players\/player-2\//);
   view = await control(session, view, 'Refresh my creations');
-  view = await control(session, view, 'View text Asset:');
+  view = await control(session, view, 'View text Asset');
   assert.ok(view.markdown.includes(sourceText));
   assert.doesNotMatch(view.markdown, /^# Injected heading$/m);
 
@@ -176,12 +177,12 @@ test('compiled browser authoring creates and verifies isolated Player creations 
   assert.equal(grant.asset, asset.id);
   assert.equal(grant.variety, variety.id);
   assert.equal(grant.grantee, player2);
-  assert.match(view.markdown, /Fetch Variety:/);
-  assert.match(view.markdown, /Fetch Grant:/);
-  view = await control(session, view, 'Fetch Variety:');
+  assert.match(view.markdown, /Fetch Variety/);
+  assert.match(view.markdown, /Fetch Grant/);
+  view = await control(session, view, 'Fetch Variety');
   assert.match(view.markdown, /Fractional variety/);
   view = await control(session, view, 'Refresh my creations');
-  view = await control(session, view, 'Fetch Grant:');
+  view = await control(session, view, 'Fetch Grant');
   assert.match(view.markdown, /Type: AssetGrant\./);
   view = await control(session, view, 'Refresh my creations');
 
@@ -250,11 +251,20 @@ test('compiled browser authoring creates and verifies isolated Player creations 
 
   view = await formField(session, view, 'Actor URI or WebFinger handle', player2);
   view = await control(session, view, 'Resolve Actor', 'submit');
-  view = await control(session, view, 'Published Player creations:');
+  view = await control(session, view, 'Published Player creations');
+  view = await control(session, view, 'Published Player creations');
+  assert.equal(view.markdown.match(/^Asset text Literal text Asset \[/gm)?.length, 1, 'reloading a collection replaces the media button and its technical-address details');
   for (const object of [asset, variety, grant]) assert.ok(view.markdown.includes(String(object.id)), `Expected public creation ${object.id} in rendered resource result:\n${view.markdown}`);
-  view = await control(session, view, 'Asset text Literal text Asset:');
+  view = await control(session, view, 'Asset text Literal text Asset');
   assert.ok(view.markdown.includes(sourceText), `Expected Player-3 to read Player-2 Asset text:\n${view.markdown}`);
   assert.doesNotMatch(view.markdown, /^# Injected heading$/m);
+  view = await formField(session, view, 'Resource URI', String(asset.id));
+  assert.doesNotMatch(view.markdown, /Resource Server Actor URI override:.*https:\/\//, 'changing the URI clears any old manual audience');
+  view = await control(session, view, 'Get resource');
+  assert.match(view.markdown, /Name: Literal text Asset/, `Expected a pasted public Asset URL to load without an Actor override:\n${view.markdown}`);
+  view = await formField(session, view, 'Resource URI', mediaUri);
+  view = await control(session, view, 'Get resource');
+  assert.ok(view.markdown.includes(sourceText), `Expected a pasted public text URL to load without an Actor override:\n${view.markdown}`);
 
   await authority.authority.server.store.transaction((state) => {
     const authoring = state.domain.authoring as { players?: Record<string, { assets?: Array<{ id: string; media?: Array<{ url: string; mediaType: string }> }> }> } | undefined;
@@ -264,8 +274,8 @@ test('compiled browser authoring creates and verifies isolated Player creations 
   });
   view = await formField(session, view, 'Actor URI or WebFinger handle', player2);
   view = await control(session, view, 'Resolve Actor', 'submit');
-  view = await control(session, view, 'Published Player creations:');
-  view = await control(session, view, 'Asset text Literal text Asset:');
+  view = await control(session, view, 'Published Player creations');
+  view = await control(session, view, 'Asset text Literal text Asset');
   assert.match(view.markdown, /Resource request failed: HTTP 404/, `Expected failed Asset text request to remain visible:\n${view.markdown}`);
 
   view = await session.select(refFor(view, 'Role'), 'authority-admin');

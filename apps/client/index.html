@@ -77,11 +77,14 @@
         </div>
         <form id="resource-get-form">
           <label>Resource URI <input name="uri" required></label>
-          <label>Resource Server Actor URI <input name="resourceActor"></label>
-          <label>Retrieval route
-            <select name="route"><option value="direct">Direct</option><option value="proxy">Home proxy</option></select>
-          </label>
-          <button>Authenticated GET</button>
+          <details>
+            <summary>Advanced technical options</summary>
+            <label>Resource Server Actor URI override <input name="resourceActor"></label>
+            <label>Retrieval route
+              <select name="route"><option value="direct">Direct</option><option value="proxy">Home proxy</option></select>
+            </label>
+          </details>
+          <button>Get resource</button>
         </form>
         <pre id="resource-result" aria-live="polite"></pre>
       </section>

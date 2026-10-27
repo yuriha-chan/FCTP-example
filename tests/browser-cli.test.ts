@@ -142,11 +142,11 @@ test('spawned browser CLI keeps isolated Player and administrator daemon session
 
   openedRoles.add('player-2');
   let view = await cli(configRoot, ['player-2', 'open']);
-  assert.match(view, new RegExp(`Player ${escapeRegExp(authority.ids.players['player-2']!)}.*vessel ${escapeRegExp(authority.ids.vessels['player-2']!)}`));
+  assert.match(view, /Player player-2.*vessel player-2/);
   assert.match(view, /Credential: \[REDACTED\]/);
   assert.doesNotMatch(view, new RegExp(escapeRegExp(nativeTokens.get('player-2')!)));
   view = await cli(configRoot, ['player-2', 'view']);
-  assert.match(view, new RegExp(`Player ${escapeRegExp(authority.ids.players['player-2']!)}.*vessel ${escapeRegExp(authority.ids.vessels['player-2']!)}`));
+  assert.match(view, /Player player-2.*vessel player-2/);
   const refreshed = await cli(configRoot, ['player-2', 'batch', JSON.stringify([{ command: 'click', ref: refFor(view, 'Refresh A state and actions') }])]);
   assert.match(refreshed, /Mine one ore/);
   const mined = await cli(configRoot, ['player-2', 'batch', JSON.stringify([
@@ -158,12 +158,12 @@ test('spawned browser CLI keeps isolated Player and administrator daemon session
   assert.equal(policyState.state?.rawInventory?.[policy.ids.varieties.ore], 2, 'the rendered Mine action changes actual Territory A state');
 
   view = await cli(configRoot, ['player-2', 'reload']);
-  assert.match(view, new RegExp(`Player ${escapeRegExp(authority.ids.players['player-2']!)}.*vessel ${escapeRegExp(authority.ids.vessels['player-2']!)}`));
+  assert.match(view, /Player player-2.*vessel player-2/);
   assert.match(view, /Credential: \[REDACTED\]/);
 
   openedRoles.add('player-3');
   const player3 = await cli(configRoot, ['player-3', 'open']);
-  assert.match(player3, new RegExp(`Player ${escapeRegExp(authority.ids.players['player-3']!)}.*vessel ${escapeRegExp(authority.ids.vessels['player-3']!)}`));
+  assert.match(player3, /Player player-3.*vessel player-3/);
   assert.doesNotMatch(player3, new RegExp(escapeRegExp(authority.ids.players['player-2']!)));
   assert.doesNotMatch(player3, new RegExp(escapeRegExp(authority.ids.vessels['player-2']!)));
 

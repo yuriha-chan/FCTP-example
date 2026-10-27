@@ -95,6 +95,7 @@ test('Registry discovery count, location, adoption, and vessel details are reada
   assert.match(text, /adopted/);
   assert.match(text, /Pending Registry requests: 2/);
   assert.match(text, /item a.*grade: high.*item b.*grade: low/);
+  assert.doesNotMatch(text, /https:\/\//);
   const fleet = formatResource({
     'https://fleet.test/vessels/one': { vessel: { id: 'https://fleet.test/vessels/one', name: 'One' }, cargo: { entries: [] }, adoption: false, location: { status: 'no-recorded-active-berth' } },
     'https://fleet.test/vessels/two': { vessel: { id: 'https://fleet.test/vessels/two', name: 'Two' }, cargo: { entries: [] }, adoption: true, location: { status: 'berthed' } }
@@ -114,13 +115,15 @@ test('Production declarations retain ingredients, tools, locations, duration, yi
   assert.match(text, /3 × ore \[grade: high\]/);
   assert.match(text, /tool press/);
   assert.match(text, /duration 4/);
-  assert.match(text, /location https:\/\/places\.test\/foundry \/ Foundry \/ https:\/\/territories\.test\/one/);
+  assert.match(text, /location foundry \/ Foundry \/ one/);
   assert.match(text, /yield 0.5 chance of 2 with \{"purity":9\}/);
   assert.match(text, /extension: retained/);
-  assert.match(text, /mine; ingredients none; duration 1; location https:\/\/places\.test\/mine \/ Mine \/ https:\/\/territories\.test\/two/);
+  assert.match(text, /mine; ingredients none; duration 1; location mine \/ Mine \/ two/);
+  assert.doesNotMatch(text, /https:\/\//);
 });
 
 test('Item quantities without count mean one and malformed URI escapes remain displayable', () => {
-  assert.match(formatResource({ id: 'https://example.test/%E0%A4%A', name: 'Safe' }), /Identifier: https:\/\/example\.test\/%E0%A4%A/);
+  assert.match(formatResource({ id: 'https://example.test/%E0%A4%A', name: 'Safe' }), /Name: Safe/);
+  assert.doesNotMatch(formatResource({ id: 'https://example.test/%E0%A4%A', name: 'Safe' }), /https:\/\//);
   assert.match(formatPolicyState({ policy: {}, visit: { vessel: 'vessel:one', cargo: [{ variety: 'https://goods.test/%E0%A4%A', id: 'https://items.test/one' }] } }, 'vessel:one'), /1 × %E0%A4%A \(item one\)/);
 });

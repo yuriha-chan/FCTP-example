@@ -1,5 +1,6 @@
 import type { URI } from '@fctp/protocol';
 import { formatAuthoringEntry, formatResource } from './presentation.js';
+import { identityDisplay, technicalAddresses, technicalDetails } from './identity-display.js';
 import { setupProductionEditor } from './production-editor.js';
 
 type PlayerSession = { role: string; player: string; credential: string };
@@ -53,15 +54,21 @@ export function setupAuthoring(dependencies: AuthoringDependencies): { sessionCh
   const showResource = (parent: HTMLElement, label: string, uri: string, action: () => Promise<unknown>): void => {
     const button = document.createElement('button');
     button.type = 'button';
-    button.textContent = `${label}: ${uri}`;
+    button.textContent = label;
     button.addEventListener('click', () => dependencies.task('authoring-result', async () => {
       const value = await action();
       const output = document.createElement('pre');
       output.textContent = typeof value === 'string' ? value : formatResource(value);
-      resultPanel.replaceChildren(output);
+      if (record(value)) identityDisplay.register(value);
+      const addresses = technicalDetails(technicalAddresses(value));
+      resultPanel.replaceChildren(output, ...(addresses ? [addresses] : []));
       return undefined;
     }));
-    parent.append(button);
+    const details = document.createElement('details');
+    const summary = document.createElement('summary'); summary.textContent = 'Technical address';
+    const address = document.createElement('code'); address.textContent = uri;
+    details.append(summary, address);
+    parent.append(button, details);
   };
 
   const renderCatalog = (catalog: AuthoringCatalog): void => {
@@ -77,10 +84,13 @@ export function setupAuthoring(dependencies: AuthoringDependencies): { sessionCh
       heading.textContent = title;
       catalogPanel.append(heading);
       for (const entry of entries) {
+        identityDisplay.register(entry);
         const article = document.createElement('article');
         const details = document.createElement('pre');
         details.textContent = formatAuthoringEntry(title === 'Varieties' ? 'Variety' : title === 'Assets' ? 'Asset' : 'Asset grant', entry);
+        const addresses = technicalDetails(technicalAddresses(entry));
         article.append(details);
+        if (addresses) article.append(addresses);
         if (typeof entry.id === 'string') {
           const kind = title === 'Varieties' ? 'Variety' : title.slice(0, -1);
           showResource(article, `Fetch ${kind}`, entry.id, () => dependencies.getPublicResource(entry.id as string));

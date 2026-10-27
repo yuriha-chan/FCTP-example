@@ -1,12 +1,10 @@
+import { identityDisplay } from './identity-display.js';
+
 type RecordValue = Record<string, unknown>;
 
 const isRecord = (value: unknown): value is RecordValue => typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const label = (uri: string): string => {
-  const part = uri.split(/[/#]/).filter(Boolean).at(-1);
-  if (!part) return uri;
-  try { return decodeURIComponent(part); } catch (error) { if (error instanceof URIError) return part; throw error; }
-};
+const label = (uri: string): string => identityDisplay.label(uri);
 
 const numeric = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 
@@ -81,8 +79,8 @@ const visitSummary = (visit: RecordValue | undefined): string[] => {
   lines.push(`Current local visit: ${status}.`);
   if (typeof visit.port === 'string') lines.push(`Port: ${label(visit.port)}.`);
   if (typeof visit.route === 'string') lines.push(`Route: ${label(visit.route)}.`);
-  if (typeof visit.entryRequest === 'string') lines.push(`Entry request: ${visit.entryRequest}.`);
-  else if (typeof request.id === 'string') lines.push(`Entry request: ${request.id}.`);
+  if (typeof visit.entryRequest === 'string') lines.push(`Entry request: ${label(visit.entryRequest)}.`);
+  else if (typeof request.id === 'string') lines.push(`Entry request: ${label(request.id)}.`);
   if (isRecord(visit.cargo) || Array.isArray(visit.cargo)) lines.push(`Vessel cargo: ${Array.isArray(visit.cargo) ? itemList(visit.cargo) : manifest(visit.cargo)}.`);
   if (Array.isArray(visit.handling) && visit.handling.length > 0) lines.push(`Handling in progress: ${visit.handling.map((job) => isRecord(job) ? `${String(job.operation ?? 'handling')} ${Array.isArray(job.cargo) ? itemList(job.cargo) : manifest(job.cargo)} (${String(job.remainingTicks ?? '?')} ticks left)` : 'unknown job').join('; ')}.`);
   return lines;
@@ -192,11 +190,11 @@ const simulationSummary = (source: RecordValue, viewerVessel?: string): string[]
 
 export function formatRegistryState(state: RecordValue, vessel?: string): string {
   const lines: string[] = [];
-  if (vessel) lines.push(`Vessel: ${vessel}.`);
+  const vesselRecord = isRecord(state.vessel) ? state.vessel : undefined;
+  if (vessel) lines.push(`Vessel: ${typeof vesselRecord?.name === 'string' ? vesselRecord.name : label(vessel)}.`);
   lines.push(`Registry cargo: ${manifest(state.cargo)}.`);
-  if (isRecord(state.vessel)) {
-    const vessel = state.vessel;
-    const details = [typeof vessel.name === 'string' ? vessel.name : undefined, typeof vessel.id === 'string' ? vessel.id : undefined, typeof vessel.possessor === 'string' ? `possessor ${vessel.possessor}` : undefined].filter(Boolean);
+  if (vesselRecord) {
+    const details = [typeof vesselRecord.name === 'string' ? vesselRecord.name : undefined, typeof vesselRecord.id === 'string' ? label(vesselRecord.id) : undefined, typeof vesselRecord.possessor === 'string' ? `possessor ${label(vesselRecord.possessor)}` : undefined].filter(Boolean);
     if (details.length) lines.push(`Vessel record: ${details.join('; ')}.`);
   }
   lines.push(`Territory notifications: ${state.adoption === true ? 'adopted' : 'not adopted'}.`);
@@ -206,11 +204,11 @@ export function formatRegistryState(state: RecordValue, vessel?: string): string
     const place = typeof location.port === 'string' ? ` at ${label(location.port)}` : '';
     const territory = typeof location.territory === 'string' ? ` in ${label(location.territory)}` : '';
     lines.push(`Recorded location: ${status}${place}${territory}.`);
-    if (typeof location.entryRequest === 'string') lines.push(`Current entry request: ${location.entryRequest}.`);
+    if (typeof location.entryRequest === 'string') lines.push(`Current entry request: ${label(location.entryRequest)}.`);
   }
   const pending = Array.isArray(state.pendingRequests) ? state.pendingRequests.length : isRecord(state.requests) ? Object.keys(state.requests).length : 0;
   lines.push(`Pending Registry requests: ${pending}.`);
-  if (typeof state.latestExitEvidence === 'string') lines.push(`Latest exit evidence: ${state.latestExitEvidence}.`);
+  if (typeof state.latestExitEvidence === 'string') lines.push(`Latest exit evidence: ${label(state.latestExitEvidence)}.`);
   const events = Array.isArray(state.events) ? state.events.length : 0;
   if (events > 0) lines.push(`Recorded Territory events: ${events}.`);
   return lines.join('\n');
@@ -243,16 +241,18 @@ export function formatSimulationState(result: RecordValue, viewerVessel?: string
 
 export function formatActor(actor: RecordValue): string {
   const lines: string[] = [];
-  if (typeof actor.id === 'string') lines.push(`Actor: ${actor.id}.`);
-  if (typeof actor.name === 'string') lines.push(`Name: ${actor.name}.`);
+  if (typeof actor.name === 'string') lines.push(`Actor: ${actor.name}.`);
+  else if (typeof actor.role === 'string') lines.push(`Actor: ${actor.role}.`);
+  const identity = typeof actor.id === 'string' ? identityDisplay.get(actor.id) : undefined;
+  if (identity?.handle) lines.push(`Handle: ${identity.handle}.`);
   if (typeof actor.type === 'string') lines.push(`Type: ${actor.type}.`);
   if (typeof actor.role === 'string') lines.push(`Role: ${actor.role}.`);
-  if (typeof actor.inbox === 'string') lines.push(`Inbox: ${actor.inbox}.`);
-  if (typeof actor.outbox === 'string') lines.push(`Outbox: ${actor.outbox}.`);
+  if (typeof actor.inbox === 'string') lines.push(`Inbox: ${label(actor.inbox)}.`);
+  if (typeof actor.outbox === 'string') lines.push(`Outbox: ${label(actor.outbox)}.`);
   const resources = isRecord(actor.resources) ? actor.resources : undefined;
   if (resources) {
     const parts: string[] = [];
-    for (const key of ['ports', 'routes'] as const) if (typeof resources[key] === 'string') parts.push(`${key} ${resources[key]}`);
+    for (const key of ['ports', 'routes'] as const) if (typeof resources[key] === 'string') parts.push(`${key} ${label(resources[key] as string)}`);
     if (Array.isArray(resources.areas)) parts.push(`${resources.areas.length} area${resources.areas.length === 1 ? '' : 's'}`);
     if (parts.length > 0) lines.push(`Territory resources: ${parts.join('; ')}.`);
   }
@@ -263,14 +263,14 @@ export function formatActor(actor: RecordValue): string {
 export function formatVerification(result: RecordValue): string {
   const lines: string[] = [];
   const exit = isRecord(result.exit) ? result.exit : undefined;
-  if (exit && typeof exit.id === 'string') lines.push(`Exit record: ${exit.id}.`);
+  if (exit && typeof exit.id === 'string') lines.push(`Exit record: ${label(exit.id)}.`);
   if (exit && isRecord(exit.cargo)) lines.push(`Cargo when leaving: ${manifest(exit.cargo)}.`);
   const verification = isRecord(result.verification) ? result.verification : result;
   const crypto = isRecord(verification.cryptographic) ? verification.cryptographic : {};
   const attribution = isRecord(verification.attribution) ? verification.attribution : {};
   const issuer = isRecord(verification.expectedIssuer) ? verification.expectedIssuer : {};
   const cryptoStatus = result.proofCryptography === 'verified' ? 'verified' : result.proofCryptography === 'failed' ? 'failed' : crypto.verified === true ? 'verified' : crypto.verified === false ? 'failed' : 'unknown';
-  const attributionStatus = typeof result.keyAttribution === 'string' ? result.keyAttribution.startsWith('attributed') ? `recognized${typeof attribution.publisher === 'string' ? ` as ${attribution.publisher}` : ''}` : result.keyAttribution.startsWith('not attributed: unknown') ? 'unknown' : 'not recognized' : attribution.attributed === true ? `recognized${typeof attribution.publisher === 'string' ? ` as ${attribution.publisher}` : ''}` : attribution.attributed === false ? 'not recognized' : 'unknown';
+  const attributionStatus = typeof result.keyAttribution === 'string' ? result.keyAttribution.startsWith('attributed') ? `recognized${typeof attribution.publisher === 'string' ? ` as ${label(attribution.publisher)}` : ''}` : result.keyAttribution.startsWith('not attributed: unknown') ? 'unknown' : 'not recognized' : attribution.attributed === true ? `recognized${typeof attribution.publisher === 'string' ? ` as ${label(attribution.publisher)}` : ''}` : attribution.attributed === false ? 'not recognized' : 'unknown';
   lines.push(`Signature: ${cryptoStatus}.`);
   lines.push(`Signer: ${attributionStatus}.`);
   const expectedIssuer = result.expectedIssuer;
@@ -296,7 +296,7 @@ export function formatResource(value: unknown): string {
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   if (Array.isArray(value)) {
     if (value.length === 0) return 'No entries.';
-    return value.map((entry) => isRecord(entry) ? formatResource(entry) : String(entry)).join('\n\n');
+    return value.map((entry) => isRecord(entry) ? formatResource(entry) : typeof entry === 'string' ? label(entry) : String(entry)).join('\n\n');
   }
   if (!isRecord(value)) return 'No readable details.';
   const lines: string[] = [];
@@ -307,15 +307,17 @@ export function formatResource(value: unknown): string {
     for (const [id, entry] of fleet) {
       if (!isRecord(entry)) continue;
       const vessel = isRecord(entry.vessel) ? entry.vessel : {};
-      lines.push(`\n${typeof vessel.name === 'string' ? vessel.name : id}\n${formatRegistryState(entry, id)}`);
+      lines.push(`\n${typeof vessel.name === 'string' ? vessel.name : label(id)}\n${formatRegistryState(entry, id)}`);
     }
   }
   if (typeof value.type === 'string') lines.push(`Type: ${value.type}.`);
-  if (typeof value.id === 'string') lines.push(`Identifier: ${value.id}.`);
   if (typeof value.name === 'string') lines.push(`Name: ${value.name}.`);
+  const identity = typeof value.id === 'string' ? identityDisplay.get(value.id) : undefined;
+  if (identity?.handle) lines.push(`Handle: ${identity.handle}.`);
+  if (typeof value.id === 'string' && typeof value.name !== 'string') lines.push(`${identityDisplay.label(value.id)}.`);
   if (typeof value.role === 'string') lines.push(`Role: ${value.role}.`);
-  if (typeof value.holder === 'string') lines.push(`Holder: ${value.holder}.`);
-  if (Array.isArray(value.creator)) lines.push(`Creators: ${value.creator.filter((item) => typeof item === 'string').join(', ') || 'none'}.`);
+  if (typeof value.holder === 'string') lines.push(`Holder: ${label(value.holder)}.`);
+  if (Array.isArray(value.creator)) lines.push(`Creators: ${value.creator.filter((item) => typeof item === 'string').map((item) => label(item as string)).join(', ') || 'none'}.`);
   if (typeof value.mass === 'number') lines.push(`Mass: ${value.mass}.`);
   if (typeof value.version === 'string') lines.push(`Version: ${value.version}.`);
   if (isRecord(value.cargo)) lines.push(`Cargo: ${manifest(value.cargo)}.`);
@@ -328,8 +330,8 @@ export function formatResource(value: unknown): string {
     if (!Array.isArray(value[key])) continue;
     lines.push(`Collection entries: ${value[key].length}.`);
     for (const item of value[key]) {
-      if (typeof item === 'string') lines.push(`- ${item}`);
-      else if (isRecord(item)) lines.push(`- ${String(item.name ?? item.type ?? 'Entry')}${typeof item.id === 'string' ? `: ${item.id}` : ''}`);
+      if (typeof item === 'string') lines.push(`- ${label(item)}`);
+      else if (isRecord(item)) lines.push(`- ${String(item.name ?? item.type ?? 'Entry')}${typeof item.id === 'string' ? ` (${label(item.id)})` : ''}`);
     }
   }
   if (typeof value.variety === 'string') lines.push(`Variety: ${label(value.variety)}.`);
@@ -338,7 +340,7 @@ export function formatResource(value: unknown): string {
     const status = typeof value.location.status === 'string' ? value.location.status.replaceAll('-', ' ') : 'recorded';
     lines.push(`Location: ${status}.`);
   }
-  if (isRecord(value.vessel) && typeof value.vessel.id === 'string') lines.push(`Vessel: ${value.vessel.id}.`);
+  if (isRecord(value.vessel) && typeof value.vessel.id === 'string') lines.push(`Vessel: ${typeof value.vessel.name === 'string' ? value.vessel.name : label(value.vessel.id)}.`);
   if (isRecord(value.simulation)) lines.push(...simulationSummary(value));
   if (isRecord(value.state)) lines.push(...policySummary(value));
   if (typeof value.error === 'string') lines.push(`Problem: ${value.error}.`);
@@ -369,7 +371,7 @@ const formatProduction = (entry: RecordValue): string => {
 const formatProductionLocation = (location: unknown): string => {
   if (typeof location === 'string') return label(location);
   if (!isRecord(location)) return String(location);
-  const metadata = [location.id, location.name, location.territory].filter((value): value is string => typeof value === 'string');
+  const metadata = [typeof location.id === 'string' ? label(location.id) : undefined, typeof location.name === 'string' ? location.name : undefined, typeof location.territory === 'string' ? label(location.territory) : undefined].filter((value): value is string => typeof value === 'string');
   return metadata.length > 0 ? metadata.join(' / ') : JSON.stringify(location);
 };
 
@@ -403,12 +405,12 @@ export function formatAuthoringEntry(kind: string, entry: RecordValue): string {
   const lines: string[] = [];
   const name = typeof entry.name === 'string' ? `“${entry.name}”` : 'Untitled';
   lines.push(`${kind}: ${name}`);
-  if (typeof entry.id === 'string') lines.push(`Identifier: ${entry.id}`);
+  if (typeof entry.id === 'string' && typeof entry.name !== 'string') lines.push(identityDisplay.label(entry.id));
   if (typeof entry.mass === 'number') lines.push(`Mass: ${entry.mass}`);
   if (typeof entry.version === 'string') lines.push(`Version: ${entry.version}`);
-  if (typeof entry.asset === 'string') lines.push(`Asset: ${entry.asset}`);
-  if (typeof entry.variety === 'string') lines.push(`Variety: ${entry.variety}`);
-  if (typeof entry.asset === 'string' && typeof entry.grantee === 'string') lines.push(`Grantee: ${entry.grantee}`);
+  if (typeof entry.asset === 'string') lines.push(`Asset: ${label(entry.asset)}`);
+  if (typeof entry.variety === 'string') lines.push(`Variety: ${label(entry.variety)}`);
+  if (typeof entry.asset === 'string' && typeof entry.grantee === 'string') lines.push(`Grantee: ${label(entry.grantee)}`);
   if (Array.isArray(entry.media)) lines.push(`Text media: ${entry.media.length}`);
   if (Array.isArray(entry.production)) lines.push(`Production entries: ${entry.production.length}`);
   return lines.join('\n');

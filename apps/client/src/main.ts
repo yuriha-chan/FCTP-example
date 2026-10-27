@@ -1,7 +1,8 @@
 import type { CargoManifest, FCTPActor, URI } from '@fctp/protocol';
-import { configuredOrigin, mapText, getAuthenticated, isRecord, loadConfig, localRequest as rawLocalRequest, portListings, readTextPublicThenAuthenticated, resolveInput, resolveReference, sdk, territoryResources, verifyExit, type BrowserLocalActionDiscovery } from './client.js';
+import { configuredOrigin, getAuthenticated, isRecord, loadConfig, localRequest as rawLocalRequest, mapText, portListings, readTextPublicThenAuthenticated, resourceAudience, resolveInput, resolveReference, sdk, territoryResources, verifyExit, type BrowserLocalActionDiscovery } from './client.js';
 import { setupAuthoring } from './authoring.js';
 import { formatActionReason, formatActor, formatDiscovery, formatPolicyState, formatRegistryState, formatResult, formatSimulationState, formatVerification } from './presentation.js';
+import { identityDisplay, technicalAddresses, technicalDetails } from './identity-display.js';
 
 const byId = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -15,7 +16,31 @@ const field = (formId: string, name: string): HTMLInputElement | HTMLTextAreaEle
   return element;
 };
 const value = (formId: string, name: string): string => field(formId, name).value.trim();
-const show = (id: string, content: unknown): void => { byId(id).textContent = formatResult(content); };
+const show = (id: string, content: unknown): void => {
+  const panel = byId(id);
+  panel.replaceChildren();
+  if (id === 'resource-result') registerFetchedIdentities(content);
+  const actor = id === 'actor-result' && isRecord(content) && typeof content.id === 'string' && typeof content.role === 'string';
+  const output = document.createElement('pre');
+  output.textContent = actor ? `${formatActor(content)}${typeof content.resolutionSource === 'string' ? `\nResolved through ${content.resolutionSource}.` : ''}` : id === 'exit-result' && isRecord(content) ? formatVerification(content) : formatResult(content);
+  panel.append(output);
+  const details = technicalDetails(technicalAddresses(content));
+  if (details) panel.append(details);
+};
+const appendTechnicalDetails = (id: string, value: unknown): void => {
+  const details = technicalDetails(technicalAddresses(value));
+  if (details) byId(id).append(details);
+};
+const registerFetchedIdentities = (value: unknown): void => {
+  if (!isRecord(value)) return;
+  identityDisplay.register(value);
+  if (isRecord(value.vessel)) identityDisplay.register(value.vessel);
+  if (isRecord(value.vessels)) Object.values(value.vessels).forEach((entry) => identityDisplay.register(entry));
+  for (const key of ['items', 'orderedItems', 'media'] as const) {
+    const entries = value[key];
+    if (Array.isArray(entries)) entries.forEach((entry) => identityDisplay.register(entry));
+  }
+};
 const numberField = (formId: string, name: string): number => {
   const raw = value(formId, name);
   if (!raw) throw new TypeError(`${name} is required`);
@@ -26,6 +51,7 @@ const numberField = (formId: string, name: string): number => {
 
 document.documentElement.dataset.clientBusy = 'true';
 const config = await loadConfig();
+const resourceProvenance = new Map<string, string | Set<string>>();
 const localRequest = <T>(origin: string, path: string, options: Parameters<typeof rawLocalRequest<T>>[2] = {}): Promise<T> => {
   configuredOrigin(new URL(path, origin).href, config);
   return rawLocalRequest<T>(origin, path, options);
@@ -168,16 +194,25 @@ async function refreshAuthority(): Promise<void> {
   if (!session.vessel) throw new Error('Select a vessel in the session form');
   const query = new URLSearchParams({ vessel: session.vessel });
   registrySnapshot = await localRequest<Record<string, unknown>>(config.origins.authority, `/local/registry/state?${query}`, { token: session.role === 'player' ? playerToken() : authorityAdmin() });
+  if (isRecord(registrySnapshot.vessel)) identityDisplay.register(registrySnapshot.vessel);
   const cargo = registrySnapshot.cargo as CargoManifest | undefined;
   const output = byId('registry-state');
   const vessel = isRecord(registrySnapshot.vessel) ? registrySnapshot.vessel.id : undefined;
-  output.textContent = formatRegistryState({ ...registrySnapshot, declaredCargo: cargo }, typeof vessel === 'string' ? vessel : undefined);
+  output.replaceChildren();
+  const state = document.createElement('pre');
+  state.textContent = formatRegistryState({ ...registrySnapshot, declaredCargo: cargo }, typeof vessel === 'string' ? vessel : undefined);
+  output.append(state);
+  const registryDetails = technicalDetails(technicalAddresses(registrySnapshot));
+  if (registryDetails) output.append(registryDetails);
   const exitUris = Array.isArray(registrySnapshot.exitEvidence) ? registrySnapshot.exitEvidence.filter((uri): uri is string => typeof uri === 'string') : [];
   for (const uri of exitUris) {
     const button = document.createElement('button');
-     button.type = 'button'; button.textContent = `Verify ${uri}`; button.disabled = busy; button.dataset.resourceAction = 'true';
+    button.type = 'button'; button.textContent = `Verify ${identityDisplay.label(uri)}`; button.disabled = busy; button.dataset.resourceAction = 'true';
     button.addEventListener('click', () => { field('exit-form', 'exitUri').value = uri; void verifySelectedExit(); });
-    output.append(document.createElement('br'), button);
+    const address = technicalDetails([{ label: 'Exit evidence', address: uri }]);
+    const wrapper = document.createElement('span'); wrapper.append(button);
+    if (address) wrapper.append(address);
+    output.append(wrapper);
   }
 }
 
@@ -266,6 +301,7 @@ async function refreshPolicy(): Promise<void> {
   updateControlAvailability();
   const token = session.role === 'player' ? await localPlayerToken(territoryIds.policy) : policyAdmin();
   const result = await localRequest<Record<string, unknown>>(config.origins.policy, '/local/state', { token });
+  registerFetchedIdentities(result);
   const state = isRecord(result.state) ? result.state : result;
   const policy = isRecord(state.policy) ? state.policy : {};
   const admission = isRecord(result.admission) ? result.admission : {};
@@ -284,6 +320,7 @@ async function refreshPolicy(): Promise<void> {
     policyCargoAvailable = isRecord(visit) && visit.vessel === currentSession.vessel && visit.possessor === currentSession.player && visit.departed !== true && isRecord(vessels[currentSession.vessel]);
   }
   show('policy-state', formatPolicyState(result, currentSession.vessel));
+  appendTechnicalDetails('policy-state', result);
   updateControlAvailability();
 }
 
@@ -321,6 +358,7 @@ async function refreshSimulation(): Promise<void> {
   updateControlAvailability();
   const token = currentSession.role === 'player' ? await localPlayerToken(territoryIds.simulation) : simulationAdmin();
   const result = await localRequest<Record<string, unknown>>(config.origins.simulation, '/local/state', { token });
+  registerFetchedIdentities(result);
   const simulation = isRecord(result.simulation) ? result.simulation : {};
   const currentConfig = isRecord(simulation.config) ? simulation.config : {};
   if (currentSession.role === 'simulation-admin') {
@@ -350,6 +388,7 @@ async function refreshSimulation(): Promise<void> {
     }
   }
   show('simulation-state', formatSimulationState(result, currentSession.vessel));
+  appendTechnicalDetails('simulation-state', result);
   updateControlAvailability();
 }
 
@@ -362,7 +401,7 @@ async function verifySelectedExit(): Promise<void> {
     const exitCargo = exit.cargo;
     const comparison = isRecord(declared) && isRecord(exitCargo) ? sdk.compareManifests(declared as CargoManifest, exitCargo as CargoManifest) : undefined;
     const sideBySide = { ...result, registryDeclaredCargo: declared, exitEventCargo: exitCargo, descriptiveDifference: comparison };
-    return formatVerification(sideBySide);
+    return sideBySide;
   });
 }
 
@@ -370,7 +409,7 @@ async function discoverActor(): Promise<void> {
   await task('actor-result', async () => {
     const resolution = await resolveInput(value('actor-form', 'actor'));
     await renderActorResources(resolution.actor as FCTPActor & Record<string, unknown>);
-    return `${formatActor(resolution.actor as Record<string, unknown>)}\nResolved through ${resolution.source}.`;
+    return { ...resolution.actor, resolutionSource: resolution.source };
   });
 }
 
@@ -378,45 +417,68 @@ async function discoverTerritory(uri: string): Promise<void> {
   await task('actor-result', async () => {
     const resolution = await sdk.resolveActor(uri as URI);
     await renderActorResources(resolution.actor as FCTPActor & Record<string, unknown>);
-    return `${formatActor(resolution.actor as Record<string, unknown>)}\nResolved through ${resolution.source}.`;
+    return { ...resolution.actor, resolutionSource: resolution.source };
   });
+}
+
+function noteResourceProvenance(uri: string, actorId: string): void {
+  if (!uri || !actorId) return;
+  const current = resourceProvenance.get(uri);
+  if (!current) resourceProvenance.set(uri, new Set([actorId]));
+  else if (current instanceof Set) current.add(actorId);
+  else if (current !== actorId) resourceProvenance.set(uri, new Set([current, actorId]));
 }
 
 function appendResource(parent: HTMLElement, label: string, uri: string, actorId: string, kind: 'resource' | 'text' = 'resource', onLoaded?: (value: unknown) => void): HTMLButtonElement {
   const button = document.createElement('button');
-  button.type = 'button'; button.textContent = `${label}: ${uri}`; button.disabled = busy; button.dataset.resourceAction = 'true';
+  button.type = 'button'; button.textContent = label; button.disabled = busy; button.dataset.resourceAction = 'true';
+  noteResourceProvenance(uri, actorId);
+  const wrapper = document.createElement('div');
+  wrapper.dataset.resourceWrapper = 'true';
   button.addEventListener('click', () => {
     field('resource-get-form', 'uri').value = uri;
-    field('resource-get-form', 'resourceActor').value = actorId;
+    field('resource-get-form', 'resourceActor').value = '';
     void task('resource-result', async () => {
       const token = session?.role === 'player' ? session.credential : value('authority-form', 'nativeToken') || nativeToken;
       const result = kind === 'text'
-        ? await readTextPublicThenAuthenticated(uri, actorId, token || undefined)
-        : await sdk.get(uri as URI, { ...(token ? { nativeToken: token, resourceServer: actorId as URI } : {}), cache: false });
+        ? await readTextPublicThenAuthenticated(uri, actorId, token || undefined, () => resolveResourceServer(uri, actorId))
+        : await getAuthenticated(uri, '', token, 'direct', config, resourceProvenance, actorId);
+      registerFetchedIdentities(result);
       onLoaded?.(result);
       return result;
     });
   });
-  parent.append(button);
+  const details = technicalDetails([{ label: 'Resource', address: uri }]);
+  wrapper.append(button);
+  if (details) wrapper.append(details);
+  parent.append(wrapper);
   return button;
 }
 
+async function resolveResourceServer(uri: string, explicitActor: string): Promise<string> {
+  const actor = resourceAudience(uri, explicitActor, resourceProvenance, config);
+  if (!explicitActor && !resourceProvenance.has(uri)) await sdk.resolveActor(actor as URI);
+  return actor;
+}
+
 function appendCreationMedia(parent: HTMLElement, collection: unknown, actorId: string): void {
-  for (const existing of [...parent.querySelectorAll<HTMLButtonElement>('button[data-creation-media="true"]')]) existing.remove();
+  for (const existing of [...parent.querySelectorAll<HTMLElement>('[data-creation-media="true"]')]) existing.remove();
   if (!isRecord(collection)) return;
   const items = Array.isArray(collection.orderedItems) ? collection.orderedItems : Array.isArray(collection.items) ? collection.items : [];
   for (const item of items) {
     if (!isRecord(item)) continue;
+    identityDisplay.register(item);
     for (const entry of Array.isArray(item.media) ? item.media : []) {
       if (!isRecord(entry) || typeof entry.url !== 'string') continue;
       const button = appendResource(parent, `Asset text ${String(item.name ?? '')}`, entry.url, actorId, 'text');
-      button.dataset.creationMedia = 'true';
+      button.parentElement!.dataset.creationMedia = 'true';
     }
   }
 }
 
 async function renderActorResources(actor: FCTPActor & Record<string, unknown>): Promise<void> {
   const panel = byId('resource-browser');
+  registerFetchedIdentities(actor);
   for (const child of [...panel.children]) if (!(child instanceof HTMLButtonElement && child.dataset.resourceChoice === 'true')) child.remove();
   if (typeof actor.creations === 'string') appendResource(panel, 'Published Player creations', actor.creations, actor.id, 'resource', (collection) => appendCreationMedia(panel, collection, actor.id));
   const native = session?.role === 'player' ? session.credential : value('authority-form', 'nativeToken') || nativeToken;
@@ -424,16 +486,20 @@ async function renderActorResources(actor: FCTPActor & Record<string, unknown>):
   let territory: Awaited<ReturnType<typeof territoryResources>>;
   try { territory = await territoryResources(actor, native || undefined); }
   catch (error) { appendResourceError(panel, 'Territory topology', error); territory = { ports: [], routes: [], areas: [] }; }
-  const details = document.createElement('p'); details.textContent = `Territory topology for ${actor.id}`; panel.append(details);
+  const details = document.createElement('p'); details.textContent = `Territory topology for ${identityDisplay.label(actor.id)}`; panel.append(details);
   for (const [title, items] of [['Ports', territory.ports], ['Routes', territory.routes], ['Areas', territory.areas]] as const) {
     const heading = document.createElement('h3'); heading.textContent = title; panel.append(heading);
     for (const item of items) {
+      identityDisplay.register(item);
       const id = typeof item.id === 'string' ? item.id : '';
       appendResource(panel, String(item.name ?? title), id, actor.id);
       if (title === 'Ports') {
         try {
-          for (const listing of await portListings(item, actor.id, native || undefined)) appendResource(panel, `Listing ${String(listing.id)}`, String(listing.id), actor.id);
-        } catch (error) { appendResourceError(panel, `Listings for ${String(item.name ?? item.id)}`, error); }
+          for (const listing of await portListings(item, actor.id, native || undefined)) {
+            identityDisplay.register(listing);
+            appendResource(panel, `Listing ${typeof listing.name === 'string' ? listing.name : identityDisplay.label(String(listing.id))}`, String(listing.id), actor.id);
+          }
+        } catch (error) { appendResourceError(panel, `Listings for ${String(item.name ?? identityDisplay.label(String(item.id)))}`, error); }
       }
     }
   }
@@ -454,8 +520,9 @@ async function renderActorResources(actor: FCTPActor & Record<string, unknown>):
     for (const reference of linked) {
       let item: Record<string, unknown>;
       try { item = await resolveReference<Record<string, unknown>>(reference, actor.id, requestOptions); }
-      catch (error) { appendResourceError(panel, `${name} ${String(reference)}`, error); continue; }
+      catch (error) { appendResourceError(panel, `${name} ${identityDisplay.label(typeof reference === 'string' ? reference : String(isRecord(reference) ? reference.id ?? reference : reference))}`, error, typeof reference === 'string' ? reference : isRecord(reference) && typeof reference.id === 'string' ? reference.id : undefined); continue; }
       const id = String(item.id ?? reference);
+      identityDisplay.register(item);
       appendResource(panel, String(item.name ?? item.type ?? name), id, actor.id);
       const media = Array.isArray(item.media) ? item.media : [];
       for (const entry of media) if (isRecord(entry) && typeof entry.url === 'string') appendResource(panel, `Text ${String(item.name ?? '')}`, entry.url, actor.id, 'text');
@@ -463,16 +530,21 @@ async function renderActorResources(actor: FCTPActor & Record<string, unknown>):
       if (typeof item.asset === 'string') {
         let asset: Record<string, unknown>;
         try { asset = await resolveReference<Record<string, unknown>>(item.asset, actor.id, requestOptions); }
-        catch (error) { appendResourceError(panel, `Asset ${item.asset}`, error); continue; }
+        catch (error) { appendResourceError(panel, `Asset ${identityDisplay.label(item.asset)}`, error, item.asset); continue; }
+        identityDisplay.register(asset);
         for (const entry of Array.isArray(asset.media) ? asset.media : []) if (isRecord(entry) && typeof entry.url === 'string') appendResource(panel, `Asset text ${String(asset.name ?? '')}`, entry.url, actor.id, 'text');
       }
     }
   }
 }
 
-function appendResourceError(panel: HTMLElement, label: string, error: unknown): void {
+function appendResourceError(panel: HTMLElement, label: string, error: unknown, address?: string): void {
   const message = document.createElement('p');
   message.textContent = `${label}: ${error instanceof Error ? error.message : String(error)}`;
+  if (address && URL.canParse(address)) {
+    const details = technicalDetails([{ label: 'Failed resource', address }]);
+    if (details) message.append(details);
+  }
   panel.append(message);
 }
 
@@ -486,9 +558,11 @@ function applyRoleScope(): void {
 function renderDiscovery(id: string, result: BrowserLocalActionDiscovery): void {
   const panel = byId(id);
   panel.replaceChildren();
+  registerFetchedIdentities(result.state);
   const state = document.createElement('pre');
   state.textContent = formatDiscovery(result);
   panel.append(state);
+  appendTechnicalDetails(id, result.state);
   for (const action of result.actions) {
     const item = document.createElement('article');
     const title = document.createElement('h4'); title.textContent = action.label;
@@ -537,12 +611,13 @@ form('session-form').addEventListener('submit', (event) => {
     for (const id of ['registry-state', 'policy-state', 'simulation-state', 'registry-discovery', 'policy-discovery', 'simulation-discovery', 'policy-result', 'simulation-result', 'exit-result', 'actor-result', 'resource-result']) byId(id).replaceChildren();
     const resourcePanel = byId('resource-browser');
     for (const child of [...resourcePanel.children]) if (!(child instanceof HTMLButtonElement && child.dataset.resourceChoice === 'true')) child.remove();
+    resourceProvenance.clear();
     session = { role, player, vessel, credential };
     authoring.sessionChanged();
     credentialField.value = '';
     applyRoleScope();
     const status = byId('session-status');
-    status.textContent = `Session applied: ${role}${player ? ` · Player ${player}` : ''}${vessel ? ` · vessel ${vessel}` : ''}. Credential held in page memory.`;
+    status.textContent = `Session applied: ${role}${player ? ` · Player ${identityDisplay.label(player)}` : ''}${vessel ? ` · vessel ${identityDisplay.label(vessel)}` : ''}. Credential held in page memory.`;
     return status.textContent;
   });
 });
@@ -552,9 +627,13 @@ for (const [action, kind] of [['discover-registry', 'registry'], ['discover-poli
 }
 
 form('actor-form').addEventListener('submit', (event) => { event.preventDefault(); void discoverActor(); });
+field('resource-get-form', 'uri').addEventListener('input', () => { field('resource-get-form', 'resourceActor').value = ''; });
 form('resource-get-form').addEventListener('submit', (event) => {
   event.preventDefault();
-  void task('resource-result', () => getAuthenticated(value('resource-get-form', 'uri'), value('resource-get-form', 'resourceActor'), playerToken(), value('resource-get-form', 'route') as 'direct' | 'proxy', config));
+  void task('resource-result', async () => {
+    const uri = value('resource-get-form', 'uri');
+    return getAuthenticated(uri, value('resource-get-form', 'resourceActor'), playerToken(), value('resource-get-form', 'route') as 'direct' | 'proxy', config, resourceProvenance);
+  });
 });
 form('exit-form').addEventListener('submit', (event) => { event.preventDefault(); void verifySelectedExit(); });
 
