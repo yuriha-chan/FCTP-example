@@ -94,7 +94,7 @@ const authoring = setupAuthoring({
 
 const actionOutputs: Record<string, string> = {
   'discover-registry': 'registry-discovery', 'discover-policy': 'policy-discovery', 'discover-simulation': 'simulation-discovery',
-  'issue-token': 'registry-state', 'rotate-token': 'registry-state', 'digest-request': 'registry-state', 'revoke-token': 'registry-state',
+  'issue-token': 'registry-state', 'rotate-token': 'registry-state', 'digest-request': 'registry-state', 'revoke-token': 'registry-state', 'refresh-fleet': 'registry-fleet',
   'registry-entry': 'registry-state', 'registry-departure': 'registry-state', 'registry-adoption': 'registry-state', 'refresh-authority': 'registry-state',
   'policy-update': 'policy-result', 'admission-update': 'policy-result', 'policy-mine': 'policy-result', 'policy-manufacture': 'policy-result',
   'policy-transfer': 'policy-result', 'policy-load': 'policy-result', 'policy-unload': 'policy-result', 'refresh-policy': 'policy-state',
@@ -128,6 +128,12 @@ async function refreshAuthority(): Promise<void> {
     button.addEventListener('click', () => { field('exit-form', 'exitUri').value = uri; void verifySelectedExit(); });
     output.append(document.createElement('br'), button);
   }
+}
+
+async function refreshFleet(): Promise<void> {
+  if (!session || session.role !== 'authority-admin') throw new Error('Apply an authority administrator session first');
+  const fleet = await localRequest<Record<string, unknown>>(config.origins.authority, '/local/registry/fleet', { token: authorityAdmin() });
+  show('registry-fleet', fleet);
 }
 
 async function refreshPolicy(): Promise<void> {
@@ -395,6 +401,7 @@ addAction('registry-adoption', async () => {
   await refreshAuthority();
 });
 addAction('refresh-authority', async () => refreshAuthority());
+addAction('refresh-fleet', async () => refreshFleet());
 
 addAction('policy-update', async () => {
   const policy = jsonField('policy-admin-form', 'policy');

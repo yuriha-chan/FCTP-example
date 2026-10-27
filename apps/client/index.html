@@ -91,7 +91,9 @@
           <label>Resource Actor URI<input name="resourceActor"></label>
           <button type="button" data-action="digest-request" data-roles="authority-admin">Request token digest</button>
           <button type="button" data-action="revoke-token" data-roles="authority-admin">Revoke resource token</button>
+          <button type="button" data-action="refresh-fleet" data-roles="authority-admin">Refresh Registry fleet</button>
         </form>
+        <pre id="registry-fleet" data-roles="authority-admin" aria-live="polite"></pre>
         <form id="registry-form" class="grid-form" data-roles="player">
           <label>Destination demo Territory<select name="destination"><option value="policy">Territory A · Policy</option><option value="simulation">Territory B · Simulation</option></select></label>
           <label>Destination Territory Actor URI<input name="territory" required></label>
@@ -121,6 +123,7 @@
             <button type="button" data-action="policy-update">Update policy</button>
             <label>Admission JSON<textarea name="admission" rows="6" spellcheck="false">{}</textarea></label>
             <button type="button" data-action="admission-update">Update admission</button>
+            <button type="button" data-action="refresh-policy">Refresh policy and inventory view</button>
           </form>
           <div><h3>Territory-owned inventory, production and admission decisions</h3><pre id="policy-state"></pre></div>
         </div>
@@ -144,6 +147,7 @@
             <label>Facilities JSON<textarea name="facilities" rows="8" spellcheck="false">{}</textarea></label>
             <button type="button" data-action="facilities-update">Configure facilities</button>
             <button type="button" data-action="simulation-tick">Advance one tick</button>
+            <button type="button" data-action="refresh-simulation">Refresh facilities and inventory view</button>
           </form>
           <div><h3>Territory-owned facilities, jobs, cargo, decisions and evidence/trust</h3><pre id="simulation-state"></pre></div>
         </div>
