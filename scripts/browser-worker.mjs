@@ -111,7 +111,7 @@ async function start() {
   auditPath = auditPathFor(config.runId);
   await mkdir(dirname(socketPath), { recursive: true, mode: 0o700 });
   await chmod(dirname(socketPath), 0o700);
-  const defaultPlayer = config.actors.players.player;
+  const defaultPlayer = config.actors.players[config.players[0].name];
   const clientConfig = {
     origins,
     actors: {

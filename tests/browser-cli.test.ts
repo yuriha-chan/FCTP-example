@@ -10,7 +10,8 @@ import { createAuthorityApp } from '../apps/test-authority/src/app.js';
 import { createPolicyApp } from '../apps/territory-policy/src/app.js';
 import { createSimulationApp } from '../apps/territory-sim/src/app.js';
 
-const playerNames = ['player', 'player-2', 'player-3', 'player-4', 'player-5'];
+const playerNames = ['sana-okonkwo', 'tavi-lindgren', 'priya-nandakumar', 'halvar-ostergaard', 'leon-castellan'];
+const administratorNames = ['orla-fitzgerald', 'dmitri-sato', 'mirela-vukovic'];
 const adminSecret = 'browser-cli-isolated-admin-secret';
 
 async function freePort(): Promise<number> {
@@ -103,7 +104,7 @@ test('spawned browser CLI keeps isolated Player and administrator daemon session
   const simulation = services.simulation;
   const nativeTokens = new Map<string, string>();
   const adminHeaders = { Authorization: `Bearer ${adminSecret}`, 'Content-Type': 'application/json' };
-  for (const name of ['player-2', 'player-3']) {
+  for (const name of ['tavi-lindgren', 'priya-nandakumar']) {
     const response = await fetch(`${origins.authority}/local/home/issue`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ actor: authority.ids.players[name] }) });
     assert.equal(response.status, 200);
     nativeTokens.set(name, (await response.json() as { nativeToken: string }).nativeToken);
@@ -117,6 +118,8 @@ test('spawned browser CLI keeps isolated Player and administrator daemon session
   const config = {
     runId: 'browser-cli-isolated',
     origins: { authority: [origins.authority], territoryA: origins.policy, territoryB: origins.simulation },
+    players: playerNames.map((name) => ({ name, role: name, player: authority.ids.players[name], vessel: authority.ids.vessels[name] })),
+    administrators: administratorNames.map((name, index) => ({ name, sessionRole: ['policy-admin', 'simulation-admin', 'authority-admin'][index] })),
     actors: {
       registry: authority.ids.actor.registry,
       home: authority.ids.actor.home,
@@ -128,9 +131,9 @@ test('spawned browser CLI keeps isolated Player and administrator daemon session
   };
   await writeFile(join(configRoot, 'runtime-config.json'), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   const credentialFiles = [
-    ['player-2', { role: 'player-2', player: authority.ids.players['player-2'], vessel: authority.ids.vessels['player-2'], nativeToken: nativeTokens.get('player-2') }],
-    ['player-3', { role: 'player-3', player: authority.ids.players['player-3'], vessel: authority.ids.vessels['player-3'], nativeToken: nativeTokens.get('player-3') }],
-    ['admin-1', { role: 'administrator-1', territoryAAdmin: adminSecret }]
+    ['tavi-lindgren', { role: 'tavi-lindgren', player: authority.ids.players['tavi-lindgren'], vessel: authority.ids.vessels['tavi-lindgren'], nativeToken: nativeTokens.get('tavi-lindgren') }],
+    ['priya-nandakumar', { role: 'priya-nandakumar', player: authority.ids.players['priya-nandakumar'], vessel: authority.ids.vessels['priya-nandakumar'], nativeToken: nativeTokens.get('priya-nandakumar') }],
+    ['orla-fitzgerald', { role: 'orla-fitzgerald', territoryAAdmin: adminSecret }]
   ] as const;
   for (const [role, credentials] of credentialFiles) {
     const roleDirectory = join(runtimeDirectory, config.runId, role);
@@ -140,16 +143,16 @@ test('spawned browser CLI keeps isolated Player and administrator daemon session
     await chmod(credentialPath, 0o600);
   }
 
-  openedRoles.add('player-2');
-  let view = await cli(configRoot, ['player-2', 'open']);
-  assert.match(view, /Player player-2.*vessel player-2/);
+  openedRoles.add('tavi-lindgren');
+  let view = await cli(configRoot, ['tavi-lindgren', 'open']);
+  assert.match(view, /Player tavi-lindgren.*vessel tavi-lindgren/);
   assert.match(view, /Credential: \[REDACTED\]/);
-  assert.doesNotMatch(view, new RegExp(escapeRegExp(nativeTokens.get('player-2')!)));
-  view = await cli(configRoot, ['player-2', 'view']);
-  assert.match(view, /Player player-2.*vessel player-2/);
-  const refreshed = await cli(configRoot, ['player-2', 'batch', JSON.stringify([{ command: 'click', ref: refFor(view, 'Refresh A state and actions') }])]);
+  assert.doesNotMatch(view, new RegExp(escapeRegExp(nativeTokens.get('tavi-lindgren')!)));
+  view = await cli(configRoot, ['tavi-lindgren', 'view']);
+  assert.match(view, /Player tavi-lindgren.*vessel tavi-lindgren/);
+  const refreshed = await cli(configRoot, ['tavi-lindgren', 'batch', JSON.stringify([{ command: 'click', ref: refFor(view, 'Refresh A state and actions') }])]);
   assert.match(refreshed, /Mine one ore/);
-  const mined = await cli(configRoot, ['player-2', 'batch', JSON.stringify([
+  const mined = await cli(configRoot, ['tavi-lindgren', 'batch', JSON.stringify([
     { command: 'click', ref: refFor(refreshed, 'Mine one ore') },
     { command: 'click', ref: refFor(refreshed, 'Mine one ore') }
   ])]);
@@ -157,18 +160,18 @@ test('spawned browser CLI keeps isolated Player and administrator daemon session
   const policyState = await policy.host.server.store.read((store) => structuredClone(store.domain.policyTerritory)) as { state?: { rawInventory?: Record<string, number> } };
   assert.equal(policyState.state?.rawInventory?.[policy.ids.varieties.ore], 2, 'the rendered Mine action changes actual Territory A state');
 
-  view = await cli(configRoot, ['player-2', 'reload']);
-  assert.match(view, /Player player-2.*vessel player-2/);
+  view = await cli(configRoot, ['tavi-lindgren', 'reload']);
+  assert.match(view, /Player tavi-lindgren.*vessel tavi-lindgren/);
   assert.match(view, /Credential: \[REDACTED\]/);
 
-  openedRoles.add('player-3');
-  const player3 = await cli(configRoot, ['player-3', 'open']);
-  assert.match(player3, /Player player-3.*vessel player-3/);
-  assert.doesNotMatch(player3, new RegExp(escapeRegExp(authority.ids.players['player-2']!)));
-  assert.doesNotMatch(player3, new RegExp(escapeRegExp(authority.ids.vessels['player-2']!)));
+  openedRoles.add('priya-nandakumar');
+  const player3 = await cli(configRoot, ['priya-nandakumar', 'open']);
+  assert.match(player3, /Player priya-nandakumar.*vessel priya-nandakumar/);
+  assert.doesNotMatch(player3, new RegExp(escapeRegExp(authority.ids.players['tavi-lindgren']!)));
+  assert.doesNotMatch(player3, new RegExp(escapeRegExp(authority.ids.vessels['tavi-lindgren']!)));
 
-  openedRoles.add('administrator-1');
-  const administrator = await cli(configRoot, ['administrator-1', 'open']);
+  openedRoles.add('orla-fitzgerald');
+  const administrator = await cli(configRoot, ['orla-fitzgerald', 'open']);
   assert.match(administrator, /Role: policy-admin/);
   assert.match(administrator, /Update policy/);
   assert.match(administrator, /Update admission/);

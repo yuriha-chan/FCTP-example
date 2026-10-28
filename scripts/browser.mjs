@@ -8,10 +8,6 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const RUN_ROOT = resolve(REPOSITORY_ROOT, 'run');
-const ROLE_NAMES = Object.freeze([
-  'player-1', 'player-2', 'player-3', 'player-4', 'player-5',
-  'administrator-1', 'administrator-2', 'administrator-3'
-]);
 const COMMANDS = Object.freeze(['open', 'view', 'fill', 'select', 'click', 'submit', 'batch', 'back', 'reload', 'close']);
 const WORKER_PATH = resolve(dirname(fileURLToPath(import.meta.url)), 'browser-worker.mjs');
 
@@ -21,7 +17,7 @@ export function runtimeConfigRoot(env = process.env) {
 
 export function parseCommand(args) {
   const [role, command, ...operands] = args;
-  if (!ROLE_NAMES.includes(role)) throw new TypeError('Unknown browser role');
+  if (typeof role !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(role)) throw new TypeError('Unknown browser account');
   if (!COMMANDS.includes(command)) throw new TypeError('Unknown browser command');
   const counts = { open: 0, view: 0, fill: 2, select: 2, click: 1, submit: 1, batch: 1, back: 0, reload: 0, close: 0 };
   if (operands.length !== counts[command]) throw new TypeError(`Invalid operands for ${command}`);
@@ -51,16 +47,20 @@ export function validateRuntimeConfig(value) {
   if (!value || typeof value !== 'object' || typeof value.runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.runId)) throw new TypeError('Invalid run configuration');
   const origins = value.origins;
   const actors = value.actors;
+  const uri = (candidate) => typeof candidate === 'string' && new URL(candidate).protocol.startsWith('http');
   if (!origins || !Array.isArray(origins.authority) || origins.authority.length !== 1 || !origins.territoryA || !origins.territoryB || !actors?.players || !actors?.vessels) throw new TypeError('Run configuration is missing public browser origins or actors');
-  if (Object.keys(actors.players).length !== 5 || Object.keys(actors.vessels).length !== 5) throw new TypeError('Run config must contain exactly five Player and Vessel mappings');
+  if (!Array.isArray(value.players) || value.players.length !== 5 || !Array.isArray(value.administrators) || value.administrators.length !== 3) throw new TypeError('Run config must contain five Players and three administrators');
+  const playerNames = value.players.map((player) => player?.name);
+  const administratorNames = value.administrators.map((administrator) => administrator?.name);
+  if ([...playerNames, ...administratorNames].some((name) => typeof name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) || new Set([...playerNames, ...administratorNames]).size !== 8) throw new TypeError('Run config contains invalid or duplicate accounts');
+  if (value.players.some((player, index) => player.role !== playerNames[index] || !uri(player.player) || !uri(player.vessel)) || value.administrators.some((administrator, index) => administrator.sessionRole !== ['policy-admin', 'simulation-admin', 'authority-admin'][index])) throw new TypeError('Run config contains invalid role assignments');
+  if (Object.keys(actors.players).length !== 5 || Object.keys(actors.vessels).length !== 5 || playerNames.some((name) => !Object.hasOwn(actors.players, name) || !Object.hasOwn(actors.vessels, name))) throw new TypeError('Run config must contain exactly five Player and Vessel mappings');
   const authorityOrigin = new URL(origins.authority[0]);
   const territoryAOrigin = new URL(origins.territoryA);
   const territoryBOrigin = new URL(origins.territoryB);
-  const uri = (candidate) => typeof candidate === 'string' && new URL(candidate).protocol.startsWith('http');
   if (![authorityOrigin, territoryAOrigin, territoryBOrigin].every((url) => ['http:', 'https:'].includes(url.protocol))) throw new TypeError('Invalid service origin');
   for (const field of ['registry', 'home']) if (!uri(actors[field])) throw new TypeError(`Invalid public actor: ${field}`);
-  for (let index = 1; index <= 5; index += 1) {
-    const key = index === 1 ? 'player' : `player-${index}`;
+  for (const key of playerNames) {
     if (!uri(actors.players[key]) || !uri(actors.vessels[key])) throw new TypeError(`Run config must define ${key} and its vessel`);
   }
   if (!uri(actors.territoryA) || !uri(actors.territoryB)) throw new TypeError('Run config must define both Territory Actors');
@@ -68,28 +68,22 @@ export function validateRuntimeConfig(value) {
 }
 
 export function roleSession(role, config, credentials) {
-  if (!ROLE_NAMES.includes(role)) throw new TypeError('Unknown browser role');
   if (!credentials || typeof credentials !== 'object') throw new TypeError('Missing role credentials');
-  if (role.startsWith('player-')) {
-    const index = Number(role.slice('player-'.length));
-    const name = index === 1 ? 'player' : `player-${index}`;
-    const player = config.actors.players[name];
-    const vessel = config.actors.vessels[name];
+  const configuredPlayer = config.players.find((player) => player.name === role);
+  if (configuredPlayer) {
+    const player = config.actors.players[role];
+    const vessel = config.actors.vessels[role];
     if (credentials.role !== role || credentials.player !== player || credentials.vessel !== vessel || typeof credentials.nativeToken !== 'string' || !credentials.nativeToken) throw new TypeError('Role credentials do not match configured Player and vessel');
     return { sessionRole: 'player', player, vessel, credential: credentials.nativeToken };
   }
-  if (role === 'administrator-1') {
-    if (credentials.role !== role || typeof credentials.territoryAAdmin !== 'string' || !credentials.territoryAAdmin) throw new TypeError('Missing administrator-1 credential');
-    return { sessionRole: 'policy-admin', player: '', vessel: '', credential: credentials.territoryAAdmin };
-  }
-  if (role === 'administrator-2') {
-    if (credentials.role !== role || typeof credentials.territoryBAdmin !== 'string' || !credentials.territoryBAdmin) throw new TypeError('Missing administrator-2 credential');
-    return { sessionRole: 'simulation-admin', player: '', vessel: '', credential: credentials.territoryBAdmin };
-  }
-  if (credentials.role !== role || typeof credentials.authorityAdmin !== 'string' || !credentials.authorityAdmin) throw new TypeError('Missing administrator-3 credential');
-  const player = config.actors.players.player;
-  const vessel = config.actors.vessels.player;
-  return { sessionRole: 'authority-admin', player, vessel, credential: credentials.authorityAdmin };
+  const administrator = config.administrators.find((entry) => entry.name === role);
+  if (!administrator || credentials.role !== role) throw new TypeError('Unknown browser account or mismatched credentials');
+  const fields = { 'policy-admin': 'territoryAAdmin', 'simulation-admin': 'territoryBAdmin', 'authority-admin': 'authorityAdmin' };
+  const field = fields[administrator.sessionRole];
+  if (typeof credentials[field] !== 'string' || !credentials[field]) throw new TypeError(`Missing ${role} credential`);
+  const authority = administrator.sessionRole === 'authority-admin';
+  const primary = config.players[0].name;
+  return { sessionRole: administrator.sessionRole, player: authority ? config.actors.players[primary] : '', vessel: authority ? config.actors.vessels[primary] : '', credential: credentials[field] };
 }
 
 export function extractRef(markdown, label) {
@@ -101,21 +95,20 @@ export function extractRef(markdown, label) {
 }
 
 export function socketPathFor(config, role, runRoot = RUN_ROOT) {
-  if (!ROLE_NAMES.includes(role)) throw new TypeError('Unknown browser role');
   validateRuntimeConfig(config);
+  if (![...config.players, ...config.administrators].some((entry) => entry.name === role)) throw new TypeError('Unknown browser account');
   return resolve(runRoot, 'runtime', config.runId, role, 'browser.sock');
 }
 
 export function credentialPathFor(config, role, runRoot = RUN_ROOT) {
-  if (!ROLE_NAMES.includes(role)) throw new TypeError('Unknown browser role');
   validateRuntimeConfig(config);
-  const credentialRole = role.startsWith('administrator-') ? role.replace('administrator-', 'admin-') : role;
-  return resolve(runRoot, 'runtime', config.runId, credentialRole, 'credentials.json');
+  if (![...config.players, ...config.administrators].some((entry) => entry.name === role)) throw new TypeError('Unknown browser account');
+  return resolve(runRoot, 'runtime', config.runId, role, 'credentials.json');
 }
 
 export function startupDiagnosticPathFor(config, role, runRoot = RUN_ROOT) {
-  if (!ROLE_NAMES.includes(role)) throw new TypeError('Unknown browser role');
   validateRuntimeConfig(config);
+  if (![...config.players, ...config.administrators].some((entry) => entry.name === role)) throw new TypeError('Unknown browser account');
   return resolve(runRoot, 'runtime', config.runId, role, 'browser-startup-failure.txt');
 }
 
@@ -181,6 +174,7 @@ export async function main(args = process.argv.slice(2)) {
     const parsed = parseCommand(args);
     const configRoot = runtimeConfigRoot();
     const config = await readConfig(configRoot);
+    if (![...config.players, ...config.administrators].some((entry) => entry.name === parsed.role)) throw new TypeError('Unknown browser account');
     const runRoot = configRoot;
     const socketPath = socketPathFor(config, parsed.role, runRoot);
     if (parsed.command === 'open') {

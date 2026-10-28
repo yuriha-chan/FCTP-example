@@ -12,20 +12,18 @@ import { createJsonLineServer, createSerializedDispatcher } from '../scripts/bro
 function config() {
   const actor = (name) => `http://127.0.0.1:4200/actors/${name}`;
   const vessel = (name) => `http://127.0.0.1:4200/objects/vessels/${name}`;
-  const players = { player: actor('player') };
-  const vessels = { player: vessel('player') };
-  for (let index = 2; index <= 5; index += 1) {
-    players[`player-${index}`] = actor(`player-${index}`);
-    vessels[`player-${index}`] = vessel(`player-${index}`);
-  }
-  return { runId: 'isolated-run', origins: { authority: ['http://127.0.0.1:4200'], territoryA: 'http://127.0.0.1:4210', territoryB: 'http://127.0.0.1:4211' }, actors: { registry: actor('registry'), home: actor('home'), players, vessels, territoryA: actor('territory-a'), territoryB: actor('territory-b') } };
+  const names = ['sana-okonkwo', 'tavi-lindgren', 'priya-nandakumar', 'halvar-ostergaard', 'leon-castellan'];
+  const players = Object.fromEntries(names.map((name) => [name, actor(name)]));
+  const vessels = Object.fromEntries(names.map((name) => [name, vessel(name)]));
+  const administrators = ['orla-fitzgerald', 'dmitri-sato', 'mirela-vukovic'];
+  return { runId: 'isolated-run', origins: { authority: ['http://127.0.0.1:4200'], territoryA: 'http://127.0.0.1:4210', territoryB: 'http://127.0.0.1:4211' }, players: names.map((name) => ({ name, role: name, player: players[name], vessel: vessels[name] })), administrators: administrators.map((name, index) => ({ name, sessionRole: ['policy-admin', 'simulation-admin', 'authority-admin'][index] })), actors: { registry: actor('registry'), home: actor('home'), players, vessels, territoryA: actor('territory-a'), territoryB: actor('territory-b') } };
 }
 
 test('command parser accepts only the assigned role and exact operation arity', () => {
-  assert.deepEqual(parseCommand(['player-2', 'fill', 'ref-x', 'some value']), { role: 'player-2', command: 'fill', ref: 'ref-x', value: 'some value' });
-  assert.throws(() => parseCommand(['observer', 'view']), /Unknown browser role/);
-  assert.throws(() => parseCommand(['player-1', 'post']), /Unknown browser command/);
-  assert.throws(() => parseCommand(['player-1', 'click', 'ref', 'extra']), /Invalid operands/);
+  assert.deepEqual(parseCommand(['tavi-lindgren', 'fill', 'ref-x', 'some value']), { role: 'tavi-lindgren', command: 'fill', ref: 'ref-x', value: 'some value' });
+  assert.throws(() => parseCommand(['bad_account', 'view']), /Unknown browser account/);
+  assert.throws(() => parseCommand(['sana-okonkwo', 'post']), /Unknown browser command/);
+  assert.throws(() => parseCommand(['sana-okonkwo', 'click', 'ref', 'extra']), /Invalid operands/);
 });
 
 test('runtime config defaults to run and resolves relative overrides from the repository root', () => {
@@ -36,35 +34,30 @@ test('runtime config defaults to run and resolves relative overrides from the re
 test('runtime parsing permits exactly configured five Players and maps only public origins', () => {
   const runtime = config();
   assert.deepEqual(validateRuntimeConfig(runtime), { authority: 'http://127.0.0.1:4200', policy: 'http://127.0.0.1:4210', simulation: 'http://127.0.0.1:4211' });
-  delete runtime.actors.vessels['player-5'];
+  delete runtime.actors.vessels['leon-castellan'];
   assert.throws(() => validateRuntimeConfig(runtime), /exactly five/);
-  assert.equal(socketPathFor(config(), 'administrator-2', '/tmp/root'), '/tmp/root/runtime/isolated-run/administrator-2/browser.sock');
-  assert.throws(() => socketPathFor(config(), 'observer', '/tmp/root'), /Unknown browser role/);
+  assert.equal(socketPathFor(config(), 'dmitri-sato', '/tmp/root'), '/tmp/root/runtime/isolated-run/dmitri-sato/browser.sock');
+  assert.throws(() => socketPathFor(config(), 'observer', '/tmp/root'), /Unknown browser account/);
 });
 
-test('credential paths map all eight daemon roles to their existing role directories', () => {
+test('credential and socket paths use configured public accounts directly', () => {
   const runtime = config();
-  for (let index = 1; index <= 5; index += 1) {
-    const role = `player-${index}`;
-    assert.equal(credentialPathFor(runtime, role, '/tmp/root'), `/tmp/root/runtime/isolated-run/${role}/credentials.json`);
-  }
-  for (let index = 1; index <= 3; index += 1) {
-    assert.equal(credentialPathFor(runtime, `administrator-${index}`, '/tmp/root'), `/tmp/root/runtime/isolated-run/admin-${index}/credentials.json`);
-  }
+  assert.equal(credentialPathFor(runtime, 'sana-okonkwo', '/tmp/root'), '/tmp/root/runtime/isolated-run/sana-okonkwo/credentials.json');
+  assert.equal(credentialPathFor(runtime, 'orla-fitzgerald', '/tmp/root'), '/tmp/root/runtime/isolated-run/orla-fitzgerald/credentials.json');
 });
 
 test('each role resolves only its own credential field and Player identity', () => {
   const runtime = config();
-  assert.deepEqual(roleSession('player-3', runtime, { role: 'player-3', player: runtime.actors.players['player-3'], vessel: runtime.actors.vessels['player-3'], nativeToken: 'secret-player', diplomaticTokens: { A: 'ignored', B: 'ignored' } }), {
-    sessionRole: 'player', player: runtime.actors.players['player-3'], vessel: runtime.actors.vessels['player-3'], credential: 'secret-player'
+  assert.deepEqual(roleSession('priya-nandakumar', runtime, { role: 'priya-nandakumar', player: runtime.actors.players['priya-nandakumar'], vessel: runtime.actors.vessels['priya-nandakumar'], nativeToken: 'secret-player', diplomaticTokens: { A: 'ignored', B: 'ignored' } }), {
+    sessionRole: 'player', player: runtime.actors.players['priya-nandakumar'], vessel: runtime.actors.vessels['priya-nandakumar'], credential: 'secret-player'
   });
-  assert.equal(roleSession('administrator-1', runtime, { role: 'administrator-1', territoryAAdmin: 'admin-a' }).credential, 'admin-a');
-  assert.equal(roleSession('administrator-2', runtime, { role: 'administrator-2', territoryBAdmin: 'admin-b' }).sessionRole, 'simulation-admin');
-  const admin3 = roleSession('administrator-3', runtime, { role: 'administrator-3', authorityAdmin: 'admin-c' });
+  assert.equal(roleSession('orla-fitzgerald', runtime, { role: 'orla-fitzgerald', territoryAAdmin: 'admin-a' }).credential, 'admin-a');
+  assert.equal(roleSession('dmitri-sato', runtime, { role: 'dmitri-sato', territoryBAdmin: 'admin-b' }).sessionRole, 'simulation-admin');
+  const admin3 = roleSession('mirela-vukovic', runtime, { role: 'mirela-vukovic', authorityAdmin: 'admin-c' });
   assert.equal(admin3.sessionRole, 'authority-admin');
-  assert.equal(admin3.vessel, runtime.actors.vessels.player);
-  assert.throws(() => roleSession('player-3', runtime, { role: 'player-3', player: runtime.actors.players.player, vessel: runtime.actors.vessels.player, nativeToken: 'wrong' }), /do not match/);
-  assert.equal(roleSession('administrator-3', runtime, { role: 'administrator-3', authorityAdmin: 'secret', territoryAAdmin: 'must-not-use' }).credential, 'secret');
+  assert.equal(admin3.vessel, runtime.actors.vessels['sana-okonkwo']);
+  assert.throws(() => roleSession('priya-nandakumar', runtime, { role: 'priya-nandakumar', player: runtime.actors.players['sana-okonkwo'], vessel: runtime.actors.vessels['sana-okonkwo'], nativeToken: 'wrong' }), /do not match/);
+  assert.equal(roleSession('mirela-vukovic', runtime, { role: 'mirela-vukovic', authorityAdmin: 'secret', territoryAAdmin: 'must-not-use' }).credential, 'secret');
 });
 
 test('fresh visible refs are extracted by control label without accepting missing controls', () => {
