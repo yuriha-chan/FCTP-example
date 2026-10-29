@@ -1,11 +1,28 @@
 import { deriveDiplomaticToken, type HomeLoginRequest, type HomeLoginResult } from '@fctp/auth';
-import { resolveActor, resolveWebFinger, type ActorResolution } from '@fctp/identity';
+import { parseHandle, resolveActor, resolveWebFinger, type ActorResolution } from '@fctp/identity';
 import { ResourceClient, resourceError, type ResourceRequestOptions } from '@fctp/resources';
 import { compareCargo, type CargoManifest, type FCTPActor, type URI } from '@fctp/protocol';
 export { actionIsComplete, observationIsCurrent, toPublicAccount } from './application.js';
 export type { AccountRecord, AccountScopedRequest, ActionDescriptor, ActionEvidence, ActionRecord, AuthorityRecord, AuthorityRole, LoginState, PageContext, PageResponse, PublicAccountRecord, ServerRecord, SourcedObservation } from './application.js';
 
 export interface ClientSdkOptions { fetcher?: typeof fetch; resources?: ResourceClient }
+
+export interface AccountResolution {
+  handle: string;
+  actorId: URI;
+  actor: FCTPActor;
+  homeServer: string;
+  homeOrigin: string;
+  homeAuthority: URI;
+}
+
+export interface AuthorityResolution {
+  handle: string;
+  actorId: URI;
+  actor: FCTPActor;
+  server: string;
+  roles: string[];
+}
 
 export class FctpClient {
   readonly resources: ResourceClient;
@@ -16,13 +33,63 @@ export class FctpClient {
   }
 
   resolveActor(uri: URI): Promise<ActorResolution> { return resolveActor(uri, this.#fetcher); }
-  resolveWebFinger(handle: string): Promise<ActorResolution> { return resolveWebFinger(handle, this.#fetcher); }
+  resolveWebFinger(handle: string, origin?: string): Promise<ActorResolution> { return resolveWebFinger(handle, this.#fetcher, origin); }
+
+  async resolveAccount(handle: string, options: { homeOrigin?: string } = {}): Promise<AccountResolution> {
+    const parsed = parseHandle(handle);
+    if (parsed.kind !== 'account') throw new TypeError('Expected an account handle');
+    const origin = new URL(options.homeOrigin ?? `https://${parsed.server}`).origin;
+    const resolved = await resolveWebFinger(parsed.handle, this.#fetcher, origin);
+    if (resolved.actor.role !== 'player') throw new Error('Account handle did not resolve to a Player Actor');
+    const response = await this.#fetcher(new URL('/local/info', origin), { method: 'GET', headers: { Accept: 'application/json' }, cache: 'no-store' });
+    if (!response.ok) throw new Error(`Home discovery failed: HTTP ${response.status}`);
+    const info: unknown = await response.json();
+    const advertised = isRecord(info) && isRecord(info.actor) ? info.actor.home : undefined;
+    if (typeof advertised !== 'string') throw new Error('Home discovery did not advertise an Actor');
+    const home = await resolveActor(advertised as URI, this.#fetcher);
+    if (home.actor.role !== 'home') throw new Error('Advertised Home Actor does not publish the Home role');
+    return { handle: parsed.handle, actorId: resolved.actor.id, actor: resolved.actor, homeServer: parsed.server, homeOrigin: origin, homeAuthority: home.actor.id };
+  }
+
+  async resolveAuthority(handle: string, options: { origin?: string } = {}): Promise<AuthorityResolution> {
+    const parsed = parseHandle(handle);
+    if (parsed.kind !== 'authority') throw new TypeError('Expected an authority handle');
+    const resolved = await resolveWebFinger(parsed.handle, this.#fetcher, options.origin);
+    const role = resolved.actor.role;
+    if (typeof role !== 'string' || role === 'player') throw new Error('Authority handle did not resolve to an authority Actor');
+    return { handle: parsed.handle, actorId: resolved.actor.id, actor: resolved.actor, server: parsed.server, roles: [role] };
+  }
 
   async get<T>(uri: URI, options: ResourceRequestOptions & { nativeToken?: Uint8Array | string; resourceServer?: URI } = {}): Promise<T> {
     const { nativeToken, resourceServer, ...requestOptions } = options;
     if (nativeToken !== undefined && !resourceServer) throw new TypeError('resourceServer Actor ID is required to derive a diplomatic token');
     const token = nativeToken === undefined ? requestOptions.token : await deriveDiplomaticToken(nativeToken, resourceServer!);
     return (await this.resources.get<T>(uri, { ...requestOptions, ...(token ? { token } : {}) })).value;
+  }
+
+  async resolveReference<T extends Record<string, unknown>>(value: unknown, resourceServer?: URI, options: ResourceRequestOptions & { nativeToken?: string } = {}): Promise<T> {
+    let reference: URI | undefined;
+    if (typeof value === 'string') {
+      reference = value;
+    } else if (isRecord(value)) {
+      if (typeof value.id === 'string' && Object.keys(value).length === 1) reference = value.id;
+      else return value as T;
+    }
+    if (reference === undefined) throw new TypeError('Resource reference must be an object or URI');
+    const legacy = options.token !== undefined || options.cache !== undefined || options.signal !== undefined;
+    if (legacy) {
+      const { nativeToken, ...legacyOptions } = options;
+      return this.get<T>(reference, {
+        ...legacyOptions,
+        ...(resourceServer ? { resourceServer } : {}),
+        ...(nativeToken !== undefined ? { nativeToken } : {})
+      });
+    }
+    return this.getPublicFirst<T>(reference, {
+      ...(resourceServer ? { resourceServer } : {}),
+      ...(options.nativeToken !== undefined ? { nativeToken: options.nativeToken } : {}),
+      ...(options.accept !== undefined ? { accept: options.accept } : {})
+    });
   }
 
   async login(request: HomeLoginRequest, homeOrigin: string): Promise<HomeLoginResult> {
@@ -78,11 +145,7 @@ export class FctpClient {
   }
 
   async #resolveCollectionItem<T extends Record<string, unknown>>(value: unknown, resourceServer: URI, nativeToken?: string): Promise<T> {
-    const options = { ...(nativeToken === undefined ? {} : { nativeToken }), resourceServer };
-    if (typeof value === 'string') return this.getPublicFirst<T>(value as URI, options);
-    if (isRecord(value) && typeof value.id === 'string' && Object.keys(value).length === 1) return this.getPublicFirst<T>(value.id as URI, options);
-    if (isRecord(value)) return value as T;
-    throw new TypeError('Collection item must be an object or URI reference');
+    return this.resolveReference<T>(value, resourceServer, nativeToken === undefined ? {} : { nativeToken });
   }
 
   async getActorResource<T>(actor: FCTPActor & { resources?: Record<string, unknown> }, resourceName: string, options: ResourceRequestOptions & { nativeToken?: Uint8Array | string } = {}): Promise<T> {

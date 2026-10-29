@@ -160,18 +160,26 @@ export async function resolveActor(uri: URI, fetcher: typeof fetch = fetch): Pro
   return { actor, source: 'uri' };
 }
 
-export async function resolveWebFinger(handle: string, fetcher: typeof fetch = fetch): Promise<ActorResolution> {
+export async function resolveWebFinger(handle: string, fetcher: typeof fetch = fetch, origin?: string): Promise<ActorResolution> {
   const normalized = handle.startsWith('@') ? handle : `@${handle}`;
   const at = normalized.lastIndexOf('@');
   if (at <= 1 || at === normalized.length - 1) throw new TypeError('Expected @localpart@domain');
   const domain = normalized.slice(at + 1);
   const subject = `acct:${normalized}`;
-  const endpoint = new URL(`https://${domain}/.well-known/webfinger`);
+  let endpoint: URL;
+  if (origin === undefined) {
+    endpoint = new URL(`https://${domain}/.well-known/webfinger`);
+  } else {
+    const base = new URL(origin);
+    if (base.protocol !== 'http:' && base.protocol !== 'https:') throw new TypeError('WebFinger origin must use HTTP or HTTPS');
+    if (base.host !== new URL(`https://${domain}`).host) throw new TypeError('WebFinger origin does not match handle host');
+    endpoint = new URL('/.well-known/webfinger', base.origin);
+  }
   endpoint.searchParams.set('resource', subject);
   const response = await fetcher(endpoint, { headers: { Accept: 'application/jrd+json' } });
   if (!response.ok) throw new Error(`WebFinger failed: HTTP ${response.status}`);
   const jrd = await response.json() as { subject?: string; links?: Array<{ rel?: string; type?: string; href?: string }> };
-  if (jrd.subject !== subject) throw new Error('WebFinger subject mismatch');
+  if (jrd.subject !== normalized && jrd.subject !== subject) throw new Error('WebFinger subject mismatch');
   const self = jrd.links?.find((link) => link.rel === 'self' && link.href);
   if (!self?.href) throw new Error('WebFinger response has no self link');
   const resolved = await resolveActor(self.href, fetcher);

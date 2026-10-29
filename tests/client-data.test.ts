@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { deriveDiplomaticToken, encodeNativeToken, type HomeLoginRequest, type HomeLoginResult } from '@fctp/auth';
-import { generateActorKey, createLocalDocumentLoader, parseHandle, signJsonLd, webFingerSubject, withDocuments } from '@fctp/identity';
+import { generateActorKey, createLocalDocumentLoader, parseHandle, resolveWebFinger, signJsonLd, webFingerSubject, withDocuments } from '@fctp/identity';
 import { actionIsComplete, FctpClient, observationIsCurrent, resourceAudience as sdkResourceAudience, toPublicAccount, type AccountRecord, type AccountScopedRequest, type ActionRecord, type AuthorityRecord, type PageResponse, type ServerRecord } from '@fctp/client-sdk';
 import { ResourceError } from '@fctp/resources';
 import type { URI } from '@fctp/protocol';
-import { getAuthenticated, readTextPublicThenAuthenticated, resourceAudience, verifyExit, type ClientConfig } from '../apps/client/src/client.js';
+import { getAuthenticated, readTextPublicThenAuthenticated, resolveReference, resourceAudience, verifyExit, type ClientConfig } from '../apps/client/src/client.js';
 import { formatActor, formatAuthoringEntry, formatResource } from '../apps/client/src/presentation.js';
 import { identityDisplay, technicalAddresses } from '../apps/client/src/identity-display.js';
 
@@ -835,4 +835,373 @@ test('resource audience resolution rejects unknown and ambiguous origins and pre
   assert.ok(collectionAddresses.includes(collection.orderedItems[1] as string));
   const productionAddresses = technicalAddresses({ production: [{ ingredients: [{ variety: 'https://goods.test/ore', id: 'https://items.test/ore-1', data: { reference: 'https://private.test/data' } }], tool: 'https://tools.test/press', location: { id: 'https://areas.test/foundry', territory: 'https://actors.test/territory', name: 'Foundry' }, text: 'https://authored.test/text', proof: { id: 'https://proof.test/key' } }] }).map((entry) => entry.address);
   assert.deepEqual(productionAddresses, ['https://goods.test/ore', 'https://items.test/ore-1', 'https://tools.test/press', 'https://areas.test/foundry', 'https://actors.test/territory']);
+});
+
+test('WebFinger resolution accepts matching explicit origins and both bare and acct-prefixed subjects', async () => {
+  const actorId = 'http://home.test:4200/actors/people/alice';
+  const scenarios = [
+    { handle: '@alice@home.test:4200', subject: '@alice@home.test:4200' },
+    { handle: 'alice@home.test:4200', subject: 'acct:@alice@home.test:4200' }
+  ];
+  for (const scenario of scenarios) {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = String(input);
+      calls.push({ url, init: init ?? {} });
+      if (new URL(url).pathname === '/.well-known/webfinger') {
+        return Response.json({ subject: scenario.subject, links: [{ rel: 'self', type: 'application/activity+json', href: actorId }] });
+      }
+      if (url === actorId) return Response.json({ id: actorId, type: 'Actor', role: 'player' });
+      return new Response(null, { status: 404 });
+    };
+    const resolved = await resolveWebFinger(scenario.handle, fetcher, 'http://home.test:4200');
+    assert.equal(resolved.actor.id, actorId);
+    assert.equal(resolved.source, 'webfinger');
+    const webfinger = calls.find((call) => new URL(call.url).pathname === '/.well-known/webfinger')!;
+    const endpoint = new URL(webfinger.url);
+    assert.equal(endpoint.origin, 'http://home.test:4200');
+    assert.equal(endpoint.searchParams.get('resource'), 'acct:@alice@home.test:4200');
+    assert.equal(new Headers(webfinger.init.headers).get('Accept'), 'application/jrd+json');
+  }
+});
+
+test('WebFinger resolution rejects mismatched identities and origins', async () => {
+  const actorId = 'http://home.test:4200/actors/people/alice';
+  const mismatched: typeof fetch = async (input) => {
+    if (new URL(String(input)).pathname === '/.well-known/webfinger') {
+      return Response.json({ subject: 'acct:@bob@home.test:4200', links: [{ rel: 'self', href: actorId }] });
+    }
+    return Response.json({ id: actorId, type: 'Actor', role: 'player' });
+  };
+  await assert.rejects(
+    resolveWebFinger('@alice@home.test:4200', mismatched, 'http://home.test:4200'),
+    (error: unknown) => error instanceof Error
+  );
+  let calls = 0;
+  const fetcher: typeof fetch = async () => { calls++; return new Response(null, { status: 500 }); };
+  await assert.rejects(
+    resolveWebFinger('@alice@home.test:4200', fetcher, 'http://other.test:4200'),
+    (error: unknown) => error instanceof Error
+  );
+  assert.equal(calls, 0);
+});
+
+test('resolveAccount verifies the advertised Home Actor without sending credentials', async () => {
+  const handle = '@alice@home.test:4200';
+  const accountId = 'https://home.test:4200/actors/people/alice';
+  const homeId = 'https://home.test:4200/actors/community/home';
+  const accountActor = { id: accountId, type: 'Actor', role: 'player', name: 'Alice' };
+  const homeActor = { id: homeId, type: 'Actor', role: 'home', name: 'Harbor Home' };
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = String(input);
+    calls.push({ url, init: init ?? {} });
+    const path = new URL(url).pathname;
+    if (path === '/.well-known/webfinger') return Response.json({ subject: `acct:${handle}`, links: [{ rel: 'self', href: accountId }] });
+    if (url === accountId) return Response.json(accountActor);
+    if (url === homeId) return Response.json(homeActor);
+    if (path === '/local/info') return Response.json({ kind: 'authority', actor: { home: homeId } });
+    return new Response(null, { status: 404 });
+  };
+  const result = await new FctpClient({ fetcher }).resolveAccount(handle);
+  assert.equal(result.handle, handle);
+  assert.equal(result.actorId, accountId);
+  assert.deepEqual(result.actor, accountActor);
+  assert.equal(result.homeServer, 'home.test:4200');
+  assert.equal(result.homeOrigin, 'https://home.test:4200');
+  assert.equal(result.homeAuthority, homeId);
+  for (const call of calls) {
+    assert.equal(new URL(call.url).origin, 'https://home.test:4200');
+    assert.equal(new Headers(call.init.headers).has('Authorization'), false);
+  }
+});
+
+test('resolveAccount uses an explicit matching HTTP origin and keeps equal local names distinct', async () => {
+  async function resolveAt(port: number, accountPath: string, homePath: string) {
+    const origin = `http://127.0.0.1:${port}`;
+    const handle = `@sana@127.0.0.1:${port}`;
+    const accountId = `${origin}${accountPath}`;
+    const homeId = `${origin}${homePath}`;
+    const fetcher: typeof fetch = async (input) => {
+      const url = String(input);
+      const parsed = new URL(url);
+      if (parsed.origin !== origin) return new Response(null, { status: 500 });
+      if (parsed.pathname === '/.well-known/webfinger') return Response.json({ subject: handle, links: [{ rel: 'self', href: accountId }] });
+      if (url === accountId) return Response.json({ id: accountId, type: 'Actor', role: 'player', name: 'Sana' });
+      if (url === homeId) return Response.json({ id: homeId, type: 'Actor', role: 'home' });
+      if (parsed.pathname === '/local/info') return Response.json({ actor: { home: homeId } });
+      return new Response(null, { status: 404 });
+    };
+    const result = await new FctpClient({ fetcher }).resolveAccount(handle, { homeOrigin: origin });
+    return { origin, result };
+  }
+  const first = await resolveAt(4100, '/actors/people/sana', '/actors/community/home');
+  const second = await resolveAt(4101, '/actors/people/sana', '/actors/community/home');
+  assert.equal(first.result.homeOrigin, 'http://127.0.0.1:4100');
+  assert.equal(second.result.homeOrigin, 'http://127.0.0.1:4101');
+  assert.notEqual(first.result.actorId, second.result.actorId);
+  assert.notEqual(first.result.homeAuthority, second.result.homeAuthority);
+});
+
+test('resolveAccount rejects authority handles and mismatched or non-HTTP origins before fetching', async () => {
+  let calls = 0;
+  const fetcher: typeof fetch = async () => { calls++; return new Response(null, { status: 500 }); };
+  const client = new FctpClient({ fetcher });
+  await assert.rejects(client.resolveAccount('@alice.home@home.test:4200'), (error: unknown) => error instanceof Error);
+  await assert.rejects(client.resolveAccount('@alice@home.test:4200', { homeOrigin: 'http://other.test:4200' }), (error: unknown) => error instanceof Error);
+  await assert.rejects(client.resolveAccount('@alice@home.test:4200', { homeOrigin: 'ftp://home.test:4200' }), (error: unknown) => error instanceof Error);
+  assert.equal(calls, 0);
+});
+
+test('resolveAccount rejects non-Player accounts and malformed, missing, unverified, or failed Home discovery', async () => {
+  const handle = '@alice@home.test:4200';
+  const accountId = 'https://home.test:4200/actors/people/alice';
+  const homeId = 'https://home.test:4200/actors/community/home';
+  async function attempt(accountRole: string, infoResponse: () => Response, homeResponse: () => Response): Promise<void> {
+    const fetcher: typeof fetch = async (input) => {
+      const url = String(input);
+      const path = new URL(url).pathname;
+      if (path === '/.well-known/webfinger') return Response.json({ subject: handle, links: [{ rel: 'self', href: accountId }] });
+      if (url === accountId) return Response.json({ id: accountId, type: 'Actor', role: accountRole });
+      if (path === '/local/info') return infoResponse();
+      if (url === homeId) return homeResponse();
+      return new Response(null, { status: 404 });
+    };
+    await assert.rejects(
+      new FctpClient({ fetcher }).resolveAccount(handle),
+      (error: unknown) => error instanceof Error
+    );
+  }
+  const home = () => Response.json({ id: homeId, type: 'Actor', role: 'home' });
+  await attempt('registry', () => Response.json({ actor: { home: homeId } }), home);
+  await attempt('player', () => Response.json({}), home);
+  await attempt('player', () => Response.json({ actor: {} }), home);
+  await attempt('player', () => Response.json({ actor: { home: 42 } }), home);
+  await attempt('player', () => Response.json({ actor: { home: homeId } }), () => Response.json({ id: homeId, type: 'Actor', role: 'registry' }));
+  await attempt('player', () => Response.json({ actor: { home: homeId } }), () => new Response(null, { status: 404 }));
+  await attempt('player', () => new Response(null, { status: 500 }), home);
+});
+
+test('resolveAuthority returns the published authority role from the resolved Actor', async () => {
+  const handle = '@orla.home@harbor.test:4200';
+  const actorId = 'http://harbor.test:4200/actors/authorities/orla-registry';
+  const actor = { id: actorId, type: 'Actor', role: 'registry', name: 'Orla Registry' };
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = String(input);
+    calls.push({ url, init: init ?? {} });
+    const path = new URL(url).pathname;
+    if (path === '/.well-known/webfinger') return Response.json({ subject: handle, links: [{ rel: 'self', href: actorId }] });
+    if (url === actorId) return Response.json(actor);
+    return new Response(null, { status: 404 });
+  };
+  const result = await new FctpClient({ fetcher }).resolveAuthority(handle, { origin: 'http://harbor.test:4200' });
+  assert.equal(result.handle, handle);
+  assert.equal(result.actorId, actorId);
+  assert.deepEqual(result.actor, actor);
+  assert.equal(result.server, 'harbor.test:4200');
+  assert.deepEqual(result.roles, ['registry']);
+  for (const call of calls) {
+    assert.equal(new URL(call.url).origin, 'http://harbor.test:4200');
+    assert.equal(new Headers(call.init.headers).has('Authorization'), false);
+  }
+});
+
+test('resolveAuthority rejects account handles, Player or role-less Actors, invalid origins, and failed reads', async () => {
+  let calls = 0;
+  const unused: typeof fetch = async () => { calls++; return new Response(null, { status: 500 }); };
+  const client = new FctpClient({ fetcher: unused });
+  await assert.rejects(client.resolveAuthority('@alice@harbor.test:4200'), (error: unknown) => error instanceof Error);
+  await assert.rejects(client.resolveAuthority('@orla.registry@harbor.test:4200', { origin: 'http://other.test:4200' }), (error: unknown) => error instanceof Error);
+  assert.equal(calls, 0);
+
+  const handle = '@orla.registry@harbor.test:4200';
+  const actorId = 'https://harbor.test:4200/actors/authorities/orla';
+  async function attempt(actor: unknown, webfingerStatus = 200, actorStatus = 200): Promise<void> {
+    const fetcher: typeof fetch = async (input) => {
+      const url = String(input);
+      if (new URL(url).pathname === '/.well-known/webfinger') {
+        if (webfingerStatus !== 200) return new Response(null, { status: webfingerStatus });
+        return Response.json({ subject: handle, links: [{ rel: 'self', href: actorId }] });
+      }
+      if (url === actorId) return actorStatus === 200 ? Response.json(actor) : new Response(null, { status: actorStatus });
+      return new Response(null, { status: 404 });
+    };
+    await assert.rejects(
+      new FctpClient({ fetcher }).resolveAuthority(handle),
+      (error: unknown) => error instanceof Error
+    );
+  }
+  await attempt({ id: actorId, type: 'Actor', role: 'player' });
+  await attempt({ id: actorId, type: 'Actor' });
+  await attempt({ id: actorId, type: 'Actor', role: 'registry' }, 404);
+  await attempt({ id: actorId, type: 'Actor', role: 'registry' }, 200, 500);
+});
+
+test('SDK reference resolution retains inline objects without fetching and rejects unsupported shapes', async () => {
+  let calls = 0;
+  const fetcher: typeof fetch = async () => { calls++; return Response.json({ id: 'https://resource.test/objects/unexpected' }); };
+  const client = new FctpClient({ fetcher });
+  const inline = { id: 'https://resource.test/objects/inline', name: 'Inline', nested: { value: 1 } };
+  assert.deepEqual(await client.resolveReference(inline), inline);
+  assert.equal(calls, 0);
+  for (const invalid of [42, true, null, undefined, ['https://resource.test/objects/array']]) {
+    await assert.rejects(client.resolveReference(invalid), { name: 'TypeError' });
+  }
+  assert.equal(calls, 0);
+});
+
+test('SDK reference resolution fetches string and singleton id references through public reads', async () => {
+  const stringRef = 'https://resource.test/objects/string';
+  const idRef = 'https://resource.test/objects/id';
+  const calls: Array<{ url: string; headers: Headers }> = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = String(input);
+    calls.push({ url, headers: new Headers(init?.headers) });
+    return url === stringRef
+      ? Response.json({ id: stringRef, name: 'String reference' })
+      : Response.json({ id: idRef, name: 'Id reference' });
+  };
+  const client = new FctpClient({ fetcher });
+  const stringValue = await client.resolveReference<{ id: string; name: string }>(stringRef);
+  const idValue = await client.resolveReference<{ id: string; name: string }>({ id: idRef });
+  assert.deepEqual(stringValue, { id: stringRef, name: 'String reference' });
+  assert.deepEqual(idValue, { id: idRef, name: 'Id reference' });
+  assert.deepEqual(calls.map((call) => call.url), [stringRef, idRef]);
+  for (const call of calls) {
+    assert.equal(call.headers.has('Authorization'), false);
+    assert.match(call.headers.get('Accept') ?? '', /application\/ld\+json/);
+  }
+});
+
+test('SDK reference resolution reads publicly and authenticates only after a challenge', async () => {
+  const uri = 'https://resource.test/objects/private';
+  const resourceServer = 'https://resource.test/actors/territory';
+  const nativeToken = encodeNativeToken(new Uint8Array(32).fill(21));
+  const expected = `Bearer ${await deriveDiplomaticToken(nativeToken, resourceServer as URI)}`;
+  for (const status of [401, 403]) {
+    let calls = 0;
+    const fetcher: typeof fetch = async (_input, init) => {
+      calls++;
+      const authorization = new Headers(init?.headers).get('Authorization');
+      if (calls === 1) {
+        assert.equal(authorization, null);
+        return new Response(null, { status });
+      }
+      assert.equal(authorization, expected);
+      return Response.json({ id: uri, name: 'Protected' });
+    };
+    const result = await new FctpClient({ fetcher }).resolveReference(uri, resourceServer, { nativeToken });
+    assert.deepEqual(result, { id: uri, name: 'Protected' });
+    assert.equal(calls, 2);
+  }
+  let publicCalls = 0;
+  const publicFetcher: typeof fetch = async (_input, init) => {
+    publicCalls++;
+    assert.equal(new Headers(init?.headers).has('Authorization'), false);
+    return Response.json({ id: uri, name: 'Public' });
+  };
+  const publicResult = await new FctpClient({ fetcher: publicFetcher }).resolveReference(uri, undefined, { nativeToken });
+  assert.deepEqual(publicResult, { id: uri, name: 'Public' });
+  assert.equal(publicCalls, 1);
+});
+
+test('SDK reference resolution propagates public read failures', async () => {
+  for (const status of [404, 500]) {
+    const fetcher: typeof fetch = async () => new Response(null, { status });
+    await assert.rejects(
+      new FctpClient({ fetcher }).resolveReference('https://resource.test/objects/missing'),
+      (error: unknown) => error instanceof ResourceError && error.status === status
+    );
+  }
+});
+
+test('SDK reference resolution preserves legacy token, Accept, cache, and ETag behavior', async () => {
+  const uri = 'https://resource.test/objects/cached';
+  const etag = 'W/"cached-v1"';
+  const calls: Headers[] = [];
+  const fetcher: typeof fetch = async (_input, init) => {
+    const headers = new Headers(init?.headers);
+    calls.push(headers);
+    if (calls.length === 1) {
+      assert.equal(headers.get('Authorization'), 'Bearer legacy-token');
+      assert.equal(headers.get('Accept'), 'application/ld+json');
+      return Response.json({ id: uri, name: 'Cached' }, { headers: { ETag: etag } });
+    }
+    assert.equal(headers.get('If-None-Match'), etag);
+    return new Response(null, { status: 304 });
+  };
+  const client = new FctpClient({ fetcher });
+  const options = { token: 'legacy-token', accept: 'application/ld+json' };
+  const first = await client.resolveReference<{ id: string; name: string }>(uri, undefined, options);
+  const second = await client.resolveReference<{ id: string; name: string }>(uri, undefined, options);
+  assert.deepEqual(first, { id: uri, name: 'Cached' });
+  assert.deepEqual(second, first);
+  assert.equal(calls.length, 2);
+});
+
+test('SDK reference resolution forwards an abort signal to the underlying request', async () => {
+  const controller = new AbortController();
+  const fetcher: typeof fetch = async (_input, init) => new Promise<Response>((_resolve, reject) => {
+    const signal = init?.signal;
+    if (!signal) throw new Error('Abort signal was not forwarded');
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  });
+  const promise = new FctpClient({ fetcher }).resolveReference('https://resource.test/objects/aborted', undefined, {
+    token: 'legacy-token',
+    signal: controller.signal
+  });
+  controller.abort();
+  await assert.rejects(promise, (error: unknown) => error instanceof Error && error.name === 'AbortError');
+});
+
+test('SDK reference resolution gives an explicit native token precedence over a legacy token', async () => {
+  const uri = 'https://resource.test/objects/native';
+  const resourceServer = 'https://resource.test/actors/territory';
+  const nativeToken = encodeNativeToken(new Uint8Array(32).fill(22));
+  const expected = `Bearer ${await deriveDiplomaticToken(nativeToken, resourceServer as URI)}`;
+  let calls = 0;
+  const fetcher: typeof fetch = async (_input, init) => {
+    calls++;
+    assert.equal(new Headers(init?.headers).get('Authorization'), expected);
+    return Response.json({ id: uri, name: 'Native' });
+  };
+  const result = await new FctpClient({ fetcher }).resolveReference(uri, resourceServer, { token: 'legacy-token', nativeToken });
+  assert.deepEqual(result, { id: uri, name: 'Native' });
+  assert.equal(calls, 1);
+});
+
+test('browser reference resolution delegates inline and fetched references to the SDK', async () => {
+  const originalFetch = globalThis.fetch;
+  const inline = { id: 'https://resource.test/objects/inline', name: 'Inline' };
+  const uri = 'https://resource.test/objects/string';
+  const idRef = 'https://resource.test/objects/id';
+  const publicUri = 'https://resource.test/objects/public';
+  const nativeToken = encodeNativeToken(new Uint8Array(32).fill(23));
+  const calls: Array<{ url: string; headers: Headers }> = [];
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    calls.push({ url, headers: new Headers(init?.headers) });
+    if (url === uri) return Response.json({ id: uri, name: 'String reference' });
+    if (url === idRef) return Response.json({ id: idRef, name: 'Id reference' });
+    if (url === publicUri) return Response.json({ id: publicUri, name: 'Public reference' });
+    return new Response(null, { status: 404 });
+  };
+  try {
+    assert.deepEqual(await resolveReference<Record<string, unknown>>(inline), inline);
+    assert.equal(calls.length, 0);
+    const stringValue = await resolveReference<Record<string, unknown>>(uri);
+    const idValue = await resolveReference<Record<string, unknown>>({ id: idRef });
+    const publicValue = await resolveReference<Record<string, unknown>>(publicUri, undefined, { nativeToken });
+    assert.deepEqual(stringValue, { id: uri, name: 'String reference' });
+    assert.deepEqual(idValue, { id: idRef, name: 'Id reference' });
+    assert.deepEqual(publicValue, { id: publicUri, name: 'Public reference' });
+    assert.deepEqual(calls.map((call) => call.url), [uri, idRef, publicUri]);
+    for (const call of calls) assert.equal(call.headers.has('Authorization'), false);
+    for (const invalid of [null, 42, ['https://resource.test/objects/array']]) {
+      await assert.rejects(resolveReference(invalid), { name: 'TypeError' });
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

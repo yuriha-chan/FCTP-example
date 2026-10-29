@@ -49,12 +49,7 @@ export async function resolveInput(value: string): Promise<ActorResolution> {
 }
 
 export async function resolveReference<T extends Record<string, unknown>>(value: unknown, resourceActor?: string, options: ResourceRequestOptions & { nativeToken?: string } = {}): Promise<T> {
-  if (typeof value === 'string') return sdk.get<T>(value as URI, { ...options, ...(resourceActor ? { resourceServer: resourceActor as URI } : {}) });
-  if (isRecord(value) && typeof value.id === 'string' && Object.keys(value).length === 1) {
-    return sdk.get<T>(value.id as URI, { ...options, ...(resourceActor ? { resourceServer: resourceActor as URI } : {}) });
-  }
-  if (isRecord(value)) return value as T;
-  throw new TypeError('Resource reference must be an object or URI');
+  return sdk.resolveReference<T>(value, resourceActor as URI | undefined, options);
 }
 
 export async function readCollection<T extends Record<string, unknown>>(uri: string, actorId: string, nativeToken?: string): Promise<T[]> {
