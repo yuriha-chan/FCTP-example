@@ -2,7 +2,7 @@ import { chmod, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import process from 'node:process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { credentialPathFor, extractRef, parseCommand, roleSession, runtimeConfigRoot, socketPathFor, startupDiagnosticPathFor, validateBatch, validateRuntimeConfig } from './browser.mjs';
+import { parseCommand, runtimeConfigRoot, socketPathFor, startupDiagnosticPathFor, validateBatch, validateRuntimeConfig } from './browser.mjs';
 import { createJsonLineServer, createSerializedDispatcher } from './browser-transport.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -11,7 +11,6 @@ const configRoot = runtimeConfigRoot();
 const runtimeRoot = resolve(configRoot, 'runtime');
 const configPath = resolve(configRoot, 'runtime-config.json');
 const auditPathFor = (runId) => resolve(runtimeRoot, runId, role, 'browser-audit.jsonl');
-const secrets = new Set();
 let browser;
 let clientServer;
 let server;
@@ -23,29 +22,12 @@ let createBrowserSession;
 let startClientServer;
 
 function redact(message) {
-  let result = String(message);
-  for (const secret of secrets) if (secret) result = result.replaceAll(secret, '[REDACTED]');
-  return result.slice(0, 500);
+  return String(message).slice(0, 500);
 }
 
 async function audit(command, ref, status) {
   const record = { role, time: new Date().toISOString(), op: command, ref: ref ?? null, status };
   await import('node:fs/promises').then(({ appendFile }) => appendFile(auditPath, `${JSON.stringify(record)}\n`, { mode: 0o600 }));
-}
-
-async function bootstrap(session) {
-  let view = await browser.view();
-  const roleRef = extractRef(view.markdown, 'Role');
-  view = await browser.select(roleRef, session.sessionRole);
-  const playerRef = extractRef(view.markdown, 'Player URI');
-  view = await browser.fill(playerRef, session.player);
-  const vesselRef = extractRef(view.markdown, 'Vessel URI');
-  view = await browser.fill(vesselRef, session.vessel);
-  const credentialRef = extractRef(view.markdown, 'Credential');
-  view = await browser.fill(credentialRef, session.credential);
-  const submitRef = extractRef(view.markdown, 'Apply session');
-  view = await browser.submit(submitRef);
-  return view;
 }
 
 async function dispatch(request) {
@@ -64,15 +46,7 @@ async function dispatch(request) {
   if (request.command === 'click') return await browser.click(request.ref);
   if (request.command === 'submit') return await browser.submit(request.ref);
   if (request.command === 'back') return await browser.back();
-  if (request.command === 'reload') {
-    let view = await browser.reload();
-    const credentialsPath = credentialPathFor(config, role, configRoot);
-    const credentials = JSON.parse(await readFile(credentialsPath, 'utf8'));
-    const session = roleSession(role, config, credentials);
-    secrets.add(session.credential);
-    view = await bootstrap(session);
-    return view;
-  }
+  if (request.command === 'reload') return await browser.reload();
   if (request.command === 'close') {
     return { closeAfterResponse: true };
   }
@@ -101,30 +75,15 @@ async function start() {
   parseCommand([role, 'view']);
   config = JSON.parse(await readFile(configPath, 'utf8'));
   const origins = validateRuntimeConfig(config);
-  const credentialPath = credentialPathFor(config, role, configRoot);
-  const credentials = JSON.parse(await readFile(credentialPath, 'utf8'));
-  const session = roleSession(role, config, credentials);
-  secrets.add(session.credential);
   ({ createBrowserSession } = await import('../dist/apps/browser-harness/index.js'));
   ({ startClientServer } = await import('../dist/apps/demo/client-server.js'));
   socketPath = socketPathFor(config, role, configRoot);
   auditPath = auditPathFor(config.runId);
   await mkdir(dirname(socketPath), { recursive: true, mode: 0o700 });
   await chmod(dirname(socketPath), 0o700);
-  const defaultPlayer = config.actors.players[config.players[0].name];
-  const clientConfig = {
-    origins,
-    actors: {
-      registry: config.actors.registry,
-      home: config.actors.home,
-      player: session.player || defaultPlayer,
-      policy: config.actors.territoryA,
-      simulation: config.actors.territoryB
-    }
-  };
-  clientServer = await startClientServer({ port: 0, host: '127.0.0.1', config: clientConfig, root: ROOT });
+  clientServer = await startClientServer({ port: 0, host: '127.0.0.1', root: ROOT });
   browser = await createBrowserSession({ url: clientServer.origin, allowedOrigins: [clientServer.origin, ...Object.values(origins)] });
-  const initialView = await bootstrap(session);
+  const initialView = await browser.view();
   const serializedDispatch = createSerializedDispatcher(async (request) => {
     try {
       const result = await dispatch(request);

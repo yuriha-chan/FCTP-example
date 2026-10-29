@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
-import { credentialPathFor, extractRef, parseCommand, roleSession, runtimeConfigRoot, socketPathFor, validateRuntimeConfig } from '../scripts/browser.mjs';
+import { parseCommand, runtimeConfigRoot, socketPathFor, validateRuntimeConfig } from '../scripts/browser.mjs';
 import { createJsonLineServer, createSerializedDispatcher } from '../scripts/browser-transport.mjs';
 
 function config() {
@@ -38,36 +38,6 @@ test('runtime parsing permits exactly configured five Players and maps only publ
   assert.throws(() => validateRuntimeConfig(runtime), /exactly five/);
   assert.equal(socketPathFor(config(), 'dmitri-sato', '/tmp/root'), '/tmp/root/runtime/isolated-run/dmitri-sato/browser.sock');
   assert.throws(() => socketPathFor(config(), 'observer', '/tmp/root'), /Unknown browser account/);
-});
-
-test('credential and socket paths use configured public accounts directly', () => {
-  const runtime = config();
-  assert.equal(credentialPathFor(runtime, 'sana-okonkwo', '/tmp/root'), '/tmp/root/runtime/isolated-run/sana-okonkwo/credentials.json');
-  assert.equal(credentialPathFor(runtime, 'orla-fitzgerald', '/tmp/root'), '/tmp/root/runtime/isolated-run/orla-fitzgerald/credentials.json');
-});
-
-test('each role resolves only its own credential field and Player identity', () => {
-  const runtime = config();
-  assert.deepEqual(roleSession('priya-nandakumar', runtime, { role: 'priya-nandakumar', player: runtime.actors.players['priya-nandakumar'], vessel: runtime.actors.vessels['priya-nandakumar'], nativeToken: 'secret-player', diplomaticTokens: { A: 'ignored', B: 'ignored' } }), {
-    sessionRole: 'player', player: runtime.actors.players['priya-nandakumar'], vessel: runtime.actors.vessels['priya-nandakumar'], credential: 'secret-player'
-  });
-  assert.equal(roleSession('orla-fitzgerald', runtime, { role: 'orla-fitzgerald', territoryAAdmin: 'admin-a' }).credential, 'admin-a');
-  assert.equal(roleSession('dmitri-sato', runtime, { role: 'dmitri-sato', territoryBAdmin: 'admin-b' }).sessionRole, 'simulation-admin');
-  const admin3 = roleSession('mirela-vukovic', runtime, { role: 'mirela-vukovic', authorityAdmin: 'admin-c' });
-  assert.equal(admin3.sessionRole, 'authority-admin');
-  assert.equal(admin3.vessel, runtime.actors.vessels['sana-okonkwo']);
-  assert.throws(() => roleSession('priya-nandakumar', runtime, { role: 'priya-nandakumar', player: runtime.actors.players['sana-okonkwo'], vessel: runtime.actors.vessels['sana-okonkwo'], nativeToken: 'wrong' }), /do not match/);
-  assert.equal(roleSession('mirela-vukovic', runtime, { role: 'mirela-vukovic', authorityAdmin: 'secret', territoryAAdmin: 'must-not-use' }).credential, 'secret');
-});
-
-test('fresh visible refs are extracted by control label without accepting missing controls', () => {
-  const markdown = 'Role: player {player=Player=player, policy-admin=Policy administrator=policy-admin} [opaque-1]\n\nPlayer URI: https://example.test/player [opaque-4]\n\nVessel URI: https://example.test/vessel [opaque-5]\n\nCredential: [REDACTED] [opaque-2]\n\nApply session [opaque-3]';
-  assert.equal(extractRef(markdown, 'Role'), 'opaque-1');
-  assert.equal(extractRef(markdown, 'Player URI'), 'opaque-4');
-  assert.equal(extractRef(markdown, 'Vessel URI'), 'opaque-5');
-  assert.equal(extractRef(markdown, 'Credential'), 'opaque-2');
-  assert.equal(extractRef(markdown, 'Apply session'), 'opaque-3');
-  assert.throws(() => extractRef(markdown, 'Missing field'), /unavailable/);
 });
 
 test('Unix socket transport returns an asynchronous response after the client ends its write side', async () => {

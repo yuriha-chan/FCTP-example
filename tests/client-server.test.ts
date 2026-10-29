@@ -15,12 +15,8 @@ import { createPolicyApp } from '../apps/territory-policy/src/app.js';
 import { createSimulationApp } from '../apps/territory-sim/src/app.js';
 import { createAuthorityApp } from '../apps/test-authority/src/app.js';
 
-test('serves the existing browser client and public config on an isolated port', async () => {
-  const config = {
-    origins: { authority: 'http://authority.example', policy: 'http://policy.example', simulation: 'http://simulation.example' },
-    actors: { registry: 'https://authority.example/registry', home: 'https://authority.example/home', player: 'https://authority.example/player', policy: 'https://policy.example/actor', simulation: 'https://simulation.example/actor' }
-  };
-  const client = await startClientServer({ port: 0, config });
+test('serves the browser client and static assets on an isolated port', async () => {
+  const client = await startClientServer({ port: 0 });
   try {
     const html = await fetch(client.origin);
     assert.equal(html.status, 200);
@@ -32,16 +28,12 @@ test('serves the existing browser client and public config on an isolated port',
     assert.equal(bundle.status, 200);
     assert.match(bundle.headers.get('content-type') ?? '', /javascript/);
     assert.ok((await bundle.text()).length > 0);
-    const configResponse = await fetch(new URL('/config.json', client.origin));
-    assert.equal(configResponse.status, 200);
-    assert.equal(configResponse.headers.get('cache-control'), 'no-store');
-    assert.deepEqual(await configResponse.json(), config);
     assert.equal((await fetch(new URL('/package.json', client.origin))).status, 404);
     assert.equal((await fetch(new URL('/../../package.json', client.origin))).status, 404);
   } finally {
     await client.close();
   }
-  await assert.rejects(fetch(new URL('/config.json', client.origin)));
+  await assert.rejects(fetch(client.origin));
 });
 
 const firstAccount: AccountRecord = {
@@ -192,11 +184,7 @@ test('client server exposes a credential-free health API beside static assets on
   const storeFile = join(directory, 'client.store.json');
   const seedOrigin = 'https://seeded-world.example:4300';
   const application = await createClientApplication({ storeFile, seedServers: [seedOrigin] });
-  const config = {
-    origins: { authority: 'http://authority.example', policy: 'http://policy.example', simulation: 'http://simulation.example' },
-    actors: { registry: 'https://authority.example/registry', home: 'https://authority.example/home', player: 'https://authority.example/player', policy: 'https://policy.example/actor', simulation: 'https://simulation.example/actor' }
-  };
-  const client = await startClientServer({ port: 0, config, application });
+  const client = await startClientServer({ port: 0, application });
   try {
     await application.state.transaction((state) => {
       state.accounts[firstAccount.id] = firstAccount;
@@ -215,9 +203,6 @@ test('client server exposes a credential-free health API beside static assets on
     assert.equal(html.status, 200);
     assert.match(await html.text(), /href=["']\/styles\.css["']/);
     assert.equal((await fetch(new URL('/styles.css', client.origin))).status, 200);
-    const configResponse = await fetch(new URL('/config.json', client.origin));
-    assert.equal(configResponse.status, 200);
-    assert.deepEqual(await configResponse.json(), config);
 
     assert.equal((await fetch(new URL('/api/unknown', client.origin))).status, 404);
     assert.equal((await fetch(new URL('/styles.css', client.origin), { method: 'POST' })).status, 405);
@@ -262,11 +247,6 @@ interface UpstreamCall {
   method: string;
   body?: unknown;
 }
-
-const fixtureClientConfig = {
-  origins: { authority: 'http://authority.example', policy: 'http://policy.example', simulation: 'http://simulation.example' },
-  actors: { registry: 'https://authority.example/registry', home: 'https://authority.example/home', player: 'https://authority.example/player', policy: 'https://policy.example/actor', simulation: 'https://simulation.example/actor' }
-};
 
 const firstLoginAccount: FixtureHomeAccount = {
   handle: firstAccount.handle,
@@ -365,7 +345,7 @@ function authorityResponse(authority: FixtureAuthority, url: string, parsed: URL
 
 async function openFixtureApplication(storeFile: string, fetchImpl?: typeof fetch, extra: Partial<CreateClientApplicationOptions> = {}) {
   const application = await createClientApplication({ storeFile, ...(fetchImpl ? { fetch: fetchImpl } : {}), ...extra });
-  const client = await startClientServer({ port: 0, config: fixtureClientConfig, application });
+  const client = await startClientServer({ port: 0, application });
   return { application, client };
 }
 
@@ -742,8 +722,7 @@ test('resolves administrator credentials only for signed-in explicitly bound acc
 
     const accountsText = await (await fetch(new URL('/api/accounts', opened.client.origin))).text();
     const serversText = await (await fetch(new URL('/api/servers', opened.client.origin))).text();
-    const configText = await (await fetch(new URL('/config.json', opened.client.origin))).text();
-    for (const text of [accountsText, serversText, configText]) {
+    for (const text of [accountsText, serversText]) {
       assert.equal(text.includes('registry-administrator-secret'), false);
       assert.equal(text.includes('missing-source'), false);
     }

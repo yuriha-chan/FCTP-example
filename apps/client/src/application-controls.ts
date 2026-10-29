@@ -130,7 +130,7 @@ export function setupApplicationControls(options: ApplicationControlsOptions = {
       accountStatus.textContent = selected ? `${statusLabel(selected)} · ${selected.handle}` : 'No account selected.';
       notifyAccountSelected();
     } catch {
-      accountStatus.textContent = 'Application account API unavailable. Legacy session controls remain available.';
+      accountStatus.textContent = 'Application account API unavailable.';
     }
     renderAccountList();
   };

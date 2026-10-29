@@ -4,6 +4,8 @@
 
 A player and an administrator can run the game through the stateful client application. The browser renders page data and submits actions; the harness performs the same operations through the same application endpoints.
 
+Deliver a single replacement frontend. Remove the manual-session UI, browser-held credentials, direct-world frontend adapters, and compatibility-only code/tests rather than maintaining two interfaces. Required gameplay capabilities are implemented in the application workflows below; pending tasks are not satisfied by retaining retired screens.
+
 Requirements:
 
 - [Frontend requirements and priorities](frontend-requirements.md): individual P0 requirements define delivery scope.
@@ -108,6 +110,7 @@ Build the corresponding browser page/form as each backend slice becomes usable. 
 4. Move reusable public-first JSON/text retrieval, `resourceAudience`, and collection reading out of browser-only code.
 5. Preserve public-first behavior: retry only on 401/403 with a known audience; report other failures directly.
 6. Keep stored accounts and tokens in the backend; SDK calls receive their explicit context.
+7. Remove browser-only request wrappers and reference-reader compatibility branches after extracting reusable protocol operations. Do not preserve the retired frontend's calling conventions as an SDK requirement.
 
 **Completion:** tests use login-issued tokens against distinct resource Actors and prove public reads, authenticated fallback, missing audience errors, and account/audience separation. Home digest delivery and client derivation are both exercised.
 
@@ -288,7 +291,7 @@ Run this scenario through the client API, with frontend forms supporting the sam
 | Public account access, player/admin credentials and authorization | 02, 04, 05, 10 |
 | Additional servers without fixed panels, readable identities, evidence-based discovery, independent failures | 04, 05, 06, 07, 12 |
 
-P1/P2 enhancements remain separately prioritized: combined Overview, cross-place search, rich consolidated history, full publication preview, repeat shortcuts, and advanced JSON editing. Existing capabilities remain available while P0 workflows are moved to the application API.
+P1/P2 enhancements remain separately prioritized: combined Overview, cross-place search, rich consolidated history, full publication preview, repeat shortcuts, and advanced JSON editing. Required capabilities belong to the replacement application workflows; the retired frontend is not a fallback for pending work.
 
 ## Verification and task completion
 

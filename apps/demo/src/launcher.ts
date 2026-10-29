@@ -81,14 +81,15 @@ export async function startDemo(options: StartDemoOptions) {
     await policy.host.listen(ports.policy, '127.0.0.1');
     await simulation.host.listen(ports.simulation, '127.0.0.1');
 
-    const config = {
-      origins: { authority: origin(ports.authority), policy: origin(ports.policy), simulation: origin(ports.simulation) },
-      actors: { registry: authority.ids.actor.registry, home: authority.ids.actor.home, player: authority.ids.actor.player, policy: policy.ids.actor, simulation: simulation.ids.actor }
+    const origins = {
+      authority: origin(ports.authority),
+      policy: origin(ports.policy),
+      simulation: origin(ports.simulation)
     };
     const governorAccountId = `@governor@${new URL(authority.ids.actor.home).host}`;
     application = await createClientApplication({
       storeFile: resolve(dataDir, 'client.store.json'),
-      seedServers: [config.origins.authority, config.origins.policy, config.origins.simulation],
+      seedServers: [origins.authority, origins.policy, origins.simulation],
       administratorBindings: [
         { accountId: governorAccountId, authorityActorIds: [authority.ids.actor.registry], credentialSource: 'authority-administrator' },
         { accountId: governorAccountId, authorityActorIds: [policy.ids.actor], credentialSource: 'policy-administrator' },
@@ -100,11 +101,11 @@ export async function startDemo(options: StartDemoOptions) {
         'simulation-administrator': secrets.simulation
       }
     });
-    clientServer = await startClientServer({ port: ports.client, config, application });
+    clientServer = await startClientServer({ port: ports.client, application });
     authority.authority.startWorkers();
     policy.host.startWorkers();
     simulation.host.startWorkers();
-    return { ports, origins: { ...config.origins, client: clientServer.origin }, authority, policy, simulation, application, close };
+    return { ports, origins: { ...origins, client: clientServer.origin }, authority, policy, simulation, application, close };
   } catch (error) {
     await close();
     throw error;

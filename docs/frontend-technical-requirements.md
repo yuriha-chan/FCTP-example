@@ -26,6 +26,14 @@ Browser harness ──┘           │
 
 The client web server owns durable application state. The client library supplies protocol operations. The browser does not need native tokens to render pages or submit actions to the client application.
 
+### Replacement boundary
+
+Deliver one frontend backed by the client application API. Replace the manual-session frontend; do not retain its screens, credential injection, direct world-request adapters, or compatibility branches as a parallel interface or fallback.
+
+Retain required gameplay capabilities and protocol behavior in the application architecture, not the retired frontend's interfaces. Tests cover those capabilities through application contracts and browser interaction with the replacement. Remove tests whose sole purpose is compatibility with the retired frontend. Protocol, authentication, persistence, and generic browser-harness tests remain relevant independently of that interface.
+
+Authoring, administration, journey execution, and direct harness integration remain their assigned implementation tasks. Incomplete workflows are not supplied by retaining the retired frontend.
+
 ## Persistence and session context
 
 Persist the following in the client web server:

@@ -67,43 +67,10 @@ export function validateRuntimeConfig(value) {
   return { authority: authorityOrigin.origin, policy: territoryAOrigin.origin, simulation: territoryBOrigin.origin };
 }
 
-export function roleSession(role, config, credentials) {
-  if (!credentials || typeof credentials !== 'object') throw new TypeError('Missing role credentials');
-  const configuredPlayer = config.players.find((player) => player.name === role);
-  if (configuredPlayer) {
-    const player = config.actors.players[role];
-    const vessel = config.actors.vessels[role];
-    if (credentials.role !== role || credentials.player !== player || credentials.vessel !== vessel || typeof credentials.nativeToken !== 'string' || !credentials.nativeToken) throw new TypeError('Role credentials do not match configured Player and vessel');
-    return { sessionRole: 'player', player, vessel, credential: credentials.nativeToken };
-  }
-  const administrator = config.administrators.find((entry) => entry.name === role);
-  if (!administrator || credentials.role !== role) throw new TypeError('Unknown browser account or mismatched credentials');
-  const fields = { 'policy-admin': 'territoryAAdmin', 'simulation-admin': 'territoryBAdmin', 'authority-admin': 'authorityAdmin' };
-  const field = fields[administrator.sessionRole];
-  if (typeof credentials[field] !== 'string' || !credentials[field]) throw new TypeError(`Missing ${role} credential`);
-  const authority = administrator.sessionRole === 'authority-admin';
-  const primary = config.players[0].name;
-  return { sessionRole: administrator.sessionRole, player: authority ? config.actors.players[primary] : '', vessel: authority ? config.actors.vessels[primary] : '', credential: credentials[field] };
-}
-
-export function extractRef(markdown, label) {
-  const line = markdown.split('\n').find((entry) => entry.startsWith(`${label}:`) || entry.startsWith(`${label} [`));
-  const matches = [...(line ?? '').matchAll(/\[([A-Za-z0-9-]+)\]/g)];
-  const reference = matches.at(-1)?.[1];
-  if (!reference) throw new Error(`Visible ${label} control is unavailable`);
-  return reference;
-}
-
 export function socketPathFor(config, role, runRoot = RUN_ROOT) {
   validateRuntimeConfig(config);
   if (![...config.players, ...config.administrators].some((entry) => entry.name === role)) throw new TypeError('Unknown browser account');
   return resolve(runRoot, 'runtime', config.runId, role, 'browser.sock');
-}
-
-export function credentialPathFor(config, role, runRoot = RUN_ROOT) {
-  validateRuntimeConfig(config);
-  if (![...config.players, ...config.administrators].some((entry) => entry.name === role)) throw new TypeError('Unknown browser account');
-  return resolve(runRoot, 'runtime', config.runId, role, 'credentials.json');
 }
 
 export function startupDiagnosticPathFor(config, role, runRoot = RUN_ROOT) {

@@ -67,7 +67,7 @@ export class FctpClient {
     return (await this.resources.get<T>(uri, { ...requestOptions, ...(token ? { token } : {}) })).value;
   }
 
-  async resolveReference<T extends Record<string, unknown>>(value: unknown, resourceServer?: URI, options: ResourceRequestOptions & { nativeToken?: string } = {}): Promise<T> {
+  async resolveReference<T extends Record<string, unknown>>(value: unknown, resourceServer?: URI, options: { nativeToken?: string; accept?: string } = {}): Promise<T> {
     let reference: URI | undefined;
     if (typeof value === 'string') {
       reference = value;
@@ -76,15 +76,6 @@ export class FctpClient {
       else return value as T;
     }
     if (reference === undefined) throw new TypeError('Resource reference must be an object or URI');
-    const legacy = options.token !== undefined || options.cache !== undefined || options.signal !== undefined;
-    if (legacy) {
-      const { nativeToken, ...legacyOptions } = options;
-      return this.get<T>(reference, {
-        ...legacyOptions,
-        ...(resourceServer ? { resourceServer } : {}),
-        ...(nativeToken !== undefined ? { nativeToken } : {})
-      });
-    }
     return this.getPublicFirst<T>(reference, {
       ...(resourceServer ? { resourceServer } : {}),
       ...(options.nativeToken !== undefined ? { nativeToken: options.nativeToken } : {}),

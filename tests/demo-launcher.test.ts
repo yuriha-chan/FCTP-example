@@ -34,7 +34,7 @@ after(async () => {
   await rm(dataDir, { recursive: true, force: true });
 });
 
-test('serves authority and Territory resources plus a credential-free client config', async () => {
+test('serves authority and Territory resources', async () => {
   const get = (base: string, path: string) => fetch(new URL(path, base));
   const authorityInfo = await get(demo.origins.authority, '/local/info');
   const policyInfo = await get(demo.origins.policy, '/local/info');
@@ -50,12 +50,6 @@ test('serves authority and Territory resources plus a credential-free client con
   assert.equal((await get(demo.origins.policy, policyData.ids.map)).status, 200);
   assert.equal((await get(demo.origins.simulation, simulationData.ids.actor)).status, 200);
   assert.equal((await get(demo.origins.simulation, simulationData.ids.map)).status, 401);
-
-  const configResponse = await get(demo.origins.client, '/config.json');
-  assert.equal(configResponse.status, 200);
-  const config = await configResponse.json() as Record<string, unknown>;
-  assert.deepEqual(Object.keys(config).sort(), ['actors', 'origins']);
-  assert.equal(JSON.stringify(config).includes('demo-authority-admin'), false);
   assert.equal((await get(demo.origins.client, '/../../package.json')).status, 404);
 });
 
@@ -101,9 +95,9 @@ test('provides deterministic player and governor login without exposing bindings
   assert.equal(await application.resolveAdministratorCredential(governor.account.id, demo.authority.ids.actor.registry), 'demo-authority-admin');
   await assert.rejects(application.resolveAdministratorCredential(player.account.id, demo.policy.ids.actor));
 
-  const configBody = await (await fetch(new URL('/config.json', demo.origins.client))).text();
+  const accountsBody = await (await fetch(new URL('/api/accounts', demo.origins.client))).text();
   for (const secret of ['demo-player-password', 'demo-governor-password', 'demo-authority-admin', 'demo-policy-admin', 'demo-sim-admin', 'administratorBindings', 'administratorCredentials']) {
-    assert.equal(configBody.includes(secret), false, secret);
+    assert.equal(accountsBody.includes(secret), false, secret);
   }
 });
 
@@ -120,13 +114,8 @@ test('closes all listeners cleanly', async () => {
   assert.equal(bundle.status, 200);
   assert.match(bundle.headers.get('content-type') ?? '', /javascript/);
   assert.ok((await bundle.text()).length > 0);
-  const configResponse = await fetch(new URL('/config.json', demo.origins.client));
-  const configBody = await configResponse.text();
-  for (const secret of ['demo-authority-admin', 'demo-policy-admin', 'demo-sim-admin']) {
-    assert.equal(configBody.includes(secret), false);
-  }
   await demo.close();
-  await assert.rejects(fetch(new URL('/config.json', demo.origins.client)));
+  await assert.rejects(fetch(new URL('/', demo.origins.client)));
 });
 
 test('rejects nonpositive and duplicate ports', async () => {
