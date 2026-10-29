@@ -75,6 +75,38 @@ test('exposes the client API and persists client state under the demo data direc
   assert.deepEqual(servers, []);
 });
 
+test('provides deterministic player and governor login without exposing bindings or credentials publicly', async () => {
+  const host = new URL(demo.origins.authority).host;
+  const login = async (handle: string, password: string) => {
+    const response = await fetch(new URL('/api/accounts/login', demo.origins.client), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ handle, password, homeOrigin: demo.origins.authority })
+    });
+    assert.equal(response.status, 200);
+    return await response.json() as { account: { id: string; handle: string; login: { status: string } }; status: string };
+  };
+  const player = await login(`@player@${host}`, 'demo-player-password');
+  const governor = await login(`@governor@${host}`, 'demo-governor-password');
+  assert.equal(player.status, 'signed-in');
+  assert.equal(governor.status, 'signed-in');
+  assert.equal(player.account.handle, `@player@${host}`);
+  assert.equal(governor.account.handle, `@governor@${host}`);
+
+  const application = demo.application;
+  assert.ok(application);
+  assert.equal(typeof application.resolveAdministratorCredential, 'function');
+  assert.equal(await application.resolveAdministratorCredential(governor.account.id, demo.policy.ids.actor), 'demo-policy-admin');
+  assert.equal(await application.resolveAdministratorCredential(governor.account.id, demo.simulation.ids.actor), 'demo-sim-admin');
+  assert.equal(await application.resolveAdministratorCredential(governor.account.id, demo.authority.ids.actor.registry), 'demo-authority-admin');
+  await assert.rejects(application.resolveAdministratorCredential(player.account.id, demo.policy.ids.actor));
+
+  const configBody = await (await fetch(new URL('/config.json', demo.origins.client))).text();
+  for (const secret of ['demo-player-password', 'demo-governor-password', 'demo-authority-admin', 'demo-policy-admin', 'demo-sim-admin', 'administratorBindings', 'administratorCredentials']) {
+    assert.equal(configBody.includes(secret), false, secret);
+  }
+});
+
 test('closes all listeners cleanly', async () => {
   const clientResponse = await fetch(new URL('/', demo.origins.client));
   assert.equal(clientResponse.status, 200);

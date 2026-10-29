@@ -21,6 +21,71 @@
       </form>
     </header>
     <main>
+      <section id="accounts-controls" aria-labelledby="accounts-title">
+        <h2 id="accounts-title">Accounts</h2>
+        <p>Sign in through a Home server. Home verifies the password; the client application retains the login credential.</p>
+        <form id="account-login-form" class="grid-form">
+          <label>Handle<input name="handle" autocomplete="username" required></label>
+          <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+          <label>Home origin<input name="homeOrigin" type="url" placeholder="https://…"></label>
+          <button type="submit">Sign in</button>
+        </form>
+        <p id="application-account-status" role="status" aria-live="polite">No account selected.</p>
+        <div id="accounts-list" aria-live="polite"></div>
+      </section>
+      <section id="connections-controls" aria-labelledby="connections-title">
+        <h2 id="connections-title">Connections</h2>
+        <p>Discover a public server origin or resolve an authority handle. Discovered records are retained by the client application.</p>
+        <form id="server-discovery-form" class="grid-form">
+          <label>Server origin<input name="origin" type="url" placeholder="https://…"></label>
+          <label>Authority handle<input name="handle" placeholder="@name.role@host"></label>
+          <button type="submit">Add server</button>
+        </form>
+        <p id="application-connection-status" role="status" aria-live="polite">No discovered servers.</p>
+        <div id="servers-list" aria-live="polite"></div>
+      </section>
+      <section id="activity-controls" aria-labelledby="activity-title">
+        <h2 id="activity-title">Activity</h2>
+        <p>Retained action results for the account selected under Accounts. Reads use retained state only; refresh reconciles the selected action explicitly.</p>
+        <button id="activity-refresh" type="button">Refresh Activity</button>
+        <p id="activity-status" role="status" aria-live="polite">Select an account to view Activity.</p>
+        <div id="activity-list" aria-live="polite"></div>
+        <div id="activity-detail" aria-live="polite"></div>
+      </section>
+      <section id="explore-controls" aria-labelledby="explore-title">
+        <h2 id="explore-title">Explore</h2>
+        <p>Read retained Territory geography. With a signed-in account and vessel, explicit refresh also reads that vessel's local capabilities; reading a page does not contact the world.</p>
+        <label>Explore vessel URI<input id="explore-vessel" type="url" autocomplete="off"></label>
+        <button id="explore-refresh" type="button">Refresh places</button>
+        <button id="explore-save-route" type="button">Save route plan</button>
+        <p id="explore-status" role="status" aria-live="polite">No retained places.</p>
+        <div id="explore-places" aria-live="polite"></div>
+        <div id="explore-detail" aria-live="polite"></div>
+        <div id="explore-plan" aria-live="polite"></div>
+      </section>
+      <section id="logistics-production" aria-labelledby="logistics-production-title">
+        <h2 id="logistics-production-title">Logistics &amp; Production</h2>
+        <p>The selected place and route IDs are carried from Explore. Registry, Territory cargo, shared stock, production, and jobs are retained observations; refresh performs world reads.</p>
+        <div id="logistics-selection" aria-live="polite"></div>
+        <div id="logistics-controls">
+          <label>Logistics vessel URI<input id="logistics-vessel" type="url" autocomplete="off"></label>
+          <button id="logistics-refresh-vessel" type="button">Refresh vessel</button>
+          <button id="logistics-refresh-production" type="button">Refresh production</button>
+          <p id="logistics-status" role="status" aria-live="polite">Select an account, enter a vessel URI, then refresh.</p>
+          <div id="logistics-summary" aria-live="polite"></div>
+          <div id="logistics-actions" aria-live="polite"></div>
+          <div id="production-authority-panel" aria-live="polite"></div>
+          <div id="production-operations" aria-live="polite"></div>
+          <div id="production-jobs" aria-live="polite"></div>
+          <div id="logistics-technical" aria-live="polite"></div>
+          <div id="production-technical" aria-live="polite"></div>
+        </div>
+      </section>
+      <section id="resource-reader-controls" aria-labelledby="resource-reader-title">
+        <h2 id="resource-reader-title">Resource reader</h2>
+        <p>Shared public-first reader for authority, publication and resource links opened from Explore and later workflows.</p>
+        <div id="resource-reader-result" aria-live="polite"></div>
+      </section>
       <section aria-labelledby="discovery-title">
         <h2 id="discovery-title">Current state and available actions</h2>
         <p>Discovery is advisory. Review each effect and blocking reason; actions execute only when selected.</p>

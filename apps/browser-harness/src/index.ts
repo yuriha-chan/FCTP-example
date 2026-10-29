@@ -93,7 +93,7 @@ export async function createBrowserSession(options: CreateBrowserSessionOptions)
           return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0;
         };
         const text = (element: Element): string => (element.textContent ?? '').replace(/\s+/g, ' ').trim();
-        const controls = Array.from(document.querySelectorAll<HTMLElement>('input,select,button,a,textarea'));
+        const controls = Array.from(document.querySelectorAll<HTMLElement>('input,select,button,a,textarea,summary'));
         const refs = new Map<HTMLElement, string>();
         let next = 0;
         const reference = (element: HTMLElement): string => {
@@ -126,7 +126,7 @@ export async function createBrowserSession(options: CreateBrowserSessionOptions)
             const anchor = element as HTMLAnchorElement;
             return `[${text(element) || labelFor(anchor)}](${anchor.href}) [${reference(anchor)}]`;
           }
-          if (element.tagName === 'BUTTON') {
+          if (element.tagName === 'BUTTON' || element.tagName === 'SUMMARY') {
             const button = element as HTMLButtonElement;
             return `${labelFor(button) || text(button)} [${reference(button)}]${button.disabled ? ' (disabled)' : ''}`;
           }
@@ -154,7 +154,7 @@ export async function createBrowserSession(options: CreateBrowserSessionOptions)
             lines.push(`\n\`\`\`\n${inline(element)}\n\`\`\``);
             return;
           }
-          if (['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA'].includes(element.tagName)) {
+          if (['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'SUMMARY'].includes(element.tagName)) {
             const content = inline(element).trim();
             if (content) lines.push(content);
             return;
@@ -173,13 +173,13 @@ export async function createBrowserSession(options: CreateBrowserSessionOptions)
         for (const child of Array.from(document.body.children)) walk(child);
         return { markdown: lines.join('\n\n'), controls: controls.map((element) => refs.has(element) ? refs.get(element) : null) };
       }, `${sessionPrefix}-${(++generation).toString(36)}`);
-      const handles = await page.$$('input,select,button,a,textarea');
+      const handles = await page.$$('input,select,button,a,textarea,summary');
       for (let index = 0; index < rendered.controls.length; index += 1) {
         const ref = rendered.controls[index];
         const handle = handles[index];
         if (!ref || !handle) continue;
         const tag = await handle.evaluate((element) => element.tagName.toLowerCase());
-        const kind: ControlKind = tag === 'a' ? 'link' : tag as ControlKind;
+        const kind: ControlKind = tag === 'a' ? 'link' : tag === 'summary' ? 'button' : tag as ControlKind;
         currentRefs.set(ref, { handle: handle as ElementHandle<HTMLElement>, kind });
       }
       for (const handle of handles) {

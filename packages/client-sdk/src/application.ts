@@ -28,7 +28,7 @@ export interface ServerRecord {
 export type AuthorityRole = 'home' | 'territory' | 'registry' | 'asset-server';
 
 export interface AuthorityRecord {
-  handle: string;
+  handle?: string;
   actorId: string;
   server: string;
   roles: AuthorityRole[];
@@ -44,6 +44,121 @@ export interface PageContext {
 }
 
 export type AccountScopedRequest<T extends object> = T & { accountId: string };
+
+export type ExplorePlaceState = 'available' | 'stale' | 'empty' | 'not-retrieved' | 'unavailable';
+
+export interface ExplorePlaceRecord {
+  id: string;
+  type: string;
+  authorityId: string;
+  name?: string;
+  territoryId?: string;
+  areaId?: string;
+  listingsId?: string;
+  state?: ExplorePlaceState;
+  error?: string;
+}
+
+export interface ExploreEndpointRecord {
+  id: string;
+  state: ExplorePlaceState;
+  name?: string;
+  error?: string;
+}
+
+export interface ExploreConnectionRecord {
+  id: string;
+  type: 'Route';
+  from: string;
+  to: string;
+  territoryId: string;
+  authorityId: string;
+  name?: string;
+  endpoints?: ExploreEndpointRecord[];
+  state?: ExplorePlaceState;
+  error?: string;
+}
+
+export interface ExploreResourceRecord {
+  id: string;
+  type: string;
+  authorityId: string;
+  territoryId?: string;
+  name?: string;
+  boundaries?: string[];
+  state?: ExplorePlaceState;
+  error?: string;
+}
+
+export interface ExploreCapabilityRecord {
+  id: string;
+  label: string;
+  available: boolean;
+  reason?: string;
+  request?: { method: 'GET' | 'POST'; href: string; body?: Record<string, unknown> };
+  effect: string;
+}
+
+export interface ExploreCapabilitySnapshot {
+  territoryId: string;
+  authorityId: string;
+  accountId?: string;
+  vesselId?: string;
+  observedAt: string;
+  state?: Record<string, unknown>;
+  actions: ExploreCapabilityRecord[];
+}
+
+export interface ExploreBlockerRecord {
+  id: string;
+  source: string;
+  message: string;
+  state?: ExplorePlaceState;
+}
+
+export interface ExplorePlacesData {
+  places: ExplorePlaceRecord[];
+  connections: ExploreConnectionRecord[];
+  areas: ExploreResourceRecord[];
+  maps: ExploreResourceRecord[];
+  listings: ExploreResourceRecord[];
+  capabilities: ExploreCapabilityRecord[];
+  blockers: ExploreBlockerRecord[];
+}
+
+export interface ExplorePlaceDetailData {
+  place: ExplorePlaceRecord;
+  onward: ExplorePlaceRecord[];
+  connections: ExploreConnectionRecord[];
+  areas: ExploreResourceRecord[];
+  maps: ExploreResourceRecord[];
+  listings: ExploreResourceRecord[];
+  capabilities: ExploreCapabilityRecord[];
+  blockers: ExploreBlockerRecord[];
+}
+
+export interface RoutePlanLeg {
+  routeId: string;
+  from: string;
+  to: string;
+  territoryId: string;
+}
+
+export interface RoutePlanRecord {
+  id: string;
+  accountId: string;
+  from: string;
+  to: string;
+  legs: RoutePlanLeg[];
+  blockers: ExploreBlockerRecord[];
+  createdAt: string;
+}
+
+export interface ResourceReaderData {
+  resourceId: string;
+  authorityId?: string;
+  value?: unknown;
+}
 
 export interface ActionDescriptor {
   id: string;
@@ -96,10 +211,117 @@ export interface ActionRecord {
   resultReferences: Array<{ kind: 'request' | 'resource' | 'job' | 'event'; id: string }>;
   intent: { kind: string; inputs: Record<string, unknown> };
   submittedAt: string;
-  submission: { status: 'sending' | 'accepted' | 'rejected' | 'unverified'; result?: string; error?: string };
-  outcome: { status: 'pending' | 'completed' | 'failed' | 'unverified'; evidence: ActionEvidence[] };
+  submission: { status: 'sending' | 'accepted' | 'rejected' | 'unverified'; result?: string; error?: string; evidenceBaseline?: ActionEvidence[] };
+  outcome: { status: 'pending' | 'completed' | 'failed' | 'unverified'; evidence: ActionEvidence[]; error?: string };
 }
 
 export function actionIsComplete(record: ActionRecord): boolean {
   return record.submission.status === 'accepted' && record.outcome.status === 'completed' && record.outcome.evidence.length > 0;
+}
+
+export type ProductionOperationKind = 'mine' | 'manufacture' | 'transfer' | 'load' | 'unload';
+
+export interface ProductionOperationInput {
+  name: string;
+  label: string;
+  type: 'count' | 'choice';
+  required: boolean;
+  default?: string | number;
+  minimum?: number;
+  choices?: Array<{ value: string; label: string }>;
+}
+
+export interface ProductionOperation {
+  operationId: string;
+  authorityId: string;
+  kind: ProductionOperationKind;
+  label: string;
+  effect: string;
+  inputs: ProductionOperationInput[];
+  defaults: Record<string, string | number>;
+  blockers: string[];
+  available: boolean;
+  outputDestination?: string;
+  source: string;
+  observedAt: string;
+}
+
+export interface ProductionAuthorityRecord {
+  authorityId: string;
+  kind: 'policy' | 'simulation';
+  source: string;
+  state: 'available' | 'empty' | 'stale' | 'not-retrieved' | 'unavailable';
+  name?: string;
+  error?: string;
+  observedAt?: string;
+}
+
+export interface ProductionData {
+  accountId: string;
+  vesselId: string;
+  operations: ProductionOperation[];
+  authorities: ProductionAuthorityRecord[];
+  jobs: ProductionJob[];
+}
+
+export interface ProductionJobProgress {
+  remainingTicks?: number;
+  tick?: number;
+  count?: number;
+}
+
+export interface ProductionJob {
+  jobId: string;
+  authorityId: string;
+  accountId: string;
+  vesselId: string;
+  operation: ProductionOperationKind;
+  status: 'pending' | 'progress' | 'queued' | 'completed' | 'failed' | 'unverified';
+  source: string;
+  observedAt: string;
+  progress?: ProductionJobProgress;
+  output?: string;
+  cargo?: unknown;
+  evidence?: ActionEvidence[];
+  error?: string;
+}
+
+export interface LogisticsVesselIdentity {
+  id: string;
+  registry: string;
+  possessor: string;
+  capacity?: number;
+  name?: string;
+}
+
+export interface LogisticsRegistryObservation {
+  authorityId: string;
+  source: string;
+  state: 'available' | 'empty' | 'stale' | 'not-retrieved' | 'unavailable';
+  observedAt?: string;
+  error?: string;
+  cargo?: unknown;
+  adoption?: boolean;
+  location?: unknown;
+  pendingRequests?: unknown[];
+}
+
+export interface LogisticsTerritoryObservation {
+  authorityId: string;
+  kind: 'policy' | 'simulation';
+  source: string;
+  state: 'available' | 'empty' | 'stale' | 'not-retrieved' | 'unavailable';
+  observedAt?: string;
+  error?: string;
+  visit?: unknown;
+  cargo?: unknown;
+  sharedStock?: unknown;
+}
+
+export interface LogisticsVesselData {
+  accountId: string;
+  vesselId: string;
+  vessel?: LogisticsVesselIdentity;
+  registry: LogisticsRegistryObservation;
+  territories: LogisticsTerritoryObservation[];
 }

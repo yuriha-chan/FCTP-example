@@ -27,6 +27,8 @@ export interface StartDemoOptions {
 
 const defaultPorts: DemoPorts = { authority: 4100, policy: 4101, simulation: 4102, client: 4103 };
 const serviceNames = ['authority', 'policy', 'simulation', 'client'] as const;
+const demoPlayerPassword = 'demo-player-password';
+const demoGovernorPassword = 'demo-governor-password';
 
 export async function startDemo(options: StartDemoOptions) {
   const ports = { ...defaultPorts, ...options.ports };
@@ -63,7 +65,15 @@ export async function startDemo(options: StartDemoOptions) {
   };
 
   try {
-    authority = await createAuthorityApp({ origin: origin(ports.authority), storeFile: resolve(dataDir, 'authority.store.json'), keyFile: resolve(dataDir, 'authority.keys.json'), adminSecret: secrets.authority });
+    authority = await createAuthorityApp({
+      origin: origin(ports.authority),
+      storeFile: resolve(dataDir, 'authority.store.json'),
+      keyFile: resolve(dataDir, 'authority.keys.json'),
+      adminSecret: secrets.authority,
+      playerNames: ['player'],
+      administratorNames: ['governor'],
+      accountPasswords: { player: demoPlayerPassword, governor: demoGovernorPassword }
+    });
     policy = await createPolicyApp({ origin: origin(ports.policy), storeFile: resolve(dataDir, 'policy.store.json'), keyFile: resolve(dataDir, 'policy.keys.json'), authorityOrigin: origin(ports.authority), peerOrigin: origin(ports.simulation), adminSecret: secrets.policy });
     simulation = await createSimulationApp({ origin: origin(ports.simulation), storeFile: resolve(dataDir, 'simulation.store.json'), keyFile: resolve(dataDir, 'simulation.keys.json'), authorityOrigin: origin(ports.authority), peerOrigin: origin(ports.policy), adminSecret: secrets.simulation });
 
@@ -75,9 +85,20 @@ export async function startDemo(options: StartDemoOptions) {
       origins: { authority: origin(ports.authority), policy: origin(ports.policy), simulation: origin(ports.simulation) },
       actors: { registry: authority.ids.actor.registry, home: authority.ids.actor.home, player: authority.ids.actor.player, policy: policy.ids.actor, simulation: simulation.ids.actor }
     };
+    const governorAccountId = `@governor@${new URL(authority.ids.actor.home).host}`;
     application = await createClientApplication({
       storeFile: resolve(dataDir, 'client.store.json'),
-      seedServers: [config.origins.authority, config.origins.policy, config.origins.simulation]
+      seedServers: [config.origins.authority, config.origins.policy, config.origins.simulation],
+      administratorBindings: [
+        { accountId: governorAccountId, authorityActorIds: [authority.ids.actor.registry], credentialSource: 'authority-administrator' },
+        { accountId: governorAccountId, authorityActorIds: [policy.ids.actor], credentialSource: 'policy-administrator' },
+        { accountId: governorAccountId, authorityActorIds: [simulation.ids.actor], credentialSource: 'simulation-administrator' }
+      ],
+      administratorCredentials: {
+        'authority-administrator': secrets.authority,
+        'policy-administrator': secrets.policy,
+        'simulation-administrator': secrets.simulation
+      }
     });
     clientServer = await startClientServer({ port: ports.client, config, application });
     authority.authority.startWorkers();

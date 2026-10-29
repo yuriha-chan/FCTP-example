@@ -1,6 +1,10 @@
 import type { CargoManifest, FCTPActor, URI } from '@fctp/protocol';
 import { configuredOrigin, getAuthenticated, isRecord, loadConfig, localRequest as rawLocalRequest, mapText, portListings, readTextPublicThenAuthenticated, resourceAudience, resolveInput, resolveReference, sdk, territoryResources, verifyExit, type BrowserLocalActionDiscovery } from './client.js';
 import { setupAuthoring } from './authoring.js';
+import { setupActivityControls } from './activity-controls.js';
+import { setupApplicationControls } from './application-controls.js';
+import { setupExploreControls } from './explore-controls.js';
+import { setupLogisticsControls } from './logistics-controls.js';
 import { formatActionReason, formatActor, formatDiscovery, formatPolicyState, formatRegistryState, formatResult, formatSimulationState, formatVerification } from './presentation.js';
 import { identityDisplay, technicalAddresses, technicalDetails } from './identity-display.js';
 
@@ -51,6 +55,15 @@ const numberField = (formId: string, name: string): number => {
 
 document.documentElement.dataset.clientBusy = 'true';
 const config = await loadConfig();
+let selectedActivityAccountId: string | undefined;
+const exploreControls = setupExploreControls({ selectedAccountId: () => selectedActivityAccountId });
+const logisticsControls = setupLogisticsControls({ selectedAccountId: () => selectedActivityAccountId });
+setupApplicationControls({ onAccountSelected: (account) => {
+  selectedActivityAccountId = account?.id;
+  exploreControls?.accountChanged();
+  logisticsControls?.accountChanged();
+} });
+setupActivityControls({ selectedAccountId: () => selectedActivityAccountId });
 const resourceProvenance = new Map<string, string | Set<string>>();
 const localRequest = <T>(origin: string, path: string, options: Parameters<typeof rawLocalRequest<T>>[2] = {}): Promise<T> => {
   configuredOrigin(new URL(path, origin).href, config);

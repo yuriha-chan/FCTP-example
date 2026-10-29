@@ -3,7 +3,7 @@ import { parseHandle, resolveActor, resolveWebFinger, type ActorResolution } fro
 import { ResourceClient, resourceError, type ResourceRequestOptions } from '@fctp/resources';
 import { compareCargo, type CargoManifest, type FCTPActor, type URI } from '@fctp/protocol';
 export { actionIsComplete, observationIsCurrent, toPublicAccount } from './application.js';
-export type { AccountRecord, AccountScopedRequest, ActionDescriptor, ActionEvidence, ActionRecord, AuthorityRecord, AuthorityRole, LoginState, PageContext, PageResponse, PublicAccountRecord, ServerRecord, SourcedObservation } from './application.js';
+export type { AccountRecord, AccountScopedRequest, ActionDescriptor, ActionEvidence, ActionRecord, AuthorityRecord, AuthorityRole, ExploreBlockerRecord, ExploreCapabilityRecord, ExploreCapabilitySnapshot, ExploreConnectionRecord, ExploreEndpointRecord, ExplorePlaceDetailData, ExplorePlaceRecord, ExplorePlaceState, ExplorePlacesData, ExploreResourceRecord, LoginState, LogisticsRegistryObservation, LogisticsTerritoryObservation, LogisticsVesselData, LogisticsVesselIdentity, PageContext, PageResponse, ProductionAuthorityRecord, ProductionData, ProductionJob, ProductionJobProgress, ProductionOperation, ProductionOperationInput, ProductionOperationKind, PublicAccountRecord, ResourceReaderData, RoutePlanLeg, RoutePlanRecord, ServerRecord, SourcedObservation } from './application.js';
 
 export interface ClientSdkOptions { fetcher?: typeof fetch; resources?: ResourceClient }
 
