@@ -50,7 +50,7 @@ export class ResourceClient {
 
 export interface CollectionDocument<T> { id?: URI; type?: string; totalItems?: number; items?: T[]; orderedItems?: T[]; next?: URI | { id: URI } }
 
-function resourceError(status: number): ResourceError {
+export function resourceError(status: number): ResourceError {
   if (status === 401) return new ResourceError(status, 'unauthorized');
   if (status === 403) return new ResourceError(status, 'forbidden');
   if (status === 404) return new ResourceError(status, 'not-found');

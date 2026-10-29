@@ -1,23 +1,29 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
-import { createTokenDigest, createTokenRevoke, deriveDiplomaticToken, encodeNativeToken } from '@fctp/auth';
+import { promisify } from 'node:util';
+import { createTokenDigest, createTokenRevoke, deriveDiplomaticToken, encodeNativeToken, type HomeLoginResult } from '@fctp/auth';
+import { parseHandle } from '@fctp/identity';
 import { ResourceClient, ResourceError } from '@fctp/resources';
 import type { FCTPActor, TokenDeclaration, URI } from '@fctp/protocol';
 import type { Authority } from './bootstrap.js';
 
 interface ResourceActor extends FCTPActor, Record<string, unknown> { inbox: URI }
 interface UsedResource { id: URI; inbox: URI }
-interface PlayerState { nativeToken: string; resources: Record<string, UsedResource>; revisions: Record<string, number> }
-interface HomeState { players: Record<string, PlayerState> }
+interface PlayerState { nativeToken?: string; resources: Record<string, UsedResource>; revisions: Record<string, number>; available?: boolean }
+interface PasswordCredential { salt: string; hash: string }
+interface HomeState { players: Record<string, PlayerState>; credentials?: Record<string, PasswordCredential> }
+const derivePasswordHash = promisify(scrypt) as (password: string, salt: string, keylen: number) => Promise<Buffer>;
 
 export interface HomeOptions {
   playerActorId?: URI;
   fetcher?: typeof fetch;
   resourceClient?: ResourceClient;
+  accountPasswords?: Record<string, string>;
 }
 
 export interface HomeService {
   readonly resources: ResourceClient;
+  readonly ready: Promise<void>;
   authenticateNativeToken(token: string): Promise<URI | undefined>;
   issueNativeToken(playerActorId?: URI): Promise<string>;
   rotateNativeToken(playerActorId?: URI): Promise<string>;
@@ -46,14 +52,34 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
   });
   const nextActivityId = (): URI => `${authority.actor('home').id}/activities/${randomBytes(16).toString('hex')}`;
   const requirePlayer = (id: URI): void => { if (!playerActorIds.has(id)) throw new Error('unknown-local-player'); };
+  const requireAvailable = (player: PlayerState | undefined): void => { if (player?.available === false) throw new Error('account-unavailable'); };
+  const readCredential = async (id: URI): Promise<PasswordCredential | undefined> => authority.server.store.read((store) => {
+    const credential = (store.domain.home as HomeState | undefined)?.credentials?.[id];
+    return credential ? { ...credential } : undefined;
+  });
+  const provisioning = (async () => {
+    const passwords = options.accountPasswords;
+    if (!passwords) return;
+    const entries = Object.entries(passwords).flatMap(([name, password]) => {
+      const id = authority.players[name]?.id;
+      return id ? [[id, password] as const] : [];
+    });
+    if (entries.length === 0) return;
+    await authority.server.store.transaction(async (store) => {
+      const home = (store.domain.home ??= { players: {} }) as HomeState;
+      const credentials = (home.credentials ??= {});
+      for (const [id, password] of entries) if (!credentials[id]) credentials[id] = await createPasswordCredential(password);
+    });
+  })();
 
   const issue = async (id: URI, rotate: boolean): Promise<string> => {
     requirePlayer(id);
     const current = await readPlayer(id);
-    if (!current && rotate) throw new Error('native-token-not-issued');
-    if (current && !rotate) throw new Error('native-token-already-issued');
+    requireAvailable(current);
+    if (!current?.nativeToken && rotate) throw new Error('native-token-not-issued');
+    if (current?.nativeToken && !rotate) throw new Error('native-token-already-issued');
     const nativeToken = encodeNativeToken(randomBytes(32));
-    const player: PlayerState = current ?? { nativeToken, resources: {}, revisions: {} };
+    const player: PlayerState = current ?? { resources: {}, revisions: {} };
     player.nativeToken = nativeToken;
     if (current) {
       const outgoing = await Promise.all(Object.values(player.resources).map(async (resource) => {
@@ -75,6 +101,28 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
     return nativeToken;
   };
 
+  const login = async (handle: string, password: string): Promise<HomeLoginResult> => {
+    const rejected = (reason: string): HomeLoginResult => ({ status: 'rejected', handle, reason });
+    let parsed: ReturnType<typeof parseHandle>;
+    try {
+      parsed = parseHandle(handle);
+    } catch {
+      return rejected('invalid-handle');
+    }
+    if (parsed.kind !== 'account' || parsed.server !== new URL(authority.actor('home').id).host) return rejected('invalid-credentials');
+    const id = authority.players[parsed.localName]?.id;
+    if (!id || !playerActorIds.has(id)) return rejected('invalid-credentials');
+    await provisioning;
+    return serializePlayer(id, async () => {
+      const credential = await readCredential(id);
+      if (!credential || !await matchesPassword(password, credential)) return rejected('invalid-credentials');
+      const current = await readPlayer(id);
+      if (current?.available === false) return { status: 'unavailable', handle, reason: 'account-unavailable' };
+      const nativeToken = current?.nativeToken ?? await issue(id, false);
+      return { status: 'signed-in', handle, actorId: id, nativeToken };
+    });
+  };
+
   const withResource = async (id: URI, resource: UsedResource): Promise<PlayerState> => {
     const player = await readPlayer(id);
     if (!player) throw new Error('native-token-not-issued');
@@ -82,8 +130,36 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
     return player;
   };
 
+  const setAvailability = (id: URI, available: boolean): Promise<void> => serializePlayer(id, async () => {
+    requirePlayer(id);
+    const current = await readPlayer(id);
+    const wasAvailable = current?.available !== false;
+    const player: PlayerState = current ?? { resources: {}, revisions: {} };
+    player.available = available;
+    if (available) {
+      await authority.server.store.transaction((store) => {
+        const home = (store.domain.home ??= { players: {} }) as HomeState;
+        home.players[id] = player;
+      });
+      return;
+    }
+    delete player.nativeToken;
+    const outgoing = wasAvailable
+      ? Object.values(player.resources).map((resource) => {
+        const revision = (player.revisions[resource.id] ?? 0) + 1;
+        player.revisions[resource.id] = revision;
+        return { actorId: authority.actor('home').id, recipientActorId: resource.id, inbox: resource.inbox, object: { type: 'TokenRevoke', ...createTokenRevoke(id, revision) }, activityId: nextActivityId() };
+      })
+      : [];
+    await authority.server.commit((domain) => {
+      const home = (domain.home ??= { players: {} }) as HomeState;
+      home.players[id] = player;
+    }, outgoing);
+  });
+
   const service: HomeService = {
     resources,
+    ready: provisioning,
     authenticateNativeToken: (token) => authenticateNativeToken(token, authority, playerActorIds),
     issueNativeToken: (id = playerActorId) => serializePlayer(id, () => issue(id, false)),
     rotateNativeToken: (id = playerActorId) => serializePlayer(id, () => issue(id, true)),
@@ -103,6 +179,8 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
       return serializePlayer(id, async () => {
         requirePlayer(id);
         const player = await withResource(id, resource);
+        requireAvailable(player);
+        if (!player.nativeToken) throw new Error('native-token-not-issued');
         const revision = (player.revisions[resource.id] ?? 0) + 1;
         const diplomaticToken = await deriveDiplomaticToken(player.nativeToken, resource.id);
         const declaration = await createTokenDigest(id, revision, diplomaticToken);
@@ -118,7 +196,8 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
       return serializePlayer(id, async () => {
         requirePlayer(id);
         const player = await readPlayer(id);
-        if (!player) throw new Error('native-token-not-issued');
+        requireAvailable(player);
+        if (!player?.nativeToken) throw new Error('native-token-not-issued');
         return deriveDiplomaticToken(player.nativeToken, resourceActorId);
       });
     },
@@ -126,7 +205,8 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
       return serializePlayer(id, async () => {
         requirePlayer(id);
         const player = await readPlayer(id);
-        if (!player) throw new Error('native-token-not-issued');
+        requireAvailable(player);
+        if (!player?.nativeToken) throw new Error('native-token-not-issued');
         const token = await deriveDiplomaticToken(player.nativeToken, resourceActorId);
         return (await resources.get<T>(uri, { token })).value;
       });
@@ -138,12 +218,65 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
     const sendJson = (status: number, value: unknown): void => { response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); response.end(JSON.stringify(value)); };
     if (request.method === 'GET' && url.pathname === '/local/home/endpoints') {
       sendJson(200, { endpoints: [
+        { method: 'GET', path: '/local/home/accounts', authentication: 'native Home governor' },
+        { method: 'POST', path: '/local/home/accounts/availability', authentication: 'native Home governor' },
         { method: 'POST', path: '/local/home/issue', authentication: 'admin' },
         { method: 'POST', path: '/local/home/rotate', authentication: 'admin' },
         { method: 'POST', path: '/local/home/revoke', authentication: 'admin' },
         { method: 'POST', path: '/local/home/digest-request', authentication: 'admin' },
         { method: 'GET', path: '/local/home/proxy?uri=&resourceActor=', authentication: 'native-token' }
       ] });
+      return true;
+    }
+    if (request.method === 'GET' && url.pathname === '/local/home/accounts') {
+      const header = request.headers.authorization ?? '';
+      const callerId = header.startsWith('Bearer ') ? await service.authenticateNativeToken(header.slice(7)) : undefined;
+      if (!callerId || !authority.governors.has(callerId)) { sendJson(401, { error: 'unauthorized' }); return true; }
+      const host = new URL(authority.actor('home').id).host;
+      const states = await authority.server.store.read((store) => (store.domain.home as HomeState | undefined)?.players ?? {});
+      const accounts = Object.entries(authority.players).map(([name, player]) => ({ handle: `@${name}@${host}`, actorId: player.id, available: states[player.id]?.available !== false }));
+      sendJson(200, { accounts });
+      return true;
+    }
+    if (request.method === 'POST' && url.pathname === '/local/home/accounts/availability') {
+      const header = request.headers.authorization ?? '';
+      const callerId = header.startsWith('Bearer ') ? await service.authenticateNativeToken(header.slice(7)) : undefined;
+      if (!callerId || !authority.governors.has(callerId)) { sendJson(401, { error: 'unauthorized' }); return true; }
+      let body: Record<string, unknown>;
+      try {
+        body = await readJson(request);
+      } catch (error) {
+        if (!(error instanceof SyntaxError || error instanceof TypeError)) throw error;
+        sendJson(400, { error: 'invalid-request' });
+        return true;
+      }
+      if (typeof body.handle !== 'string' || typeof body.available !== 'boolean') { sendJson(400, { error: 'invalid-request' }); return true; }
+      let targetId: URI | undefined;
+      try {
+        const parsed = parseHandle(body.handle);
+        if (parsed.kind === 'account' && parsed.server === new URL(authority.actor('home').id).host) targetId = authority.players[parsed.localName]?.id;
+      } catch {
+        targetId = undefined;
+      }
+       if (!targetId || !playerActorIds.has(targetId) || (targetId === callerId && !body.available)) { sendJson(400, { error: 'invalid-target' }); return true; }
+      await setAvailability(targetId, body.available);
+      sendJson(200, { handle: body.handle, actorId: targetId, available: body.available });
+      return true;
+    }
+    if (request.method === 'POST' && url.pathname === '/local/home/login') {
+      let body: Record<string, unknown>;
+      try {
+        body = await readJson(request);
+      } catch (error) {
+        if (!(error instanceof SyntaxError || error instanceof TypeError)) throw error;
+        sendJson(400, { status: 'rejected', handle: '', reason: 'invalid-request' });
+        return true;
+      }
+      const handle = typeof body.handle === 'string' ? body.handle : '';
+      const password = typeof body.password === 'string' ? body.password : '';
+      if (!handle || !password) { sendJson(400, { status: 'rejected', handle, reason: 'invalid-request' }); return true; }
+      const result = await login(handle, password);
+      sendJson(result.status === 'signed-in' ? 200 : 401, result);
       return true;
     }
     if (url.pathname === '/local/home/proxy' && request.method === 'GET') {
@@ -187,12 +320,25 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
   return service;
 }
 
+async function createPasswordCredential(password: string): Promise<PasswordCredential> {
+  const salt = randomBytes(16).toString('hex');
+  return { salt, hash: (await derivePasswordHash(password, salt, 64)).toString('hex') };
+}
+
+async function matchesPassword(password: string, credential: PasswordCredential): Promise<boolean> {
+  const expected = Buffer.from(credential.hash, 'hex');
+  const actual = await derivePasswordHash(password, credential.salt, 64);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
 async function authenticateNativeToken(token: string, authority: Authority, playerActorIds: ReadonlySet<URI>): Promise<URI | undefined> {
   const supplied = Buffer.from(token);
   return authority.server.store.read((state) => {
     const home = state.domain.home as HomeState | undefined;
     for (const playerActorId of playerActorIds) {
-      const stored = home?.players[playerActorId]?.nativeToken;
+      const player = home?.players[playerActorId];
+      if (!player || player.available === false) continue;
+      const stored = player.nativeToken;
       if (!stored) continue;
       const expected = Buffer.from(stored);
       if (supplied.length === expected.length && timingSafeEqual(supplied, expected)) return playerActorId;

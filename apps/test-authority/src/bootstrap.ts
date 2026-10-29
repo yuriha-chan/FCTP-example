@@ -13,6 +13,7 @@ export interface CreateAuthorityOptions {
   keyFile?: string;
   adminSecret?: string;
   playerNames?: string[];
+  administratorNames?: string[];
   fetcher?: typeof fetch;
   verifyInbound?: FctpServerOptions['verifyInbound'];
   authorizeResource?: FctpServerOptions['authorizeResource'];
@@ -25,6 +26,7 @@ export interface Authority {
   readonly actors: AuthorityActors;
   readonly keys: Readonly<Record<string, GeneratedActorKey>>;
   readonly players: Readonly<Record<string, FCTPActor & Record<string, unknown>>>;
+  readonly governors: ReadonlySet<string>;
   readonly primaryPlayerName: string;
   actor(role: AuthorityRole): AuthorityActors[AuthorityRole];
   key(role: AuthorityRole): GeneratedActorKey;
@@ -40,9 +42,13 @@ const roles: AuthorityRole[] = ['registry', 'home', 'player'];
 export async function createAuthority(options: CreateAuthorityOptions): Promise<Authority> {
   const playerNames = options.playerNames ?? ['player'];
   if (playerNames.length === 0 || new Set(playerNames).size !== playerNames.length || playerNames.some((name) => !/^[^.]+$/.test(name))) throw new TypeError('Player names must be non-empty, unique, and contain no dots');
+  const administratorNames = options.administratorNames ?? [];
+  if (new Set(administratorNames).size !== administratorNames.length || administratorNames.some((name) => !/^[^.]+$/.test(name))) throw new TypeError('Administrator names must be unique and contain no dots');
+  if (administratorNames.some((name) => playerNames.includes(name))) throw new TypeError('Player and administrator names must be distinct and unique');
   const primaryPlayerName = playerNames[0]!;
-  const playerRoles = new Set(playerNames);
-  const descriptors = [...roles.slice(0, 2).map((name) => ({ name, role: name })), ...playerNames.map((name) => ({ name, role: 'player' }))];
+  const accountNames = [...playerNames, ...administratorNames];
+  const playerRoles = new Set(accountNames);
+  const descriptors = [...roles.slice(0, 2).map((name) => ({ name, role: name })), ...accountNames.map((name) => ({ name, role: 'player' }))];
   const host = await createHost({
     origin: options.origin,
     storeFile: options.storeFile,
@@ -58,12 +64,14 @@ export async function createAuthority(options: CreateAuthorityOptions): Promise<
     }
   });
   const actors = host.actors as AuthorityActors;
-  const players = Object.fromEntries(playerNames.map((name) => [name, actors[name]!])) as Record<string, FCTPActor & Record<string, unknown>>;
+  const players = Object.fromEntries(accountNames.map((name) => [name, actors[name]!])) as Record<string, FCTPActor & Record<string, unknown>>;
+  const governors = new Set(administratorNames.map((name) => actors[name]!.id));
   return {
     server: host.server,
     actors,
     keys: host.keys,
     players,
+    governors,
     primaryPlayerName,
     actor: (role) => role === 'player' ? actors[primaryPlayerName]! : actors[role],
     key: (role) => host.key(role),

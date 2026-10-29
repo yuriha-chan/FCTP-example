@@ -137,6 +137,21 @@ export function checkExitEvidenceBinding(
 }
 
 export interface ActorResolution { actor: FCTPActor; source: 'uri' | 'webfinger' }
+export type ParsedHandle =
+  | { handle: string; localName: string; server: string; kind: 'account' }
+  | { handle: string; localName: string; server: string; kind: 'authority'; role: string };
+
+export function parseHandle(handle: string): ParsedHandle {
+  const match = /^@([a-zA-Z0-9-]+)(?:\.([a-zA-Z0-9-]+))?@([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*)(?::([0-9]+))?$/.exec(handle);
+  if (!match) throw new TypeError('Expected @name@server or @name.role@server');
+  const [, localName, role, domain, port] = match;
+  if (port !== undefined && (Number(port) < 1 || Number(port) > 65535)) throw new TypeError('Invalid server port');
+  const server = `${domain}${port === undefined ? '' : `:${port}`}`;
+  return role === undefined
+    ? { handle, localName: localName!, server, kind: 'account' }
+    : { handle, localName: localName!, server, kind: 'authority', role };
+}
+
 export async function resolveActor(uri: URI, fetcher: typeof fetch = fetch): Promise<ActorResolution> {
   const response = await fetcher(uri, { headers: { Accept: 'application/activity+json, application/ld+json' } });
   if (!response.ok) throw new Error(`Actor retrieval failed: HTTP ${response.status}`);

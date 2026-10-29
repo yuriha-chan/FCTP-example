@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import type { ClientApplication } from '../../client-server/src/app.js';
 
 export interface ClientServerConfig {
   origins: { authority: string; policy: string; simulation: string };
@@ -12,6 +13,7 @@ export interface StartClientServerOptions {
   host?: string;
   config: ClientServerConfig;
   root?: string;
+  application?: ClientApplication;
 }
 
 export interface ClientServer {
@@ -19,7 +21,7 @@ export interface ClientServer {
   close(): Promise<void>;
 }
 
-export async function startClientServer({ port, host = '127.0.0.1', config, root = process.cwd() }: StartClientServerOptions): Promise<ClientServer> {
+export async function startClientServer({ port, host = '127.0.0.1', config, root = process.cwd(), application }: StartClientServerOptions): Promise<ClientServer> {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new RangeError('Client server port must be an integer from 0 to 65535');
   const staticRoot = resolve(root);
   const allowed: Record<string, { file: string; type: string }> = {
@@ -31,6 +33,7 @@ export async function startClientServer({ port, host = '127.0.0.1', config, root
   const server = createServer((request, response) => {
     void (async () => {
       const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+      if (application && await application.handle(request, response)) return;
       if (request.method !== 'GET' && request.method !== 'HEAD') { response.writeHead(405); response.end(); return; }
       if (pathname === '/config.json') {
         response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });

@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { startClientServer } from './client-server.js';
+import { createClientApplication, type ClientApplication } from '../../client-server/src/app.js';
 import { createAuthorityApp } from '../../test-authority/src/app.js';
 import { createPolicyApp } from '../../territory-policy/src/app.js';
 import { createSimulationApp } from '../../territory-sim/src/app.js';
@@ -47,6 +48,7 @@ export async function startDemo(options: StartDemoOptions) {
   let policy: Awaited<ReturnType<typeof createPolicyApp>> | undefined;
   let simulation: Awaited<ReturnType<typeof createSimulationApp>> | undefined;
   let clientServer: Awaited<ReturnType<typeof startClientServer>> | undefined;
+  let application: ClientApplication | undefined;
   let closed = false;
 
   const close = async (): Promise<void> => {
@@ -54,6 +56,7 @@ export async function startDemo(options: StartDemoOptions) {
     closed = true;
     const shutdowns = [authority?.authority.close(), policy?.host.close(), simulation?.host.close()];
     if (clientServer) shutdowns.push(clientServer.close());
+    if (application) shutdowns.push(application.close());
     const results = await Promise.allSettled(shutdowns);
     const failures = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
     if (failures.length > 0) throw new AggregateError(failures, 'One or more demo services failed to close');
@@ -72,11 +75,15 @@ export async function startDemo(options: StartDemoOptions) {
       origins: { authority: origin(ports.authority), policy: origin(ports.policy), simulation: origin(ports.simulation) },
       actors: { registry: authority.ids.actor.registry, home: authority.ids.actor.home, player: authority.ids.actor.player, policy: policy.ids.actor, simulation: simulation.ids.actor }
     };
-    clientServer = await startClientServer({ port: ports.client, config });
+    application = await createClientApplication({
+      storeFile: resolve(dataDir, 'client.store.json'),
+      seedServers: [config.origins.authority, config.origins.policy, config.origins.simulation]
+    });
+    clientServer = await startClientServer({ port: ports.client, config, application });
     authority.authority.startWorkers();
     policy.host.startWorkers();
     simulation.host.startWorkers();
-    return { ports, origins: { ...config.origins, client: clientServer.origin }, authority, policy, simulation, close };
+    return { ports, origins: { ...config.origins, client: clientServer.origin }, authority, policy, simulation, application, close };
   } catch (error) {
     await close();
     throw error;

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
+import type { ClientApplication } from '../apps/client-server/src/app.js';
 import { startDemo } from '../apps/demo/src/launcher.js';
 
 let dataDir: string;
@@ -56,6 +57,22 @@ test('serves authority and Territory resources plus a credential-free client con
   assert.deepEqual(Object.keys(config).sort(), ['actors', 'origins']);
   assert.equal(JSON.stringify(config).includes('demo-authority-admin'), false);
   assert.equal((await get(demo.origins.client, '/../../package.json')).status, 404);
+});
+
+test('exposes the client API and persists client state under the demo data directory', async () => {
+  const healthResponse = await fetch(new URL('/api/health', demo.origins.client));
+  assert.equal(healthResponse.status, 200);
+  assert.match(healthResponse.headers.get('content-type') ?? '', /application\/json/);
+  const healthBody = await healthResponse.text();
+  for (const secret of ['demo-authority-admin', 'demo-policy-admin', 'demo-sim-admin', demo.origins.authority, demo.origins.policy, demo.origins.simulation]) {
+    assert.equal(healthBody.includes(secret), false, secret);
+  }
+  const storeBody = await readFile(join(dataDir, 'client.store.json'), 'utf8');
+  assert.ok(storeBody.length > 0);
+  const application = (demo as unknown as { application?: ClientApplication }).application;
+  assert.ok(application);
+  const servers = await application.state.read((state) => Object.keys(state.servers));
+  assert.deepEqual(servers, []);
 });
 
 test('closes all listeners cleanly', async () => {

@@ -1,5 +1,10 @@
 import type { TokenDeclaration, TokenDigest, TokenRevoke, URI } from '@fctp/protocol';
 
+export interface HomeLoginRequest { handle: string; password: string }
+export type HomeLoginResult =
+  | { status: 'signed-in'; handle: string; actorId: URI; nativeToken: string; expiresAt?: string }
+  | { status: 'rejected' | 'unavailable'; handle: string; reason: string };
+
 const encoder = new TextEncoder();
 const base64 = (bytes: Uint8Array): string => {
   let binary = '';

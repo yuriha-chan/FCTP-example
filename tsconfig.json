@@ -11,6 +11,7 @@
     { "path": "./apps/test-authority" },
     { "path": "./apps/territory-policy" },
     { "path": "./apps/territory-sim" },
+    { "path": "./apps/client-server" },
     { "path": "./apps/demo" },
     { "path": "./apps/browser-harness" }
   ]

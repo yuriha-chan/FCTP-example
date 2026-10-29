@@ -13,7 +13,9 @@ export interface CreateAuthorityAppOptions {
   fetcher?: typeof fetch;
   adoption?: boolean;
   playerNames?: string[];
+  administratorNames?: string[];
   vesselNames?: Record<string, string>;
+  accountPasswords?: Record<string, string>;
 }
 
 export interface AuthorityAppIds {
@@ -39,13 +41,18 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
     ...(options.keyFile ? { keyFile: options.keyFile } : {}),
     adminSecret: options.adminSecret,
     ...(options.playerNames ? { playerNames: options.playerNames } : {}),
+    ...(options.administratorNames ? { administratorNames: options.administratorNames } : {}),
     fetcher,
     verifyInbound: createInboundVerifier({
       fetcher,
        resolveExpectedIssuer: async (_localActorId, senderActorId, activity) => registry.resolveExpectedIssuer(senderActorId, activity.object)
     })
   });
-  const home = installHome(authority, { fetcher });
+  const home = installHome(authority, {
+    fetcher,
+    ...(options.accountPasswords ? { accountPasswords: options.accountPasswords } : {})
+  });
+  await home.ready;
   const authoring = installAuthoring(authority, home, options.origin);
   const playerNames = options.playerNames ?? ['player'];
   const origin = options.origin.replace(/\/$/, '');
@@ -106,6 +113,7 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
         { method: 'POST', path: '/local/authoring/assets', authentication: 'native Player' },
         { method: 'POST', path: '/local/authoring/varieties', authentication: 'native Player' },
         { method: 'GET', path: '/local/home/endpoints', authentication: 'none' },
+        { method: 'GET', path: '/local/home/accounts', authentication: 'native Home governor' },
         { method: 'GET', path: '/local/registry/actions?vessel=<URI>', authentication: 'native Player; owned vessel' },
         { method: 'POST', path: '/local/home/issue', authentication: 'admin' },
         { method: 'POST', path: '/local/home/rotate', authentication: 'admin' },
