@@ -154,10 +154,73 @@ export interface RoutePlanRecord {
   createdAt: string;
 }
 
+export type JourneyStepKind = 'local-movement' | 'departure' | 'entry';
+
+export type JourneyStepStatus = 'queued' | 'sending' | 'pending' | 'completed' | 'failed' | 'unverified';
+
+export interface JourneyStep {
+  routeId: string;
+  from: string;
+  to: string;
+  territoryId: string;
+  kind?: JourneyStepKind;
+  status: JourneyStepStatus;
+  requestId?: string;
+  eventId?: string;
+  error?: string;
+  observedAt?: string;
+}
+
+export type JourneyStatus = 'queued' | 'sending' | 'pending' | 'completed' | 'failed' | 'unverified';
+
+export interface JourneyProgress {
+  routePlanId: string;
+  vesselId: string;
+  status: JourneyStatus;
+  legs: JourneyStep[];
+  updatedAt: string;
+  error?: string;
+}
+
 export interface ResourceReaderData {
   resourceId: string;
   authorityId?: string;
   value?: unknown;
+}
+
+export type AuthoringKind = 'asset' | 'variety';
+
+export interface AuthoringDraftPublication {
+  actionId?: string;
+  resourceIds?: string[];
+}
+
+export interface AuthoringDraft {
+  id: string;
+  accountId: string;
+  kind: AuthoringKind;
+  fields: Record<string, unknown>;
+  savedAt: string;
+  publication?: AuthoringDraftPublication;
+}
+
+export interface LibraryEntry {
+  id: string;
+  type?: string;
+  name?: string;
+  holder?: string;
+  asset?: string;
+  variety?: string;
+  grantee?: string;
+  production?: unknown[];
+  media?: unknown[];
+}
+
+export interface LibraryData {
+  assets: LibraryEntry[];
+  varieties: LibraryEntry[];
+  grants: LibraryEntry[];
+  drafts: AuthoringDraft[];
 }
 
 export interface ActionDescriptor {
@@ -213,6 +276,7 @@ export interface ActionRecord {
   submittedAt: string;
   submission: { status: 'sending' | 'accepted' | 'rejected' | 'unverified'; result?: string; error?: string; evidenceBaseline?: ActionEvidence[] };
   outcome: { status: 'pending' | 'completed' | 'failed' | 'unverified'; evidence: ActionEvidence[]; error?: string };
+  journey?: JourneyProgress;
 }
 
 export function actionIsComplete(record: ActionRecord): boolean {
@@ -324,4 +388,52 @@ export interface LogisticsVesselData {
   vessel?: LogisticsVesselIdentity;
   registry: LogisticsRegistryObservation;
   territories: LogisticsTerritoryObservation[];
+}
+
+export type AdministrationControlName = 'policy' | 'admission' | 'facilities' | 'tick' | 'adoption' | 'availability';
+
+export interface AdministrationControlInput {
+  name: string;
+  label: string;
+  type: 'text' | 'number' | 'boolean' | 'choice' | 'json';
+  required?: boolean;
+  choices?: string[];
+}
+
+export interface AdministrationControlRecord {
+  name: AdministrationControlName;
+  authorityId: string;
+  label: string;
+  inputs: AdministrationControlInput[];
+}
+
+export interface AdministrationTargetRecord {
+  authorityId: string;
+  server: string;
+  roles: AuthorityRole[];
+  name?: string;
+  kind?: 'policy' | 'simulation' | 'registry' | 'home';
+  source?: string;
+  state: 'available' | 'empty' | 'stale' | 'not-retrieved' | 'unavailable';
+  observedAt?: string;
+  error?: string;
+}
+
+export interface AdministrationRequestRecord {
+  requestId: string;
+  authorityId?: string;
+  request: Record<string, unknown>;
+  status: string;
+  sender?: string;
+  receivedAt?: string;
+  decision?: Record<string, unknown>;
+  event?: Record<string, unknown>;
+}
+
+export interface AdministrationData {
+  accountId: string;
+  targets: AdministrationTargetRecord[];
+  controls: AdministrationControlRecord[];
+  requests: AdministrationRequestRecord[];
+  states: Record<string, Record<string, unknown>>;
 }

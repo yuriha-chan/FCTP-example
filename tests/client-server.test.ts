@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { deriveDiplomaticToken } from '@fctp/auth';
-import type { URI } from '@fctp/protocol';
+import { createLocalDocumentLoader, verifyProofCryptography } from '@fctp/identity';
+import type { Route, URI } from '@fctp/protocol';
 import { actionIsComplete } from '@fctp/client-sdk';
 import type { AccountRecord, ActionRecord, AuthorityRecord, PageResponse, PublicAccountRecord, ServerRecord, SourcedObservation } from '@fctp/client-sdk';
 import type { ActionHandler } from '../apps/client-server/src/actions.js';
@@ -1644,10 +1645,18 @@ interface ProductionWorld {
   simulation: Awaited<ReturnType<typeof createSimulationApp>>;
   accounts: Record<'first' | 'second', AccountRecord>;
   nativeTokens: Record<'first' | 'second', string>;
+  governor?: AccountRecord;
   close(): Promise<void>;
 }
 
-async function startProductionWorld(directory: string): Promise<ProductionWorld> {
+interface ProductionWorldOptions {
+  administratorNames?: string[];
+  accountPasswords?: Record<string, string>;
+  additionalPolicyRoutes?: (origins: { policyOrigin: string; simulationOrigin: string }) => Route[];
+  additionalSimulationRoutes?: (origins: { policyOrigin: string; simulationOrigin: string }) => Route[];
+}
+
+async function startProductionWorld(directory: string, options: ProductionWorldOptions = {}): Promise<ProductionWorld> {
   const [authorityPort, policyPort, simulationPort] = await Promise.all([freePort(), freePort(), freePort()]);
   const origins = {
     authority: `http://127.0.0.1:${authorityPort}`,
@@ -1656,9 +1665,15 @@ async function startProductionWorld(directory: string): Promise<ProductionWorld>
   };
   const adminSecret = 'task08-production-admin';
   const playerNames = ['player', 'other'];
-  const authority = await createAuthorityApp({ origin: origins.authority, storeFile: join(directory, 'authority.json'), adminSecret, playerNames });
-  const policy = await createPolicyApp({ origin: origins.policy, storeFile: join(directory, 'policy.json'), authorityOrigin: origins.authority, playerNames, peerOrigin: origins.simulation, adminSecret });
-  const simulation = await createSimulationApp({ origin: origins.simulation, storeFile: join(directory, 'simulation.json'), authorityOrigin: origins.authority, playerNames, peerOrigin: origins.policy, adminSecret });
+  const additionalPolicyRoutes = options.additionalPolicyRoutes?.({ policyOrigin: origins.policy, simulationOrigin: origins.simulation }) ?? [];
+  const additionalSimulationRoutes = options.additionalSimulationRoutes?.({ policyOrigin: origins.policy, simulationOrigin: origins.simulation }) ?? [];
+  const authority = await createAuthorityApp({
+    origin: origins.authority, storeFile: join(directory, 'authority.json'), adminSecret, playerNames,
+    ...(options.administratorNames === undefined ? {} : { administratorNames: options.administratorNames }),
+    ...(options.accountPasswords === undefined ? {} : { accountPasswords: options.accountPasswords })
+  });
+  const policy = await createPolicyApp({ origin: origins.policy, storeFile: join(directory, 'policy.json'), authorityOrigin: origins.authority, playerNames, peerOrigin: origins.simulation, adminSecret, additionalRoutes: additionalPolicyRoutes });
+  const simulation = await createSimulationApp({ origin: origins.simulation, storeFile: join(directory, 'simulation.json'), authorityOrigin: origins.authority, playerNames, peerOrigin: origins.policy, adminSecret, additionalRoutes: additionalSimulationRoutes });
   await Promise.all([
     authority.authority.listen(authorityPort, '127.0.0.1'),
     policy.host.listen(policyPort, '127.0.0.1'),
@@ -1691,12 +1706,106 @@ async function startProductionWorld(directory: string): Promise<ProductionWorld>
       assert.equal(await territory.host.server.processInbox(), 1);
     }
   }
+  let governor: AccountRecord | undefined;
+  const governorName = options.administratorNames?.[0];
+  if (governorName !== undefined) {
+    const actorId = authority.ids.players[governorName]!;
+    const issued = await fetch(`${origins.authority}/local/home/issue`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ actor: actorId }) });
+    assert.equal(issued.status, 200);
+    const nativeToken = (await issued.json() as { nativeToken: string }).nativeToken;
+    governor = {
+      id: `@${governorName}@${new URL(origins.authority).host}`,
+      handle: `@${governorName}@${new URL(origins.authority).host}`,
+      homeServer: new URL(origins.authority).host,
+      actorId,
+      homeAuthority: authority.ids.actor.home,
+      login: { status: 'signed-in', homeServer: new URL(origins.authority).host, nativeToken }
+    };
+  }
   return {
     origins, adminSecret, authority, policy, simulation, accounts, nativeTokens,
+    ...(governor === undefined ? {} : { governor }),
     async close() {
       await Promise.allSettled([simulation.host.close(), policy.host.close(), authority.authority.close()]);
     }
   };
+}
+
+interface AuthoringFetchControl {
+  fail?: (url: URL, method: string) => boolean;
+}
+
+function authoringFetch(calls: ExploreCall[], control: AuthoringFetchControl): typeof fetch {
+  return async (input, init) => {
+    const request = input instanceof Request ? input : undefined;
+    const url = request ? request.url : String(input);
+    const method = init?.method ?? request?.method ?? 'GET';
+    const headers = new Headers(init?.headers ?? request?.headers);
+    calls.push({ url, method, authorization: headers.get('authorization') ?? '' });
+    if (control.fail?.(new URL(url), method)) throw new TypeError('authoring read-back unavailable');
+    return fetch(input, init);
+  };
+}
+
+async function openAuthoringClient(
+  storeFile: string,
+  world: ProductionWorld,
+  control: AuthoringFetchControl
+): Promise<{ application: ClientApplication; client: Awaited<ReturnType<typeof startClientServer>>; calls: ExploreCall[] }> {
+  const calls: ExploreCall[] = [];
+  const opened = await openFixtureApplication(storeFile, authoringFetch(calls, control));
+  await opened.application.state.transaction((state) => {
+    state.accounts[world.accounts.first.id] = world.accounts.first;
+    state.accounts[world.accounts.second.id] = world.accounts.second;
+  });
+  await discoverOrigins(opened.client.origin, Object.values(world.origins));
+  return { ...opened, calls };
+}
+
+function draftFrom(body: unknown): Record<string, unknown> {
+  const draft = findRecord(body, (record) => typeof record.id === 'string' && typeof record.kind === 'string' && isRecord(record.fields) && typeof record.accountId === 'string');
+  assert.ok(draft, `Expected an authoring draft in ${JSON.stringify(body)}`);
+  return draft;
+}
+
+function libraryData(body: unknown): Record<string, unknown> {
+  assert.ok(isRecord(body) && isRecord(body.data), `Expected library page data in ${JSON.stringify(body)}`);
+  return body.data;
+}
+
+function libraryRecords(body: unknown, name: string): Array<Record<string, unknown>> {
+  const value = libraryData(body)[name];
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function publicationResourceRefs(action: ActionRecord): Array<{ kind: string; id: string }> {
+  return action.resultReferences.filter((reference) => reference.kind === 'resource');
+}
+
+function assertNoSecrets(value: unknown, secrets: readonly string[]): void {
+  const text = JSON.stringify(value);
+  for (const secret of secrets) if (secret) assert.equal(text.includes(secret), false, 'credentials must not be serialized');
+}
+
+async function postJson(url: URL, body: unknown): Promise<{ status: number; body: unknown }> {
+  const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  return { status: response.status, body: await readJsonResponse(response) };
+}
+
+async function getJson(url: URL): Promise<{ status: number; body: unknown }> {
+  const response = await fetch(url);
+  return { status: response.status, body: await readJsonResponse(response) };
+}
+
+async function seedAuthorityAsset(world: ProductionWorld, nativeToken: string, name: string, text: string): Promise<Record<string, unknown>> {
+  const response = await fetch(`${world.origins.authority}/local/authoring/assets`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${nativeToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, text })
+  });
+  assert.equal(response.status, 201);
+  const body = await response.json() as Record<string, unknown>;
+  return isRecord(body.asset) ? body.asset : body;
 }
 
 async function exchangeWorld(
@@ -1816,6 +1925,72 @@ async function submitLogisticsEntry(clientOrigin: string, world: ProductionWorld
   });
   assert.equal(response.status, 200, await response.clone().text());
   return actionFromBody(await response.json());
+}
+
+async function submitLogisticsEntryFor(clientOrigin: string, world: ProductionWorld, accountId: string, vesselId: string, territory: 'policy' | 'simulation'): Promise<ActionRecord> {
+  const target = world[territory];
+  const response = await fetch(new URL(logisticsPath(vesselId, '/entry'), clientOrigin), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ accountId, territoryId: target.ids.actor, portId: target.ids.ports[0], routeId: target.ids.routes[0] })
+  });
+  assert.equal(response.status, 200, await response.clone().text());
+  return actionFromBody(await response.json());
+}
+
+function journeyOutboundRouteId(world: ProductionWorld): string {
+  return `${world.origins.policy}/objects/routes/outbound`;
+}
+
+async function saveJourneyPlan(clientOrigin: string, accountId: string, from: string, to: string): Promise<Record<string, unknown>> {
+  const response = await postJson(new URL('/api/explore/routes', clientOrigin), { accountId, from, to });
+  assert.equal(response.status, 200, `saving the connected plan: ${JSON.stringify(response.body)}`);
+  const plan = findRecord(response.body, (record) => typeof record.id === 'string' && record.accountId === accountId && record.from === from && record.to === to && Array.isArray(record.legs));
+  assert.ok(plan, `Expected a saved route plan in ${JSON.stringify(response.body)}`);
+  return plan;
+}
+
+async function traverseJourney(clientOrigin: string, accountId: string, vesselId: string, routePlanId: string, extra: Record<string, unknown> = {}): Promise<{ status: number; body: unknown; action?: ActionRecord }> {
+  const response = await postJson(new URL(logisticsPath(vesselId, '/traverse'), clientOrigin), { accountId, routePlanId, ...extra });
+  return { status: response.status, body: response.body, ...(response.status === 200 ? { action: actionFromBody(response.body) } : {}) };
+}
+
+function actionJourneyLegs(action: ActionRecord): Array<Record<string, unknown>> {
+  const journey = (action as unknown as Record<string, unknown>).journey;
+  assert.ok(isRecord(journey), `Expected typed journey progress on the traverse action, received ${JSON.stringify(action)}`);
+  assert.ok(Array.isArray(journey.legs) && journey.legs.length > 0, 'journey progress exposes per-leg steps');
+  return journey.legs.filter(isRecord);
+}
+
+async function registryEntryRequests(world: ProductionWorld, vesselId: string, territoryId: string): Promise<Array<Record<string, unknown>>> {
+  const state = await world.authority.registry.state(vesselId);
+  return Object.values(state.requests).filter((request): request is Record<string, unknown> => isRecord(request) && request.type === 'EntryRequest' && isRecord(request.destination) && request.destination.territory === territoryId);
+}
+
+async function registryEvents(world: ProductionWorld, vesselId: string): Promise<Array<Record<string, unknown>>> {
+  return (await world.authority.registry.state(vesselId)).events as unknown as Array<Record<string, unknown>>;
+}
+
+async function refreshJourneyUntil(clientOrigin: string, accountId: string, actionId: string, predicate: (action: ActionRecord) => boolean | Promise<boolean>, label: string, attempts = 10): Promise<ActionRecord> {
+  let action = await readActivityAction(clientOrigin, accountId, actionId);
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (await predicate(action)) return action;
+    action = await refreshActivityAction(clientOrigin, accountId, actionId);
+  }
+  assert.ok(await predicate(action), label);
+  return action;
+}
+
+function controllableJourneyFetch(calls: ExploreCall[], control: { fail?: (url: URL, method: string) => boolean }): typeof fetch {
+  return async (input, init) => {
+    const request = input instanceof Request ? input : undefined;
+    const url = request ? request.url : String(input);
+    const method = init?.method ?? request?.method ?? 'GET';
+    const headers = new Headers(init?.headers ?? request?.headers);
+    calls.push({ url, method, authorization: headers.get('authorization') ?? '' });
+    if (control.fail?.(new URL(url), method)) throw new TypeError('controlled observation unavailable');
+    return fetch(input, init);
+  };
 }
 
 async function executeOperation(
@@ -2399,6 +2574,1113 @@ test('production tracks Simulation jobs and handling as pending until test-admin
     await opened.client.close();
     await opened.application.close();
     await world.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('library and drafts retain scoped incomplete authoring fields without world IO and survive restart', { timeout: 120_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-task09-library-drafts-'));
+  const storeFile = join(directory, 'client.json');
+  const world = await startProductionWorld(directory);
+  let opened = await openProductionClient(storeFile, world);
+  const first = world.accounts.first;
+  const second = world.accounts.second;
+  const libraryUrl = (accountId: string) => new URL(`/api/library?accountId=${encodeURIComponent(accountId)}`, opened.client.origin);
+  try {
+    const readCalls = opened.calls.length;
+    const empty = await getJson(libraryUrl(first.id));
+    assert.equal(empty.status, 200);
+    assert.equal(opened.calls.length, readCalls, 'reading the retained library must not perform world IO');
+    assert.deepEqual(libraryRecords(empty.body, 'assets'), []);
+    assert.deepEqual(libraryRecords(empty.body, 'varieties'), []);
+    assert.deepEqual(libraryRecords(empty.body, 'grants'), []);
+    assert.deepEqual(libraryRecords(empty.body, 'drafts'), []);
+
+    const assetFields = {
+      name: 'Harbor Notice',
+      text: '<b>inert notice</b>',
+      accountId: second.id,
+      holder: 'https://foreign.test/actors/evil',
+      endpoint: 'https://foreign.test/local/authoring/assets'
+    };
+    const createdAsset = await postJson(new URL('/api/drafts', opened.client.origin), { accountId: first.id, kind: 'asset', fields: assetFields });
+    assert.ok([200, 201].includes(createdAsset.status), `creating a draft returned ${createdAsset.status}`);
+    const assetDraft = draftFrom(createdAsset.body);
+    assert.equal(assetDraft.kind, 'asset');
+    assert.equal(assetDraft.accountId, first.id, 'draft fields cannot replace the owning account');
+    assert.equal((assetDraft.fields as Record<string, unknown>).name, 'Harbor Notice');
+    assert.equal((assetDraft.fields as Record<string, unknown>).text, '<b>inert notice</b>');
+    assert.equal(typeof assetDraft.savedAt, 'string');
+    const assetDraftId = assetDraft.id as string;
+
+    const production = [
+      { type: 'manufacture', duration: 2, ingredients: [{ variety: 'https://resources.test/ore', count: 3, data: { grade: 'a' } }], location: [{ id: 'https://places.test/workshop', name: 'Workshop', territory: 'https://places.test/territory' }], tool: 'https://tools.test/hammer', yield: [{ probability: 0.75, count: 2, data: { nested: { tag: 'kept' } } }] },
+      { type: 'mine', duration: 1, ingredients: [{ id: 'https://items.test/one', variety: 'https://resources.test/ore', data: { tag: 'item' } }], yield: [{ probability: 1, count: 1, data: {} }] }
+    ];
+    const createdVariety = await postJson(new URL('/api/drafts', opened.client.origin), {
+      accountId: first.id,
+      kind: 'variety',
+      fields: { name: 'Unfinished Alloy', mass: 2.5, version: '1', production }
+    });
+    assert.ok([200, 201].includes(createdVariety.status), `creating a draft returned ${createdVariety.status}`);
+    const varietyDraft = draftFrom(createdVariety.body);
+    assert.equal(varietyDraft.kind, 'variety');
+    assert.deepEqual((varietyDraft.fields as Record<string, unknown>).production, production, 'incomplete production arrays are persisted without loss');
+    const varietyDraftId = varietyDraft.id as string;
+
+    const savedAsset = await postJson(new URL(`/api/drafts/${encodeURIComponent(assetDraftId)}`, opened.client.origin), {
+      accountId: first.id,
+      fields: { ...assetFields, text: '<b>revised notice</b>' }
+    });
+    assert.ok([200, 201].includes(savedAsset.status), `saving a draft returned ${savedAsset.status}`);
+    assert.equal((draftFrom(savedAsset.body).fields as Record<string, unknown>).text, '<b>revised notice</b>');
+
+    const detailCalls = opened.calls.length;
+    const readAsset = await getJson(new URL(`/api/drafts/${encodeURIComponent(assetDraftId)}?accountId=${encodeURIComponent(first.id)}`, opened.client.origin));
+    assert.equal(readAsset.status, 200);
+    assert.equal(opened.calls.length, detailCalls, 'reading a draft must not perform world IO');
+    assert.equal((draftFrom(readAsset.body).fields as Record<string, unknown>).text, '<b>revised notice</b>');
+
+    const missingScope = await getJson(new URL(`/api/drafts/${encodeURIComponent(assetDraftId)}`, opened.client.origin));
+    assert.equal(missingScope.status, 400);
+    const wrongOwner = await getJson(new URL(`/api/drafts/${encodeURIComponent(assetDraftId)}?accountId=${encodeURIComponent(second.id)}`, opened.client.origin));
+    assert.equal(wrongOwner.status, 404);
+    assert.equal(JSON.stringify(wrongOwner.body).includes(assetDraftId), false);
+    const wrongOwnerSave = await postJson(new URL(`/api/drafts/${encodeURIComponent(assetDraftId)}`, opened.client.origin), { accountId: second.id, fields: { name: 'Hijacked', text: 'x' } });
+    assert.equal(wrongOwnerSave.status, 404);
+
+    const signedOutId = 'account:task09-signed-out';
+    await opened.application.state.transaction((state) => {
+      state.accounts[signedOutId] = { ...first, id: signedOutId, handle: '@signed-out@example.test', login: { status: 'signed-out' } };
+    });
+    const signedOut = await postJson(new URL('/api/drafts', opened.client.origin), { accountId: signedOutId, kind: 'asset', fields: { name: 'No', text: 'No' } });
+    assert.ok([401, 403].includes(signedOut.status), 'signed-out accounts cannot create drafts');
+
+    const libraryCalls = opened.calls.length;
+    const library = await getJson(libraryUrl(first.id));
+    assert.equal(library.status, 200);
+    assert.equal(opened.calls.length, libraryCalls, 'reading the retained library must not perform world IO');
+    const drafts = libraryRecords(library.body, 'drafts');
+    assert.ok(drafts.some((draft) => draft.id === assetDraftId));
+    assert.ok(drafts.some((draft) => draft.id === varietyDraftId));
+
+    const refreshed = await postJson(new URL('/api/library/refresh', opened.client.origin), { accountId: first.id });
+    assert.equal(refreshed.status, 200);
+    assert.ok(libraryRecords(refreshed.body, 'drafts').some((draft) => draft.id === varietyDraftId));
+    assert.deepEqual(libraryRecords(refreshed.body, 'assets'), []);
+
+    const secondLibrary = await getJson(libraryUrl(second.id));
+    assert.equal(secondLibrary.status, 200);
+    assert.equal(libraryRecords(secondLibrary.body, 'drafts').some((draft) => draft.id === assetDraftId || draft.id === varietyDraftId), false);
+    const secondRefresh = await postJson(new URL('/api/library/refresh', opened.client.origin), { accountId: second.id });
+    assert.equal(secondRefresh.status, 200);
+    assert.equal(libraryRecords(secondRefresh.body, 'drafts').some((draft) => draft.id === assetDraftId || draft.id === varietyDraftId), false);
+
+    for (const value of [createdAsset.body, createdVariety.body, savedAsset.body, readAsset.body, library.body, refreshed.body, secondRefresh.body]) {
+      assertNoSecrets(value, [first.login.status === 'signed-in' ? first.login.nativeToken : '', second.login.status === 'signed-in' ? second.login.nativeToken : '']);
+    }
+
+    await opened.client.close();
+    await opened.application.close();
+    opened = await openProductionClient(storeFile, world);
+    const reopened = await getJson(new URL(`/api/drafts/${encodeURIComponent(varietyDraftId)}?accountId=${encodeURIComponent(first.id)}`, opened.client.origin));
+    assert.equal(reopened.status, 200);
+    assert.deepEqual((draftFrom(reopened.body).fields as Record<string, unknown>).production, production);
+    const reopenedSaved = await getJson(new URL(`/api/drafts/${encodeURIComponent(assetDraftId)}?accountId=${encodeURIComponent(first.id)}`, opened.client.origin));
+    assert.equal((draftFrom(reopenedSaved.body).fields as Record<string, unknown>).text, '<b>revised notice</b>');
+    const reopenedLibrary = await getJson(libraryUrl(first.id));
+    assert.ok(libraryRecords(reopenedLibrary.body, 'drafts').some((draft) => draft.id === assetDraftId));
+    assertNoSecrets(reopened.body, [first.login.status === 'signed-in' ? first.login.nativeToken : '']);
+  } finally {
+    await opened.client.close();
+    await opened.application.close();
+    await world.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('draft publication creates signed Asset and multi-entry Variety evidence, then retains accepted references through failed read-back and restart', { timeout: 180_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-task09-publication-'));
+  const storeFile = join(directory, 'client.json');
+  const world = await startProductionWorld(directory);
+  const control: AuthoringFetchControl = {};
+  let opened = await openAuthoringClient(storeFile, world, control);
+  const first = world.accounts.first;
+  const second = world.accounts.second;
+  const origin = opened.client.origin;
+  const publish = (draftId: string, accountId: string) => postJson(new URL(`/api/drafts/${encodeURIComponent(draftId)}/publish`, origin), { accountId });
+  const draftUrl = (draftId: string, accountId: string) => new URL(`/api/drafts/${encodeURIComponent(draftId)}?accountId=${encodeURIComponent(accountId)}`, opened.client.origin);
+  const readDocument = async (uri: string): Promise<Record<string, unknown>> => {
+    const response = await fetch(uri);
+    assert.equal(response.status, 200, `reading ${uri}`);
+    const value = await response.json();
+    assert.ok(isRecord(value));
+    return value;
+  };
+  try {
+    const attackerFields = {
+      accountId: second.id,
+      holder: 'https://foreign.test/actors/evil',
+      endpoint: 'https://foreign.test/local/authoring/assets',
+      target: 'https://foreign.test/actors/target'
+    };
+    const createdAsset = await postJson(new URL('/api/drafts', origin), {
+      accountId: first.id,
+      kind: 'asset',
+      fields: { name: 'Signal Buoy', text: '<b>inert buoy notes</b>', ...attackerFields }
+    });
+    assert.ok([200, 201].includes(createdAsset.status), `creating a draft returned ${createdAsset.status}`);
+    const assetDraft = draftFrom(createdAsset.body);
+    const assetDraftId = assetDraft.id as string;
+
+    const assetPublication = await publish(assetDraftId, first.id);
+    assert.ok([200, 201].includes(assetPublication.status), JSON.stringify(assetPublication.body));
+    const assetAction = actionFromBody(assetPublication.body);
+    assert.equal(assetAction.submission.status, 'accepted');
+    assert.equal(actionIsComplete(assetAction), false, 'HTTP acceptance alone is not publication completion');
+    assert.equal(assetAction.accountId, first.id);
+    const assetRef = publicationResourceRefs(assetAction)[0];
+    assert.ok(assetRef, 'the accepted action retains the created resource identity immediately');
+    const asset = await readDocument(assetRef.id);
+    assert.equal(asset.type, 'Asset');
+    assert.equal(asset.name, 'Signal Buoy');
+    assert.equal(asset.holder, first.actorId, 'the authority retains the owning holder');
+    assert.equal(JSON.stringify(asset).includes('foreign.test'), false);
+    const media = Array.isArray(asset.media) ? asset.media.find(isRecord) : undefined;
+    assert.ok(media && typeof media.url === 'string');
+
+    const publishedAssetDraft = draftFrom(assetPublication.body);
+    assert.equal(publishedAssetDraft.id, assetDraftId);
+    assert.ok(JSON.stringify(publishedAssetDraft).includes(assetAction.id), 'the draft retains its publication action');
+    assert.ok(JSON.stringify(publishedAssetDraft).includes(assetRef.id), 'the draft retains its publication resource');
+
+    const assetReader = await postJson(new URL(`/api/resources/${encodeURIComponent(assetRef.id)}/refresh`, origin), { accountId: first.id });
+    assert.equal(assetReader.status, 200);
+    assert.match(JSON.stringify(assetReader.body), /Signal Buoy/);
+    const publicAssetCalls = opened.calls.filter((call) => call.url === assetRef.id && call.method === 'GET');
+    assert.ok(publicAssetCalls.length > 0);
+    assert.ok(publicAssetCalls.every((call) => call.authorization === ''), 'public-first asset reads do not send credentials');
+    const mediaReader = await postJson(new URL(`/api/resources/${encodeURIComponent(media.url as string)}/refresh`, origin), { accountId: first.id });
+    assert.equal(mediaReader.status, 200);
+    assert.match(JSON.stringify(mediaReader.body), /<b>inert buoy notes<\/b>/);
+
+    const production = [
+      { type: 'manufacture', duration: 2, ingredients: [{ variety: assetRef.id, count: 2, data: { grade: 'a' } }], location: [{ id: 'https://places.test/workshop', name: 'Workshop', territory: 'https://places.test/territory' }], tool: assetRef.id, yield: [{ probability: 0.75, count: 2, data: { nested: { tag: 'kept' } } }] },
+      { type: 'mine', duration: 1, ingredients: [{ id: 'https://items.test/one', variety: assetRef.id, data: { tag: 'item' } }, { variety: assetRef.id, count: 1, data: { tag: 'stack' } }], yield: [{ probability: 1, count: 1, data: {} }] }
+    ];
+    const createdVariety = await postJson(new URL('/api/drafts', origin), {
+      accountId: first.id,
+      kind: 'variety',
+      fields: { name: 'Signal Alloy', mass: 2.5, version: '1', asset: assetRef.id, production, ...attackerFields }
+    });
+    assert.ok([200, 201].includes(createdVariety.status), `creating a draft returned ${createdVariety.status}`);
+    const varietyDraftId = draftFrom(createdVariety.body).id as string;
+    const varietyPublication = await publish(varietyDraftId, first.id);
+    assert.ok([200, 201].includes(varietyPublication.status), JSON.stringify(varietyPublication.body));
+    const varietyAction = actionFromBody(varietyPublication.body);
+    assert.equal(varietyAction.submission.status, 'accepted');
+    assert.equal(actionIsComplete(varietyAction), false);
+
+    let variety: Record<string, unknown> | undefined;
+    let grant: Record<string, unknown> | undefined;
+    for (const reference of publicationResourceRefs(varietyAction)) {
+      const document = await readDocument(reference.id);
+      if (document.type === 'Variety') variety = document;
+      if (document.type === 'AssetGrant') grant = document;
+    }
+    assert.ok(variety, 'the accepted action retains the created Variety identity');
+    assert.ok(grant, 'the accepted action retains the created grant identity');
+    assert.equal(variety.asset, assetRef.id);
+    assert.deepEqual(variety.production, production, 'multi-entry Production fields are preserved exactly');
+    assert.equal(grant.asset, assetRef.id);
+    assert.equal(grant.variety, variety.id);
+    assert.equal(grant.grantee, first.actorId);
+    const key = await fetch(`${world.origins.authority}/keys/player`).then((response) => response.json()) as Record<string, unknown>;
+    const loader = createLocalDocumentLoader(new Map([[String(key.id), key]]));
+    for (const value of [asset, variety, grant]) assert.equal((await verifyProofCryptography(value, loader)).verified, true, 'published evidence is signed');
+
+    const descriptiveProduction = [
+      { type: 'mine', duration: 0, ingredients: [{ variety: assetRef.id, count: 1, data: { note: 'reference only' } }], location: [{ id: 'https://places.test/descriptive', name: 'Desk', territory: 'https://places.test/territory' }], yield: [{ probability: 1, count: 0, data: {} }] }
+    ];
+    const descriptiveDraft = await postJson(new URL('/api/drafts', origin), {
+      accountId: first.id,
+      kind: 'variety',
+      fields: { name: 'Reference Notes', mass: 1, version: '1', production: descriptiveProduction }
+    });
+    assert.ok([200, 201].includes(descriptiveDraft.status), `creating a draft returned ${descriptiveDraft.status}`);
+    const descriptivePublication = await publish(draftFrom(descriptiveDraft.body).id as string, first.id);
+    assert.ok([200, 201].includes(descriptivePublication.status), JSON.stringify(descriptivePublication.body));
+    const descriptiveAction = actionFromBody(descriptivePublication.body);
+    assert.equal(descriptiveAction.submission.status, 'accepted', 'descriptive references do not require an owned Asset');
+    let descriptiveVariety: Record<string, unknown> | undefined;
+    for (const reference of publicationResourceRefs(descriptiveAction)) {
+      const document = await readDocument(reference.id);
+      if (document.type === 'Variety') descriptiveVariety = document;
+    }
+    assert.ok(descriptiveVariety);
+    assert.equal(descriptiveVariety.asset, undefined);
+    assert.deepEqual(descriptiveVariety.production, descriptiveProduction);
+
+    const secondBefore = await postJson(new URL('/api/library/refresh', origin), { accountId: second.id });
+    assert.equal(secondBefore.status, 200);
+    const secondVarietyCount = libraryRecords(secondBefore.body, 'varieties').length;
+    const foreignDraft = await postJson(new URL('/api/drafts', origin), {
+      accountId: second.id,
+      kind: 'variety',
+      fields: { name: 'Foreign Alloy', mass: 1, version: '1', asset: assetRef.id }
+    });
+    assert.ok([200, 201].includes(foreignDraft.status), `creating a draft returned ${foreignDraft.status}`);
+    const foreignPublication = await publish(draftFrom(foreignDraft.body).id as string, second.id);
+    if ([200, 201].includes(foreignPublication.status)) {
+      const foreignAction = actionFromBody(foreignPublication.body);
+      assert.notEqual(foreignAction.submission.status, 'accepted', 'another account cannot publish a Variety referencing a foreign Asset');
+      assert.equal(actionIsComplete(foreignAction), false);
+    } else {
+      assert.ok(foreignPublication.status >= 400 && foreignPublication.status < 500);
+    }
+    const secondAfter = await postJson(new URL('/api/library/refresh', origin), { accountId: second.id });
+    assert.equal(secondAfter.status, 200);
+    assert.equal(libraryRecords(secondAfter.body, 'varieties').length, secondVarietyCount);
+    assert.equal(libraryRecords(secondAfter.body, 'varieties').some((record) => record.name === 'Foreign Alloy'), false);
+
+    const assetPosts = opened.calls.filter((call) => call.method === 'POST' && new URL(call.url).pathname === '/local/authoring/assets').length;
+    assert.equal(assetPosts, 1);
+    control.fail = (url) => url.pathname.includes('/objects/');
+    const failedRead = await postJson(new URL(`/api/resources/${encodeURIComponent(assetRef.id)}/refresh`, origin), { accountId: first.id });
+    assert.equal(failedRead.status, 200);
+    const failedObservation = observationRecords(failedRead.body).find((record) => record.source === assetRef.id && (record.state === 'unavailable' || record.state === 'stale'));
+    assert.ok(failedObservation, 'a failed read-back is a separate observation');
+    assert.equal(typeof failedObservation.error, 'string');
+    assert.equal(opened.calls.filter((call) => call.method === 'POST' && new URL(call.url).pathname === '/local/authoring/assets').length, 1, 'publication is not retried after a read-back failure');
+    const retainedAction = await getJson(new URL(`/api/activity/${encodeURIComponent(assetAction.id)}?accountId=${encodeURIComponent(first.id)}`, origin));
+    assert.equal(retainedAction.status, 200);
+    const retained = findRecord(retainedAction.body, (record) => record.id === assetAction.id && isRecord(record.submission)) as unknown as ActionRecord;
+    assert.equal(retained.submission.status, 'accepted');
+    assert.deepEqual(retained.resultReferences, assetAction.resultReferences);
+    const retainedDraft = await getJson(draftUrl(assetDraftId, first.id));
+    assert.equal(retainedDraft.status, 200);
+    assert.ok(JSON.stringify(retainedDraft.body).includes(assetAction.id));
+    assert.ok(JSON.stringify(retainedDraft.body).includes(assetRef.id));
+
+    for (const call of opened.calls.filter((candidate) => candidate.authorization !== '')) {
+      assert.equal(new URL(call.url).origin, world.origins.authority, 'native credentials only go to the issuing Home origin');
+    }
+    const rendered = JSON.stringify([assetPublication.body, varietyPublication.body, descriptivePublication.body, retainedAction.body, retainedDraft.body, secondAfter.body]);
+    assert.equal(rendered.includes('foreign.test'), false);
+    assertNoSecrets(rendered, Object.values(world.nativeTokens));
+
+    delete control.fail;
+    await opened.client.close();
+    await opened.application.close();
+    opened = await openAuthoringClient(storeFile, world, control);
+    const reopenedDraft = await getJson(draftUrl(assetDraftId, first.id));
+    assert.equal(reopenedDraft.status, 200);
+    assert.ok(JSON.stringify(reopenedDraft.body).includes(assetAction.id), 'draft publication references survive restart');
+    assert.ok(JSON.stringify(reopenedDraft.body).includes(assetRef.id));
+    const reopenedAction = await getJson(new URL(`/api/activity/${encodeURIComponent(assetAction.id)}?accountId=${encodeURIComponent(first.id)}`, opened.client.origin));
+    assert.equal(reopenedAction.status, 200);
+    const reopenedRecord = findRecord(reopenedAction.body, (record) => record.id === assetAction.id && isRecord(record.submission)) as unknown as ActionRecord;
+    assert.equal(reopenedRecord.submission.status, 'accepted');
+    assert.deepEqual(reopenedRecord.resultReferences, assetAction.resultReferences);
+  } finally {
+    delete control.fail;
+    await opened.client.close();
+    await opened.application.close();
+    await world.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('publication reconciliation observes resources without resubmission and authoring respects the issuing Home', { timeout: 120_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-authoring-boundaries-'));
+  const world = await startProductionWorld(directory);
+  const control: AuthoringFetchControl = {};
+  const opened = await openAuthoringClient(join(directory, 'client.json'), world, control);
+  const accountId = world.accounts.first.id;
+  const url = (path: string) => new URL(path, opened.client.origin);
+  try {
+    const created = await postJson(url('/api/drafts'), { accountId, kind: 'asset', fields: { name: 'Evidence', text: 'Observed publication' } });
+    const draftId = String(draftFrom(created.body).id);
+    const published = await postJson(url(`/api/drafts/${encodeURIComponent(draftId)}/publish`), { accountId });
+    const action = actionFromBody(published.body);
+    assert.equal(action.submission.status, 'accepted');
+    const postCount = () => opened.calls.filter((call) => call.method === 'POST' && new URL(call.url).pathname === '/local/authoring/assets').length;
+    assert.equal(postCount(), 1);
+    const reconciled = await postJson(url(`/api/activity/${encodeURIComponent(action.id)}/refresh`), { accountId });
+    const completed = findRecord(reconciled.body, (record) => record.id === action.id && isRecord(record.submission)) as unknown as ActionRecord;
+    assert.ok(completed);
+    assert.equal(actionIsComplete(completed), true, 'explicit read-back establishes publication evidence');
+    assert.equal(postCount(), 1);
+    control.fail = (target) => target.pathname === '/actors/player';
+    const refresh = await postJson(url('/api/library/refresh'), { accountId });
+    assert.equal(refresh.status, 200);
+    assert.ok(observationRecords(refresh.body).some((entry) => typeof entry.error === 'string' && (entry.state === 'unavailable' || entry.state === 'stale')), 'failed creations discovery remains observable');
+    assert.ok(libraryRecords(refresh.body, 'assets').some((entry) => entry.name === 'Evidence'));
+    delete control.fail;
+    await opened.application.state.transaction((state) => {
+      state.accounts[accountId]!.homeAuthority = 'https://foreign.test/actors/home';
+    });
+    const count = opened.calls.length;
+    await postJson(url(`/api/drafts/${encodeURIComponent(draftId)}/publish`), { accountId });
+    await postJson(url('/api/library/refresh'), { accountId });
+    assert.equal(opened.calls.slice(count).some((call) => new URL(call.url).host === 'foreign.test'), false, 'native authoring credentials cannot follow a mismatched Home Actor');
+  } finally {
+    await opened.client.close();
+    await opened.application.close();
+    await world.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('library refresh isolates two account catalogs and retains stale evidence when the catalog source fails', { timeout: 120_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-task09-library-isolation-'));
+  const storeFile = join(directory, 'client.json');
+  const world = await startProductionWorld(directory);
+  const control: AuthoringFetchControl = {};
+  const opened = await openAuthoringClient(storeFile, world, control);
+  const first = world.accounts.first;
+  const second = world.accounts.second;
+  const refresh = (accountId: string) => postJson(new URL('/api/library/refresh', opened.client.origin), { accountId });
+  try {
+    const firstAsset = await seedAuthorityAsset(world, world.nativeTokens.first, 'First Island Chart', 'first text');
+    const secondAsset = await seedAuthorityAsset(world, world.nativeTokens.second, 'Second Island Chart', 'second text');
+
+    const firstLibrary = await refresh(first.id);
+    assert.equal(firstLibrary.status, 200);
+    assert.ok(libraryRecords(firstLibrary.body, 'assets').some((asset) => asset.id === firstAsset.id));
+    assert.equal(JSON.stringify(firstLibrary.body).includes(String(secondAsset.id)), false);
+    assert.equal(JSON.stringify(firstLibrary.body).includes('Second Island Chart'), false);
+
+    const secondLibrary = await refresh(second.id);
+    assert.equal(secondLibrary.status, 200);
+    assert.ok(libraryRecords(secondLibrary.body, 'assets').some((asset) => asset.id === secondAsset.id));
+    assert.equal(JSON.stringify(secondLibrary.body).includes(String(firstAsset.id)), false);
+    assert.equal(JSON.stringify(secondLibrary.body).includes('First Island Chart'), false);
+
+    const firstDraft = await postJson(new URL('/api/drafts', opened.client.origin), { accountId: first.id, kind: 'asset', fields: { name: 'Private Draft', text: 'draft text' } });
+    assert.ok([200, 201].includes(firstDraft.status));
+    const firstDraftId = draftFrom(firstDraft.body).id as string;
+    const secondDrafts = await refresh(second.id);
+    assert.equal(JSON.stringify(secondDrafts.body).includes(firstDraftId), false);
+    const firstDrafts = await refresh(first.id);
+    assert.ok(libraryRecords(firstDrafts.body, 'drafts').some((draft) => draft.id === firstDraftId));
+
+    for (const call of opened.calls.filter((candidate) => candidate.authorization !== '')) {
+      assert.equal(new URL(call.url).origin, world.origins.authority, 'catalog credentials only go to the issuing Home origin');
+    }
+    const catalogAuthCalls = opened.calls.filter((call) => call.authorization !== '' && new URL(call.url).pathname === '/local/authoring');
+    assert.ok(catalogAuthCalls.length > 0, 'the catalog refresh authenticates only against /local/authoring');
+
+    control.fail = (url) => url.pathname === '/local/authoring' || url.pathname.includes('/creations');
+    const failed = await refresh(first.id);
+    assert.equal(failed.status, 200, 'a failed catalog source does not erase the retained page');
+    assert.match(JSON.stringify(failed.body), new RegExp(escapeRegExp(String(firstAsset.id))));
+    assert.match(JSON.stringify(failed.body), /First Island Chart/);
+    const stale = observationRecords(failed.body).find((record) => typeof record.source === 'string' && record.source.includes('/local/authoring'));
+    assert.ok(stale, 'the failed catalog source keeps its observation');
+    assert.equal(stale.state, 'stale', 'retained catalog evidence is stale rather than discarded');
+    assert.equal(typeof stale.error, 'string');
+    assert.match(JSON.stringify(stale.value), new RegExp(escapeRegExp(String(firstAsset.id))));
+
+    delete control.fail;
+    const recovered = await refresh(first.id);
+    assert.equal(recovered.status, 200);
+    assert.ok(libraryRecords(recovered.body, 'assets').some((asset) => asset.id === firstAsset.id));
+    const recoveredObservation = observationRecords(recovered.body).find((record) => typeof record.source === 'string' && record.source.includes('/local/authoring'));
+    assert.equal(recoveredObservation?.state, 'available');
+
+    assertNoSecrets([firstLibrary.body, secondLibrary.body, firstDrafts.body, failed.body, recovered.body], Object.values(world.nativeTokens));
+  } finally {
+    delete control.fail;
+    await opened.client.close();
+    await opened.application.close();
+    await world.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+function administrationPageUrl(origin: string, accountId: string): URL {
+  return new URL(`/api/administration?accountId=${encodeURIComponent(accountId)}`, origin);
+}
+
+function administrationRefresh(origin: string, body: Record<string, unknown>): Promise<{ status: number; body: unknown }> {
+  return postJson(new URL('/api/administration/refresh', origin), body);
+}
+
+function administrationControl(origin: string, body: Record<string, unknown>): Promise<{ status: number; body: unknown }> {
+  return postJson(new URL('/api/administration/controls', origin), body);
+}
+
+function administrationDecision(origin: string, requestId: string, decision: 'approve' | 'reject', body: Record<string, unknown>): Promise<{ status: number; body: unknown }> {
+  return postJson(new URL(`/api/administration/entry-requests/${encodeURIComponent(requestId)}/${decision}`, origin), body);
+}
+
+async function readActivityAction(origin: string, accountId: string, actionId: string): Promise<ActionRecord> {
+  const response = await getJson(new URL(`/api/activity/${encodeURIComponent(actionId)}?accountId=${encodeURIComponent(accountId)}`, origin));
+  assert.equal(response.status, 200);
+  return (response.body as PageResponse<{ action: ActionRecord }>).data.action;
+}
+
+async function refreshActivityAction(origin: string, accountId: string, actionId: string): Promise<ActionRecord> {
+  const response = await postJson(new URL(`/api/activity/${encodeURIComponent(actionId)}/refresh`, origin), { accountId });
+  assert.equal(response.status, 200);
+  return (response.body as PageResponse<{ action: ActionRecord }>).data.action;
+}
+
+test('administration page retains authorized targets without world IO and refresh isolates a failed source', { timeout: 120_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-task10-admin-page-'));
+  const world = await startProductionWorld(directory, { administratorNames: ['governor'] });
+  const opened = await openProductionClient(join(directory, 'client.json'), world, {
+    administratorBindings: [{ accountId: world.accounts.first.id, authorityActorIds: [world.policy.ids.actor, world.simulation.ids.actor, world.authority.ids.actor.registry], credentialSource: 'territory-admin' }],
+    administratorCredentials: { 'territory-admin': world.adminSecret }
+  });
+  await opened.application.state.transaction((state) => { if (world.governor) state.accounts[world.governor.id] = world.governor; });
+  const accountId = world.accounts.first.id;
+  try {
+    const readCalls = opened.calls.length;
+    const before = await getJson(administrationPageUrl(opened.client.origin, accountId));
+    assert.equal(before.status, 200);
+    assert.equal(opened.calls.length, readCalls, 'retained administration reads must not perform world IO');
+    const beforePage = before.body as PageResponse<Record<string, unknown>>;
+    assert.equal(beforePage.context.accountId, accountId);
+    const beforeText = JSON.stringify(beforePage.data);
+    assert.match(beforeText, new RegExp(escapeRegExp(world.policy.ids.actor)));
+    assert.match(beforeText, new RegExp(escapeRegExp(world.simulation.ids.actor)));
+    assert.match(beforeText, /control|request|state/i);
+
+    const missing = await getJson(new URL('/api/administration', opened.client.origin));
+    assert.equal(missing.status, 400);
+    const unknown = await getJson(administrationPageUrl(opened.client.origin, 'account:unknown'));
+    assert.ok([403, 404].includes(unknown.status));
+
+    const refreshCalls = opened.calls.length;
+    const refreshed = await administrationRefresh(opened.client.origin, { accountId, authorityId: world.policy.ids.actor });
+    assert.equal(refreshed.status, 200);
+    const newCalls = opened.calls.slice(refreshCalls);
+    assert.ok(newCalls.some((call) => new URL(call.url).origin === world.origins.policy), 'refresh reads the selected target');
+    assert.equal(newCalls.some((call) => new URL(call.url).origin === world.origins.simulation), false, 'refresh does not read an unselected target');
+    assert.ok(opened.calls.some((call) => new URL(call.url).origin === world.origins.policy && call.url.includes('/local/admin/entry-requests')), 'refresh retains pending entry requests');
+    assert.match(JSON.stringify(refreshed.body), new RegExp(escapeRegExp(world.policy.ids.actor)));
+    assert.match(JSON.stringify(refreshed.body), /available|empty|stale|not-retrieved/i);
+
+    const retainedCalls = opened.calls.length;
+    const retained = await getJson(administrationPageUrl(opened.client.origin, accountId));
+    assert.equal(retained.status, 200);
+    assert.equal(opened.calls.length, retainedCalls, 'a retained read after refresh does not contact the world');
+    assert.match(JSON.stringify(retained.body), new RegExp(escapeRegExp(world.policy.ids.actor)));
+
+    const simulationRefresh = await administrationRefresh(opened.client.origin, { accountId, authorityId: world.simulation.ids.actor });
+    assert.equal(simulationRefresh.status, 200);
+    assert.match(JSON.stringify(simulationRefresh.body), new RegExp(escapeRegExp(world.simulation.ids.actor)));
+
+    await world.simulation.host.close();
+    const failedRefresh = await administrationRefresh(opened.client.origin, { accountId, authorityId: world.simulation.ids.actor });
+    assert.equal(failedRefresh.status, 200, 'a failed target does not fail the retained page');
+    const failedText = JSON.stringify(failedRefresh.body);
+    assert.match(failedText, /stale|unavailable/i);
+    assert.match(failedText, /error/i);
+    assert.match(failedText, new RegExp(escapeRegExp(world.policy.ids.actor)), 'other retained targets are not erased');
+  } finally {
+    await opened.client.close();
+    await opened.application.close();
+    await world.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('administration controls use bound credentials, current values, and governor-native Home availability', { timeout: 180_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-task10-admin-controls-'));
+  const world = await startProductionWorld(directory, { administratorNames: ['governor'] });
+  const opened = await openProductionClient(join(directory, 'client.json'), world, {
+    administratorBindings: [{ accountId: world.accounts.first.id, authorityActorIds: [world.policy.ids.actor, world.simulation.ids.actor, world.authority.ids.actor.registry], credentialSource: 'territory-admin' }],
+    administratorCredentials: { 'territory-admin': world.adminSecret }
+  });
+  await opened.application.state.transaction((state) => { if (world.governor) state.accounts[world.governor.id] = world.governor; });
+  const first = world.accounts.first;
+  const control = (authorityId: string, name: string, inputs: Record<string, unknown>, accountId = first.id) =>
+    administrationControl(opened.client.origin, { accountId, authorityId, control: name, inputs });
+  try {
+    const admission = await control(world.policy.ids.actor, 'admission', { reviewMode: 'manual' });
+    assert.equal(admission.status, 200);
+    const admissionAction = actionFromBody(admission.body);
+    assert.match(JSON.stringify(admissionAction.intent), /admission/i);
+    assert.match(JSON.stringify(admissionAction.intent.inputs), /manual/i);
+    assert.equal(admissionAction.submission.status, 'accepted');
+    assert.equal(((await world.policy.territory.ledger).admission as unknown as Record<string, unknown>).reviewMode, 'manual');
+    const policyRefresh = await administrationRefresh(opened.client.origin, { accountId: first.id, authorityId: world.policy.ids.actor });
+    assert.equal(policyRefresh.status, 200);
+    assert.match(JSON.stringify(policyRefresh.body), /manual/i, 'the retained page shows the applied current value');
+
+    const facilities = await control(world.simulation.ids.actor, 'facilities', { mining: { enabled: false, capacity: 3 } });
+    assert.equal(facilities.status, 200);
+    const facilitiesAction = actionFromBody(facilities.body);
+    assert.match(JSON.stringify(facilitiesAction.intent), /facilit/i);
+    assert.match(JSON.stringify(facilitiesAction.intent.inputs), /mining/i);
+    assert.match(JSON.stringify(facilitiesAction.intent.inputs), /false/);
+    let simulation = await world.simulation.territory.state();
+    assert.equal(simulation.simulation.config.miningEnabled, false);
+    assert.equal(simulation.simulation.config.miningCapacity, 3);
+
+    const tickBefore = simulation.simulation.tick;
+    const tick = await control(world.simulation.ids.actor, 'tick', {});
+    assert.equal(tick.status, 200);
+    const tickAction = actionFromBody(tick.body);
+    assert.match(JSON.stringify(tickAction.intent), /tick/i);
+    assert.equal(tickAction.submission.status, 'accepted');
+    simulation = await world.simulation.territory.state();
+    assert.equal(simulation.simulation.tick, tickBefore + 1, 'the tick control advances the simulation');
+    const tickRefresh = await refreshActivityAction(opened.client.origin, first.id, tickAction.id);
+    assert.match(JSON.stringify(tickRefresh), /completed|evidence/i, 'tick completion is established by observed evidence');
+
+    const adoption = await control(world.authority.ids.actor.registry, 'adoption', { vesselId: world.authority.ids.vessel, adoption: false });
+    assert.equal(adoption.status, 200);
+    const adoptionAction = actionFromBody(adoption.body);
+    assert.match(JSON.stringify(adoptionAction.intent), /adoption/i);
+    assert.match(JSON.stringify(adoptionAction.intent.inputs), /false/);
+    assert.equal((await world.authority.registry.state(world.authority.ids.vessel)).adoption, false);
+
+    const fleetPage = await administrationRefresh(opened.client.origin, { accountId: first.id, authorityId: world.authority.ids.actor.registry });
+    assert.equal(fleetPage.status, 200);
+    const fleetVessel = findRecord(fleetPage.body, (entry) => isRecord(entry.vessel) && entry.vessel.id === world.authority.ids.vessel && entry.adoption === false);
+    assert.ok(fleetVessel, 'Registry administration reads the fleet and its current per-vessel adoption');
+    const otherVessel = world.authority.ids.vessels.other!;
+    const otherAdoption = await control(world.authority.ids.actor.registry, 'adoption', { vesselId: otherVessel, adoption: false });
+    assert.equal(otherAdoption.status, 200);
+    assert.equal((await world.authority.registry.state(otherVessel)).adoption, false, 'the selected vessel, not the default vessel, receives the adoption change');
+
+    const governor = world.governor!;
+    const governorToken = governor.login.status === 'signed-in' ? governor.login.nativeToken : '';
+    const homeRefresh = await administrationRefresh(opened.client.origin, { accountId: governor.id, authorityId: world.authority.ids.actor.home });
+    assert.equal(homeRefresh.status, 200);
+    const homeText = JSON.stringify(homeRefresh.body);
+    assert.match(homeText, /availability/i);
+    assert.match(homeText, new RegExp(escapeRegExp(`@other@${new URL(world.origins.authority).host}`)));
+    const homeCalls = opened.calls.filter((call) => new URL(call.url).origin === world.origins.authority && call.url.includes('/local/home/accounts'));
+    assert.ok(homeCalls.length > 0);
+    assert.ok(homeCalls.every((call) => call.authorization === `Bearer ${governorToken}`), 'Home availability uses the governor native token');
+    assert.equal(homeCalls.some((call) => call.authorization === `Bearer ${world.adminSecret}`), false, 'Home availability never uses the administrator secret');
+
+    const availability = await control(world.authority.ids.actor.home, 'availability', { handle: `@other@${new URL(world.origins.authority).host}`, available: false }, governor.id);
+    assert.equal(availability.status, 200);
+    const availabilityAction = actionFromBody(availability.body);
+    assert.match(JSON.stringify(availabilityAction.intent), /availability/i);
+    assert.match(JSON.stringify(availabilityAction.intent.inputs), /false/);
+    const homeAccounts = await fetch(`${world.origins.authority}/local/home/accounts`, { headers: { Authorization: `Bearer ${governorToken}` } });
+    assert.equal(homeAccounts.status, 200);
+    const homeAccountsBody = await homeAccounts.json() as { accounts: Array<{ handle: string; available: boolean }> };
+    assert.equal(homeAccountsBody.accounts.find((account) => account.handle === `@other@${new URL(world.origins.authority).host}`)?.available, false);
+
+    const callsBeforeRejection = opened.calls.length;
+    const unsupported = await control(world.policy.ids.actor, 'unknown-control', {});
+    assert.ok(unsupported.status >= 400 && unsupported.status < 500);
+    assert.equal(opened.calls.length, callsBeforeRejection, 'unsupported controls are rejected before any world request');
+    const unknownTarget = await administrationRefresh(opened.client.origin, { accountId: first.id, authorityId: 'https://unknown.test/actors/territory' });
+    assert.ok(unknownTarget.status >= 400 && unknownTarget.status < 500);
+    assert.equal(opened.calls.length, callsBeforeRejection, 'unknown targets are rejected before any credential or world request');
+    const unbound = await control(world.policy.ids.actor, 'admission', { reviewMode: 'automatic' }, world.accounts.second.id);
+    assert.ok([403, 404].includes(unbound.status), 'an unbound account cannot execute a control');
+    assert.equal(opened.calls.length, callsBeforeRejection, 'an unbound account cannot trigger a credentialed request');
+
+    assertNoSecrets([admission.body, facilities.body, tick.body, adoption.body, homeRefresh.body, availability.body], [world.adminSecret, governorToken, ...Object.values(world.nativeTokens)]);
+  } finally {
+    await opened.client.close();
+    await opened.application.close();
+    await world.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('administration approves and rejects manual entry requests with real Registry evidence and current rules', { timeout: 180_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-task10-admin-requests-'));
+  const world = await startProductionWorld(directory);
+  const opened = await openProductionClient(join(directory, 'client.json'), world, {
+    administratorBindings: [{ accountId: world.accounts.first.id, authorityActorIds: [world.policy.ids.actor, world.simulation.ids.actor], credentialSource: 'territory-admin' }],
+    administratorCredentials: { 'territory-admin': world.adminSecret }
+  });
+  const accountId = world.accounts.first.id;
+  const adminHeaders = { Authorization: `Bearer ${world.adminSecret}`, 'Content-Type': 'application/json' };
+  try {
+    for (const [origin, target] of [[world.origins.policy, world.policy], [world.origins.simulation, world.simulation]] as const) {
+      const response = await fetch(`${origin}/local/admin/admission`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ reviewMode: 'manual' }) });
+      assert.equal(response.status, 200, `manual review is configured for ${target.ids.actor}`);
+    }
+    const refreshAdministration = async (authorityId: string): Promise<unknown> => {
+      const response = await administrationRefresh(opened.client.origin, { accountId, authorityId });
+      assert.equal(response.status, 200);
+      return response.body;
+    };
+    const decide = (requestId: string, decision: 'approve' | 'reject', authorityId: string, reason?: string) =>
+      administrationDecision(opened.client.origin, requestId, decision, { accountId, authorityId, ...(reason === undefined ? {} : { reason }) });
+
+    const rejectedEntry = await submitLogisticsEntry(opened.client.origin, world, 'policy');
+    const rejectedReference = rejectedEntry.resultReferences.find((reference) => reference.kind === 'request');
+    assert.ok(rejectedReference);
+    await exchangeWorld(world.authority.authority.server, world.policy.host.server);
+    const policyPage = await refreshAdministration(world.policy.ids.actor);
+    assert.match(JSON.stringify(policyPage), new RegExp(escapeRegExp(rejectedReference.id)));
+    assert.match(JSON.stringify(policyPage), /pending/i);
+    const rejected = await decide(rejectedReference.id, 'reject', world.policy.ids.actor, 'harbor-closed');
+    assert.equal(rejected.status, 200);
+    const rejectedAction = actionFromBody(rejected.body);
+    assert.equal(rejectedAction.submission.status, 'accepted');
+    assert.match(JSON.stringify(rejectedAction.intent.inputs), /harbor-closed/);
+    assert.ok(rejectedAction.resultReferences.some((reference) => reference.id === rejectedReference.id), 'the decision action retains the request reference');
+    await exchangeWorld(world.policy.host.server, world.authority.authority.server);
+    const rejectedRegistry = await world.authority.registry.state(world.authority.ids.vessel);
+    assert.equal(rejectedRegistry.events.some((event) => event.type === 'EntryRejected' && event.request === rejectedReference.id), true, 'rejection produces real Registry EntryRejected evidence');
+    const rejectedCompleted = await refreshActivityAction(opened.client.origin, accountId, rejectedAction.id);
+    assert.equal(rejectedCompleted.outcome.status, 'failed', 'EntryRejected establishes a failed outcome');
+    assert.ok(rejectedCompleted.outcome.evidence.length > 0);
+
+    const approvedEntry = await submitLogisticsEntry(opened.client.origin, world, 'policy');
+    const approvedReference = approvedEntry.resultReferences.find((reference) => reference.kind === 'request');
+    assert.ok(approvedReference);
+    await exchangeWorld(world.authority.authority.server, world.policy.host.server);
+    const approvedPage = await refreshAdministration(world.policy.ids.actor);
+    assert.match(JSON.stringify(approvedPage), new RegExp(escapeRegExp(approvedReference.id)));
+    const approved = await decide(approvedReference.id, 'approve', world.policy.ids.actor);
+    assert.equal(approved.status, 200);
+    const approvedAction = actionFromBody(approved.body);
+    assert.equal(approvedAction.submission.status, 'accepted');
+    await exchangeWorld(world.policy.host.server, world.authority.authority.server);
+    const approvedRegistry = await world.authority.registry.state(world.authority.ids.vessel);
+    assert.equal(approvedRegistry.events.some((event) => event.type === 'BerthingEvent' && event.request === approvedReference.id), true, 'policy approval produces real Registry BerthingEvent evidence');
+    const approvedCompleted = await refreshActivityAction(opened.client.origin, accountId, approvedAction.id);
+    assert.equal(approvedCompleted.outcome.status, 'completed');
+    assert.ok(approvedCompleted.outcome.evidence.length > 0);
+
+    const repeated = await decide(approvedReference.id, 'approve', world.policy.ids.actor);
+    assert.equal(repeated.status, 200);
+    assert.equal((await world.authority.registry.state(world.authority.ids.vessel)).events.filter((event) => event.type === 'BerthingEvent' && event.request === approvedReference.id).length, 1, 'repeated approval never creates another visit');
+    const ignored = await decide(approvedReference.id, 'reject', world.policy.ids.actor, 'late-rejection');
+    assert.equal(ignored.status, 200);
+    assert.equal((await world.authority.registry.state(world.authority.ids.vessel)).events.some((event) => event.type === 'EntryRejected' && event.request === approvedReference.id), false, 'a conflicting later decision never creates compensation');
+
+    const simulationEntry = await submitLogisticsEntry(opened.client.origin, world, 'simulation');
+    const simulationReference = simulationEntry.resultReferences.find((reference) => reference.kind === 'request');
+    assert.ok(simulationReference);
+    await exchangeWorld(world.authority.authority.server, world.simulation.host.server);
+    const simulationPage = await refreshAdministration(world.simulation.ids.actor);
+    assert.match(JSON.stringify(simulationPage), new RegExp(escapeRegExp(simulationReference.id)));
+    const simulationApproved = await decide(simulationReference.id, 'approve', world.simulation.ids.actor);
+    assert.equal(simulationApproved.status, 200);
+    const simulationAction = actionFromBody(simulationApproved.body);
+    await exchangeWorld(world.simulation.host.server, world.authority.authority.server);
+    assert.equal((await world.authority.registry.state(world.authority.ids.vessel)).events.some((event) => event.type === 'BerthingEvent' && event.request === simulationReference.id), false, 'simulation approval waits for a tick');
+    const beforeTick = await readActivityAction(opened.client.origin, accountId, simulationAction.id);
+    assert.notEqual(beforeTick.outcome.status, 'completed', 'simulation approval is not berthing completion before the tick');
+    const tick = await fetch(`${world.origins.simulation}/local/admin/tick`, { method: 'POST', headers: adminHeaders, body: '{}' });
+    assert.equal(tick.status, 200);
+    await exchangeWorld(world.simulation.host.server, world.authority.authority.server);
+    assert.equal((await world.authority.registry.state(world.authority.ids.vessel)).events.some((event) => event.type === 'BerthingEvent' && event.request === simulationReference.id), true, 'the delayed simulation BerthingEvent is real Registry evidence');
+    const simulationRefresh = await refreshAdministration(world.simulation.ids.actor);
+    assert.match(JSON.stringify(simulationRefresh), /berth|event/i, 'the delayed simulation event becomes discoverable in the retained request data');
+    const simulationCompleted = await refreshActivityAction(opened.client.origin, accountId, simulationAction.id);
+    assert.equal(simulationCompleted.outcome.status, 'completed');
+
+    const callsBeforeUnauthorized = opened.calls.length;
+    const missingScope = await administrationDecision(opened.client.origin, approvedReference.id, 'approve', { authorityId: world.policy.ids.actor });
+    assert.equal(missingScope.status, 400, 'account scope is mandatory');
+    const unboundDecision = await administrationDecision(opened.client.origin, approvedReference.id, 'approve', { accountId: world.accounts.second.id, authorityId: world.policy.ids.actor });
+    assert.ok([403, 404].includes(unboundDecision.status));
+    assert.equal(opened.calls.length, callsBeforeUnauthorized, 'an unbound account cannot submit a decision to the world');
+  } finally {
+    await opened.client.close();
+    await opened.application.close();
+    await world.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('acknowledged administration control needs observed submitted values before completion', { timeout: 120_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-admin-unapplied-'));
+  const world = await startProductionWorld(directory);
+  const opened = await openProductionClient(join(directory, 'client.json'), world, {
+    administratorBindings: [{ accountId: world.accounts.first.id, authorityActorIds: [world.policy.ids.actor], credentialSource: 'policy' }],
+    administratorCredentials: { policy: world.adminSecret },
+    fetch: async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.origin === world.origins.policy && url.pathname === '/local/admin/admission' && init?.method === 'POST') return Response.json({ accepted: true });
+      return fetch(input, init);
+    }
+  });
+  try {
+    const response = await administrationControl(opened.client.origin, { accountId: world.accounts.first.id, authorityId: world.policy.ids.actor, control: 'admission', inputs: { reviewMode: 'manual' } });
+    assert.equal(response.status, 200);
+    const action = actionFromBody(response.body);
+    assert.equal(action.submission.status, 'accepted');
+    const observed = await refreshActivityAction(opened.client.origin, world.accounts.first.id, action.id);
+    assert.notEqual(observed.outcome.status, 'completed', 'an unchanged admission observation is not evidence the submitted setting was applied');
+  } finally {
+    await opened.client.close();
+    await opened.application.close();
+    await world.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('Territory administrator reconciles another Player entry without native Registry access', { timeout: 120_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-admin-other-owner-'));
+  const world = await startProductionWorld(directory);
+  const administrator = world.accounts.second;
+  const opened = await openProductionClient(join(directory, 'client.json'), world, {
+    administratorBindings: [{ accountId: administrator.id, authorityActorIds: [world.policy.ids.actor], credentialSource: 'policy' }],
+    administratorCredentials: { policy: world.adminSecret }
+  });
+  try {
+    const configured = await administrationControl(opened.client.origin, { accountId: administrator.id, authorityId: world.policy.ids.actor, control: 'admission', inputs: { reviewMode: 'manual' } });
+    assert.equal(configured.status, 200);
+    const entry = await submitLogisticsEntry(opened.client.origin, world, 'policy');
+    const request = entry.resultReferences.find((reference) => reference.kind === 'request')!;
+    await exchangeWorld(world.authority.authority.server, world.policy.host.server);
+    assert.equal((await administrationRefresh(opened.client.origin, { accountId: administrator.id, authorityId: world.policy.ids.actor })).status, 200);
+    const decision = await administrationDecision(opened.client.origin, request.id, 'approve', { accountId: administrator.id, authorityId: world.policy.ids.actor });
+    assert.equal(decision.status, 200);
+    const action = actionFromBody(decision.body);
+    const callsBefore = opened.calls.length;
+    const reconciled = await refreshActivityAction(opened.client.origin, administrator.id, action.id);
+    assert.equal(reconciled.outcome.status, 'completed', 'Territory evidence establishes berthing without administrator ownership of the vessel');
+    assert.ok(reconciled.outcome.evidence.length > 0);
+    assert.ok(reconciled.resultReferences.some((reference) => reference.kind === 'event'), 'decision action retains the resulting event reference');
+    assert.equal(opened.calls.slice(callsBefore).some((call) => new URL(call.url).pathname.startsWith('/local/registry/')), false, 'decision reconciliation never sends administrator native credentials to a vessel Registry');
+  } finally {
+    await opened.client.close();
+    await opened.application.close();
+    await world.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+function productionWorldOptionsWithJourney(): ProductionWorldOptions {
+  return {
+    additionalPolicyRoutes: ({ policyOrigin, simulationOrigin }) => [{
+      id: `${policyOrigin}/objects/routes/outbound`, type: 'Route', name: 'Outbound Passage',
+      from: `${policyOrigin}/objects/ports/west`, to: `${simulationOrigin}/objects/boundaries/east`, distance: 4
+    }]
+  };
+}
+
+test('traverse executes a saved connected route through actual local movement, signed exit evidence, and delayed simulation berthing', { timeout: 180_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-task11-traverse-'));
+  const world = await startProductionWorld(directory, productionWorldOptionsWithJourney());
+  const storeFile = join(directory, 'client.json');
+  const calls: ExploreCall[] = [];
+  const control: { fail?: (url: URL, method: string) => boolean } = {};
+  let opened = await openProductionClient(storeFile, world, { fetch: controllableJourneyFetch(calls, control) });
+  const first = world.accounts.first;
+  const vessel = world.authority.ids.vessel;
+  const adminHeaders = task08AdminHeaders(world);
+  const policyEast = world.policy.ids.ports[0]!;
+  const policyWest = world.policy.ids.ports[1]!;
+  const simulationMain = world.simulation.ids.ports[0]!;
+  try {
+    const admission = await fetch(`${world.origins.policy}/local/admin/admission`, {
+      method: 'POST', headers: adminHeaders, body: JSON.stringify({ publicPorts: world.policy.ids.ports })
+    });
+    assert.equal(admission.status, 200, 'both policy ports are readable in the connected fixture');
+    const refreshed = await refreshExplore(opened.client.origin);
+    assert.equal(refreshed.status, 200);
+
+    const plan = await saveJourneyPlan(opened.client.origin, first.id, policyEast, simulationMain);
+    const planLegs = plan.legs as Array<Record<string, unknown>>;
+    assert.deepEqual(planLegs.map((leg) => leg.routeId), [world.policy.ids.routes[1], journeyOutboundRouteId(world), world.simulation.ids.routes[0]], 'the saved plan uses only explicitly published directed routes');
+    assert.deepEqual(planLegs.map((leg) => leg.from), [policyEast, policyWest, `${world.origins.simulation}/objects/boundaries/east`]);
+
+    await submitLogisticsEntryFor(opened.client.origin, world, first.id, vessel, 'policy');
+    await exchangeWorld(world.authority.authority.server, world.policy.host.server);
+    assert.equal((await world.policy.territory.ledger).visits[vessel]?.port, policyEast);
+
+    const foreign = await traverseJourney(opened.client.origin, world.accounts.second.id, world.authority.ids.vessels.other!, plan.id as string);
+    assert.ok([400, 403, 404].includes(foreign.status), 'another account cannot traverse with a foreign or unowned vessel');
+    const missingPlan = await traverseJourney(opened.client.origin, first.id, vessel, 'route-plan:missing');
+    assert.ok([400, 403, 404].includes(missingPlan.status), 'an unknown saved plan is refused');
+
+    const posted = await traverseJourney(opened.client.origin, first.id, vessel, plan.id as string, { legs: [{ routeId: 'https://tampered.test/route', from: policyEast, to: simulationMain }] });
+    assert.equal(posted.status, 200, JSON.stringify(posted.body));
+    let action = posted.action!;
+    assert.equal(action.intent.kind, 'traverse');
+    assert.equal(action.intent.inputs.routePlanId, plan.id);
+    assert.equal(action.intent.inputs.vesselId, vessel);
+    assert.notEqual(action.outcome.status, 'completed', 'HTTP acceptance is not a completed journey');
+    const initialLegs = actionJourneyLegs(action);
+    assert.equal(initialLegs.length, 3, 'the tampered caller legs are ignored in favour of the saved plan');
+    assert.deepEqual(initialLegs.map((leg) => leg.routeId), [world.policy.ids.routes[1], journeyOutboundRouteId(world), world.simulation.ids.routes[0]]);
+    assert.ok(initialLegs.every((leg) => typeof leg.status === 'string'), 'every leg carries its step status');
+
+    const callsBeforeRead = calls.length;
+    await readActivityAction(opened.client.origin, first.id, action.id);
+    assert.equal(calls.length, callsBeforeRead, 'GETs inspect retained journey progress without world IO');
+
+    const concurrent = await Promise.all([
+      refreshActivityAction(opened.client.origin, first.id, action.id),
+      refreshActivityAction(opened.client.origin, first.id, action.id)
+    ]);
+    assert.equal(concurrent[0]?.id, action.id);
+    assert.equal(concurrent[1]?.id, action.id);
+    action = await refreshJourneyUntil(opened.client.origin, first.id, action.id, async () => (await world.policy.territory.ledger).visits[vessel]?.port === policyWest, 'actual local movement reaches West Haven');
+    const voyageIds = new Set(collectRecords(await world.policy.territory.ledger)
+      .filter((record) => record.type === 'VoyageEvent' && record.kind === 'local-movement' && record.vessel === vessel)
+      .map((record) => record.id));
+    assert.equal(voyageIds.size, 1, 'concurrent refresh never duplicates the local movement step and retains its event');
+    assert.equal(actionJourneyLegs(action).length, 3);
+
+    await opened.client.close();
+    await opened.application.close();
+    opened = await openProductionClient(storeFile, world, { fetch: controllableJourneyFetch(calls, control) });
+    action = await readActivityAction(opened.client.origin, first.id, action.id);
+    assert.equal(actionJourneyLegs(action).length, 3, 'journey progress survives restart');
+
+    action = await refreshJourneyUntil(opened.client.origin, first.id, action.id, async () =>
+      Object.values((await world.authority.registry.state(vessel)).requests).some((request) => isRecord(request) && request.type === 'DepartureRequest' && request.port === policyWest),
+      'the journey submits a Registry departure request only after local movement');
+    await world.authority.authority.server.processOutbox();
+    await world.policy.host.server.processInbox();
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const delivered = await world.policy.host.server.processOutbox(1);
+      assert.ok(delivered > 0, 'the policy territory publishes departure evidence');
+      await world.authority.authority.server.processInbox();
+      if ((await registryEvents(world, vessel)).some((event) => event.type === 'DepartureEvent')) break;
+    }
+    const departureOnly = await registryEvents(world, vessel);
+    assert.ok(departureOnly.some((event) => event.type === 'DepartureEvent'), 'the departure event is observed');
+    assert.equal(departureOnly.some((event) => event.type === 'ExitEvent'), false, 'delivery is interrupted before the signed exit evidence');
+    const entriesBeforeExit = (await registryEntryRequests(world, vessel, world.simulation.ids.actor)).length;
+    action = await refreshActivityAction(opened.client.origin, first.id, action.id);
+    assert.notEqual(action.outcome.status, 'completed');
+    assert.equal((await registryEntryRequests(world, vessel, world.simulation.ids.actor)).length, entriesBeforeExit, 'departure alone cannot advance the dependent entry');
+
+    await world.policy.host.server.processOutbox(10);
+    await world.authority.authority.server.processInbox();
+    const registryAfterExit = await registryEvents(world, vessel);
+    const exit = registryAfterExit.find((event) => event.type === 'ExitEvent');
+    assert.ok(exit, 'the signed ExitEvent is real Registry evidence');
+
+    action = await refreshJourneyUntil(opened.client.origin, first.id, action.id, async () => (await registryEntryRequests(world, vessel, world.simulation.ids.actor)).length > entriesBeforeExit, 'the next entry is submitted after signed exit evidence');
+    const simulationEntry = (await registryEntryRequests(world, vessel, world.simulation.ids.actor)).at(-1)!;
+    const simulationRequest = simulationEntry as { id: string; journey?: { exitEvidence?: string } };
+    assert.equal(simulationRequest.journey?.exitEvidence, exit.id, 'the next EntryRequest carries the real signed exit evidence');
+
+    await exchangeWorld(world.authority.authority.server, world.simulation.host.server);
+    action = await refreshActivityAction(opened.client.origin, first.id, action.id);
+    assert.notEqual(action.outcome.status, 'completed', 'the simulation entry request is not itself berthing');
+    let simulationState = await world.simulation.territory.state();
+    const pendingVisit = simulationState.visits[simulationRequest.id];
+    assert.equal(pendingVisit?.decision.accepted, true);
+    assert.equal(simulationState.simulation.vessels.find((item) => item.id === pendingVisit?.simulationVessel)?.status, 'pending');
+    assert.equal((await registryEvents(world, vessel)).some((event) => event.type === 'BerthingEvent' && event.request === simulationRequest.id), false);
+
+    control.fail = (url, method) => url.origin === world.origins.simulation && method === 'GET' && url.pathname.startsWith('/local/');
+    const retriesBefore = (await registryEntryRequests(world, vessel, world.simulation.ids.actor)).length;
+    action = await refreshActivityAction(opened.client.origin, first.id, action.id);
+    assert.notEqual(action.outcome.status, 'completed', 'an unavailable observation never becomes completion');
+    assert.equal(actionJourneyLegs(action).length, 3, 'an unavailable observation retains journey progress');
+    assert.equal((await registryEntryRequests(world, vessel, world.simulation.ids.actor)).length, retriesBefore, 'an unavailable observation never resubmits the child entry');
+    delete control.fail;
+
+    const tick = await fetch(`${world.origins.simulation}/local/admin/tick`, { method: 'POST', headers: adminHeaders, body: '{}' });
+    assert.equal(tick.status, 200);
+    await exchangeWorld(world.simulation.host.server, world.authority.authority.server);
+    action = await refreshJourneyUntil(opened.client.origin, first.id, action.id, (candidate) => candidate.outcome.status === 'completed', 'the journey completes only after delayed berth evidence');
+    assert.ok(action.outcome.evidence.length > 0);
+    const berth = (await registryEvents(world, vessel)).find((event) => event.type === 'BerthingEvent' && event.request === simulationRequest.id);
+    assert.ok(berth, 'the delayed simulation BerthingEvent is the completion evidence');
+    simulationState = await world.simulation.territory.state();
+    assert.equal(simulationState.simulation.vessels.find((item) => item.id === pendingVisit?.simulationVessel)?.status, 'berthed');
+    assert.equal((await world.policy.territory.ledger).visits[vessel]?.departed, true);
+    assert.ok(action.resultReferences.some((reference) => reference.kind === 'request'));
+    assert.ok(action.resultReferences.some((reference) => reference.kind === 'event'));
+    assert.equal(actionJourneyLegs(action).length, 3, 'per-leg progress remains readable after completion');
+    assertNoSecrets([plan, action], [world.nativeTokens.first, world.nativeTokens.second]);
+  } finally {
+    delete control.fail;
+    await opened.client.close();
+    await opened.application.close();
+    await world.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('traverse retains manual destination review, never resubmits on concurrent refresh, and stops after destination rejection', { timeout: 180_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-task11-traverse-manual-'));
+  const world = await startProductionWorld(directory, productionWorldOptionsWithJourney());
+  const opened = await openProductionClient(join(directory, 'client.json'), world);
+  const first = world.accounts.first;
+  const vessel = world.authority.ids.vessel;
+  const adminHeaders = task08AdminHeaders(world);
+  try {
+    const admission = await fetch(`${world.origins.policy}/local/admin/admission`, {
+      method: 'POST', headers: adminHeaders, body: JSON.stringify({ publicPorts: world.policy.ids.ports })
+    });
+    assert.equal(admission.status, 200);
+    const manual = await fetch(`${world.origins.simulation}/local/admin/admission`, {
+      method: 'POST', headers: adminHeaders, body: JSON.stringify({ reviewMode: 'manual' })
+    });
+    assert.equal(manual.status, 200);
+    assert.equal((await refreshExplore(opened.client.origin)).status, 200);
+    const plan = await saveJourneyPlan(opened.client.origin, first.id, world.policy.ids.ports[0]!, world.simulation.ids.ports[0]!);
+
+    await submitLogisticsEntryFor(opened.client.origin, world, first.id, vessel, 'policy');
+    await exchangeWorld(world.authority.authority.server, world.policy.host.server);
+    const posted = await traverseJourney(opened.client.origin, first.id, vessel, plan.id as string);
+    assert.equal(posted.status, 200, JSON.stringify(posted.body));
+    let action = posted.action!;
+    assert.notEqual(action.outcome.status, 'completed');
+
+    let simulationEntry: Record<string, unknown> | undefined;
+    for (let attempt = 0; attempt < 20 && simulationEntry === undefined; attempt += 1) {
+      action = await refreshActivityAction(opened.client.origin, first.id, action.id);
+      await exchangeWorld(world.authority.authority.server, world.policy.host.server);
+      await exchangeWorld(world.authority.authority.server, world.simulation.host.server);
+      simulationEntry = (await registryEntryRequests(world, vessel, world.simulation.ids.actor)).at(-1);
+    }
+    assert.ok(simulationEntry, 'the journey reaches a destination entry request');
+    const requestId = String(simulationEntry.id);
+
+    let simulationState = await world.simulation.territory.state();
+    assert.equal(simulationState.requests[requestId]?.status, 'pending', 'manual destination review keeps the entry pending');
+    assert.equal((await registryEvents(world, vessel)).some((event) => event.type === 'BerthingEvent' && event.request === requestId), false);
+    action = await readActivityAction(opened.client.origin, first.id, action.id);
+    assert.notEqual(action.outcome.status, 'completed', 'a pending review does not complete a dependent step');
+    assert.equal(actionJourneyLegs(action).length, 3);
+
+    const countBefore = (await registryEntryRequests(world, vessel, world.simulation.ids.actor)).length;
+    await Promise.all([
+      refreshActivityAction(opened.client.origin, first.id, action.id),
+      refreshActivityAction(opened.client.origin, first.id, action.id)
+    ]);
+    assert.equal((await registryEntryRequests(world, vessel, world.simulation.ids.actor)).length, countBefore, 'concurrent refresh never duplicates the pending entry step');
+    action = await readActivityAction(opened.client.origin, first.id, action.id);
+    assert.notEqual(action.outcome.status, 'completed');
+    assert.equal(actionJourneyLegs(action).length, 3, 'pending review retains per-leg progress');
+
+    const rejected = await fetch(`${world.origins.simulation}/local/admin/entry-requests/${encodeURIComponent(requestId)}/reject`, {
+      method: 'POST', headers: adminHeaders, body: JSON.stringify({ reason: 'destination-rejected' })
+    });
+    assert.equal(rejected.status, 200);
+    await exchangeWorld(world.simulation.host.server, world.authority.authority.server);
+    action = await refreshJourneyUntil(opened.client.origin, first.id, action.id, (candidate) => candidate.outcome.status === 'failed', 'destination rejection stops the journey');
+    assert.ok(action.outcome.evidence.length > 0);
+    assert.match(JSON.stringify(action.outcome), /destination-rejected|reject|failed/i);
+    simulationState = await world.simulation.territory.state();
+    assert.equal(simulationState.requests[requestId]?.status, 'rejected');
+    const registryAfterRejection = await registryEvents(world, vessel);
+    assert.equal(registryAfterRejection.some((event) => event.type === 'BerthingEvent' && event.request === requestId), false, 'rejection never advances into berthing');
+    assert.equal(registryAfterRejection.some((event) => event.type === 'EntryRejected' && event.request === requestId), true);
+    const stoppedCount = (await registryEntryRequests(world, vessel, world.simulation.ids.actor)).length;
+    action = await refreshActivityAction(opened.client.origin, first.id, action.id);
+    assert.equal(action.outcome.status, 'failed', 'a rejected journey is not retried');
+    assert.equal((await registryEntryRequests(world, vessel, world.simulation.ids.actor)).length, stoppedCount, 'rejection stops dependent advancement');
+    assertNoSecrets([plan, action], [world.nativeTokens.first, world.nativeTokens.second]);
+  } finally {
+    await opened.client.close();
+    await opened.application.close();
+    await world.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a boundary-start journey cannot enter another Territory while the vessel has an active visit', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-journey-start-'));
+  const world = await startProductionWorld(directory, productionWorldOptionsWithJourney());
+  const opened = await openProductionClient(join(directory, 'client.json'), world);
+  const accountId = world.accounts.first.id;
+  const vessel = world.authority.ids.vessel;
+  try {
+    await refreshExplore(opened.client.origin);
+    const plan = await saveJourneyPlan(opened.client.origin, accountId, `${world.origins.simulation}/objects/boundaries/east`, world.simulation.ids.ports[0]!);
+    await submitLogisticsEntryFor(opened.client.origin, world, accountId, vessel, 'policy');
+    await exchangeWorld(world.authority.authority.server, world.policy.host.server);
+    const posted = await traverseJourney(opened.client.origin, accountId, vessel, String(plan.id));
+    if (posted.action?.submission.status === 'accepted') await refreshActivityAction(opened.client.origin, accountId, posted.action.id);
+    assert.equal((await registryEntryRequests(world, vessel, world.simulation.ids.actor)).length, 0, 'starting at an unrelated boundary cannot skip the existing visit departure');
+    assert.equal((await world.policy.territory.ledger).visits[vessel]?.departed, false);
+  } finally {
+    await opened.client.close(); await opened.application.close(); await world.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('local journey completion requires observed movement rather than an acknowledged event-shaped response', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-journey-readback-'));
+  const world = await startProductionWorld(directory);
+  let movementPosts = 0;
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin === world.origins.policy && url.pathname === '/local/traverse' && init?.method === 'POST') {
+      movementPosts += 1;
+      return Response.json({ success: true, event: {
+        id: `${world.origins.policy}/objects/policy/voyage/unapplied`, type: 'VoyageEvent', kind: 'local-movement',
+        territory: world.policy.ids.actor, vessel: world.authority.ids.vessel,
+        details: { from: world.policy.ids.ports[0], to: world.policy.ids.ports[1], route: world.policy.ids.routes[1] },
+        effectiveAt: new Date().toISOString()
+      } });
+    }
+    return fetch(input, init);
+  };
+  const opened = await openProductionClient(join(directory, 'client.json'), world, { fetch: fetcher });
+  const accountId = world.accounts.first.id;
+  const vessel = world.authority.ids.vessel;
+  try {
+    await fetch(`${world.origins.policy}/local/admin/admission`, { method: 'POST', headers: task08AdminHeaders(world), body: JSON.stringify({ publicPorts: world.policy.ids.ports }) });
+    await refreshExplore(opened.client.origin);
+    const plan = await saveJourneyPlan(opened.client.origin, accountId, world.policy.ids.ports[0]!, world.policy.ids.ports[1]!);
+    await submitLogisticsEntryFor(opened.client.origin, world, accountId, vessel, 'policy');
+    await exchangeWorld(world.authority.authority.server, world.policy.host.server);
+    const posted = await traverseJourney(opened.client.origin, accountId, vessel, String(plan.id));
+    assert.equal(posted.status, 200);
+    let action = await refreshActivityAction(opened.client.origin, accountId, posted.action!.id);
+    assert.notEqual(action.outcome.status, 'completed', 'response alone does not establish the reached destination');
+    action = await refreshActivityAction(opened.client.origin, accountId, action.id);
+    assert.notEqual(action.outcome.status, 'completed');
+    assert.equal((await world.policy.territory.ledger).visits[vessel]?.port, world.policy.ids.ports[0]);
+    assert.equal(movementPosts, 1, 'unconfirmed movement is observed, never blindly replayed');
+  } finally {
+    await opened.client.close(); await opened.application.close(); await world.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a lost Registry submission response remains uncertain across restart without replaying the request', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-journey-lost-response-'));
+  const world = await startProductionWorld(directory, productionWorldOptionsWithJourney());
+  const storeFile = join(directory, 'client.json');
+  let departurePosts = 0;
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const response = await fetch(input, init);
+    if (url.origin === world.origins.authority && url.pathname === '/local/registry/departure' && init?.method === 'POST') {
+      departurePosts += 1;
+      await response.arrayBuffer();
+      throw new TypeError('Registry response lost after submission');
+    }
+    return response;
+  };
+  let opened = await openProductionClient(storeFile, world, { fetch: fetcher });
+  const accountId = world.accounts.first.id;
+  const vessel = world.authority.ids.vessel;
+  try {
+    await fetch(`${world.origins.policy}/local/admin/admission`, { method: 'POST', headers: task08AdminHeaders(world), body: JSON.stringify({ publicPorts: world.policy.ids.ports }) });
+    await refreshExplore(opened.client.origin);
+    const plan = await saveJourneyPlan(opened.client.origin, accountId, world.policy.ids.ports[1]!, world.simulation.ids.ports[0]!);
+    await submitLogisticsEntryFor(opened.client.origin, world, accountId, vessel, 'policy');
+    await exchangeWorld(world.authority.authority.server, world.policy.host.server);
+    const token = await deriveDiplomaticToken(world.nativeTokens.first, world.policy.ids.actor);
+    assert.equal((await fetch(`${world.origins.policy}/local/traverse`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ vessel, route: world.policy.ids.routes[1] }) })).status, 200);
+    const posted = await traverseJourney(opened.client.origin, accountId, vessel, String(plan.id));
+    assert.equal(posted.status, 200);
+    let action = await refreshActivityAction(opened.client.origin, accountId, posted.action!.id);
+    assert.equal(action.outcome.status, 'unverified');
+    assert.equal(departurePosts, 1);
+    await opened.client.close(); await opened.application.close();
+    opened = await openProductionClient(storeFile, world, { fetch: fetcher });
+    action = await refreshActivityAction(opened.client.origin, accountId, action.id);
+    assert.equal(action.outcome.status, 'unverified');
+    assert.equal(departurePosts, 1);
+    const departures = Object.values((await world.authority.registry.state(vessel)).requests).filter((request) => isRecord(request) && request.type === 'DepartureRequest');
+    assert.equal(departures.length, 1);
+  } finally {
+    await opened.client.close(); await opened.application.close(); await world.close();
     await rm(directory, { recursive: true, force: true });
   }
 });

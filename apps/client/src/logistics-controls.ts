@@ -9,19 +9,24 @@ import type {
 import {
   executeProductionOperation,
   readProductionJob,
+  refreshAction,
   refreshLogisticsVessel,
   refreshProduction,
   refreshProductionJob,
   submitLogisticsAdoption,
   submitLogisticsDeparture,
   submitLogisticsEntry,
+  submitLogisticsTraverse,
   type ActionResponse
 } from './application-api.js';
 import { identityDisplay } from './identity-display.js';
+import type { ResourceReaderController } from './resource-reader.js';
+import { clearExploreRouteSelection, getExploreRouteSelection, onExploreRouteSelectionChange } from './route-selection.js';
 
 export interface LogisticsControlsOptions {
   selectedAccountId: () => string | undefined;
   initialVesselId?: () => string | undefined;
+  reader?: ResourceReaderController;
 }
 
 export interface LogisticsControlsController {
@@ -91,6 +96,26 @@ function neutralReferences(value: string): string {
   return value.replace(/(?:https?:\/\/|urn:)[^\s,;]+/gi, 'reference');
 }
 
+const referenceKeys = new Set(['id', 'variety', 'commodity', 'asset']);
+
+function resourceReferences(value: unknown, found: string[] = []): string[] {
+  if (typeof value === 'string') {
+    if (URL.canParse(value)) found.push(value);
+    return found;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) resourceReferences(item, found);
+    return found;
+  }
+  if (typeof value === 'object' && value !== null) {
+    for (const [key, item] of Object.entries(value)) {
+      if (referenceKeys.has(key) && typeof item === 'string' && URL.canParse(item)) found.push(item);
+      else if (typeof item === 'object') resourceReferences(item, found);
+    }
+  }
+  return found;
+}
+
 function actionSummary(action: ActionRecord): string {
   const outcome = action.outcome.status;
   if (action.outcome.evidence.length > 0) return `${outcome} · evidence ${action.outcome.evidence.length}`;
@@ -110,13 +135,15 @@ export function setupLogisticsControls(options: LogisticsControlsOptions): Logis
   const jobsPanel = element<HTMLElement>('production-jobs');
   const logisticsTechnical = element<HTMLElement>('logistics-technical');
   const productionTechnical = element<HTMLElement>('production-technical');
-  if (!section || !vesselField || !refreshVesselButton || !refreshProductionButton || !status || !summary || !actionForms || !authorityPanel || !operationsPanel || !jobsPanel || !logisticsTechnical || !productionTechnical) return;
+  const journeyPanel = element<HTMLElement>('logistics-journey');
+  if (!section || !vesselField || !refreshVesselButton || !refreshProductionButton || !status || !summary || !actionForms || !authorityPanel || !operationsPanel || !jobsPanel || !logisticsTechnical || !productionTechnical || !journeyPanel) return;
 
   let logistics: LogisticsVesselData | undefined;
   let production: ProductionData | undefined;
   let selectedAuthority: string | undefined;
   let selectedJob: ProductionJob | undefined;
   let lastAction: ActionRecord | undefined;
+  let journeyAction: ActionRecord | undefined;
   let operation = 0;
   let busy = false;
 
@@ -139,6 +166,24 @@ export function setupLogisticsControls(options: LogisticsControlsOptions): Logis
   const accountId = (): string | undefined => options.selectedAccountId();
   const vesselId = (): string => vesselField.value.trim();
 
+  const appendReferenceButtons = (panel: HTMLElement, value: unknown, context: string): void => {
+    const reader = options.reader;
+    if (reader === undefined) return;
+    const references = [...new Set(resourceReferences(value))];
+    if (references.length === 0) return;
+    const group = document.createElement('p');
+    for (const id of references) {
+      const identity = identityDisplay.get(id);
+      const label = identity?.name || identity?.handle || 'resource';
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = `Read ${context} ${label}`;
+      button.addEventListener('click', () => { void reader.open(id); });
+      group.append(button);
+    }
+    panel.append(group);
+  };
+
   const renderLogistics = (): void => {
     summary.replaceChildren();
     logisticsTechnical.replaceChildren();
@@ -160,6 +205,7 @@ export function setupLogisticsControls(options: LogisticsControlsOptions): Logis
     const location = document.createElement('p');
     location.textContent = `Registry location: ${registry.location && typeof registry.location === 'object' && 'status' in registry.location ? String(registry.location.status) : 'not retrieved'}`;
     summary.append(heading, registryLine, cargo, adoption, location);
+    appendReferenceButtons(summary, registry.cargo, 'cargo');
     if (registry.pendingRequests !== undefined && registry.pendingRequests.length > 0) {
       const pending = document.createElement('p');
       pending.textContent = `Pending Registry requests: ${registry.pendingRequests.length}`;
@@ -177,8 +223,74 @@ export function setupLogisticsControls(options: LogisticsControlsOptions): Logis
       const visitStatus = localVisit === undefined ? 'not retrieved' : localVisit === null ? 'none recorded' : typeof localVisit === 'object' && 'status' in localVisit ? String(localVisit.status) : typeof localVisit === 'object' && 'departed' in localVisit ? localVisit.departed ? 'departed' : 'active' : 'recorded';
       visit.textContent = `Territory visit: ${visitStatus} · Cargo: ${quantitySummary(territory.cargo, 'Variety')}`;
       summary.append(territoryHeading, stateLine, stock, visit);
+      appendReferenceButtons(summary, territory.sharedStock, 'stock');
+      appendReferenceButtons(summary, territory.cargo, 'cargo');
     }
     logisticsTechnical.append(detailsBlock('Logistics technical details', JSON.stringify(logistics, null, 2)));
+  };
+
+  const renderJourney = (): void => {
+    journeyPanel.replaceChildren();
+    const selection = getExploreRouteSelection();
+    const selected = accountId();
+    if (!selection || selected === undefined || selection.accountId !== selected) return;
+    const heading = document.createElement('h3');
+    heading.textContent = 'Journey';
+    journeyPanel.append(heading);
+    if (journeyAction?.journey === undefined) {
+      const note = document.createElement('p');
+      note.textContent = `Selected route ${selection.plan.legs.map((leg) => identityDisplay.label(leg.routeId)).join(' → ')}`;
+      const traverse = document.createElement('button');
+      traverse.type = 'button';
+      traverse.textContent = 'Traverse selected route';
+      traverse.addEventListener('click', () => {
+        void withBusy(async () => {
+          const account = accountId();
+          const vessel = vesselId();
+          if (!account || !vessel) throw new Error('Select an account and vessel first');
+          const started = operation;
+          const response = await submitLogisticsTraverse({ accountId: account, vesselId: vessel, routePlanId: selection.plan.id });
+          if (account !== accountId() || started !== operation) return;
+          journeyAction = response.action;
+          lastAction = response.action;
+          setStatus(`Journey ${actionSummary(response.action)}`);
+          renderJourney();
+          renderTechnical();
+        });
+      });
+      journeyPanel.append(note, traverse);
+      return;
+    }
+    const journey = journeyAction.journey;
+    const summaryLine = document.createElement('p');
+    summaryLine.textContent = `Journey ${journey.status}${journey.error === undefined ? '' : ` · ${journey.error}`}`;
+    const steps = document.createElement('ol');
+    for (const leg of journey.legs) {
+      const item = document.createElement('li');
+      item.textContent = `Step ${leg.kind ?? 'route'} · ${leg.status} · ${identityDisplay.label(leg.from)} → ${identityDisplay.label(leg.to)}${leg.error === undefined ? '' : ` · ${leg.error}`}`;
+      steps.append(item);
+    }
+    const refresh = document.createElement('button');
+    refresh.type = 'button';
+    refresh.textContent = 'Refresh journey progress';
+    refresh.addEventListener('click', () => {
+      void withBusy(async () => {
+        const account = accountId();
+        if (!account || !journeyAction) throw new Error('Select an account and traverse a saved route first');
+        const started = operation;
+        const response = await refreshAction(account, journeyAction.id);
+        if (account !== accountId() || started !== operation) return;
+        journeyAction = response.data.action;
+        lastAction = response.data.action;
+        setStatus(`Journey ${actionSummary(response.data.action)}`);
+        renderJourney();
+        renderTechnical();
+      });
+    });
+    const back = document.createElement('a');
+    back.href = '#explore-controls';
+    back.textContent = 'Back to selected route in Explore';
+    journeyPanel.append(summaryLine, steps, refresh, back, detailsBlock('Journey technical details', JSON.stringify({ planId: selection.plan.id, action: journeyAction }, null, 2)));
   };
 
   const renderActions = (): void => {
@@ -321,6 +433,8 @@ export function setupLogisticsControls(options: LogisticsControlsOptions): Logis
       const effect = document.createElement('p');
       effect.textContent = neutralReferences(op.effect);
       article.append(heading, effect);
+      appendReferenceButtons(article, op.inputs.flatMap((input) => (input.choices ?? []).map((choice) => choice.value)), 'recipe');
+      appendReferenceButtons(article, op.outputDestination, 'recipe');
       if (op.outputDestination) {
         const destination = document.createElement('p');
         destination.textContent = `Output destination: ${op.outputDestination}`;
@@ -466,9 +580,15 @@ export function setupLogisticsControls(options: LogisticsControlsOptions): Logis
   renderLogistics();
   renderActions();
   renderProduction();
+  renderJourney();
 
   const initial = options.initialVesselId?.();
   if (initial) vesselField.value = initial;
+
+  onExploreRouteSelectionChange(() => {
+    journeyAction = undefined;
+    renderJourney();
+  });
 
   return {
     accountChanged(): void {
@@ -478,6 +598,8 @@ export function setupLogisticsControls(options: LogisticsControlsOptions): Logis
       selectedAuthority = undefined;
       selectedJob = undefined;
       lastAction = undefined;
+      journeyAction = undefined;
+      clearExploreRouteSelection();
       vesselField.value = options.initialVesselId?.() ?? '';
       summary.replaceChildren();
       actionForms.replaceChildren();
@@ -486,10 +608,12 @@ export function setupLogisticsControls(options: LogisticsControlsOptions): Logis
       jobsPanel.replaceChildren();
       logisticsTechnical.replaceChildren();
       productionTechnical.replaceChildren();
+      journeyPanel.replaceChildren();
       setStatus('Select an account, enter a vessel URI, then refresh.');
       renderLogistics();
       renderActions();
       renderProduction();
+      renderJourney();
     }
   };
 }

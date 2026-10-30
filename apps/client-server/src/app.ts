@@ -2,6 +2,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ActionDescriptor, ActionRecord, PageResponse } from '@fctp/client-sdk';
 import { createAccountService, type LoginInput } from './accounts.js';
 import { createActionService, type ActionHandler, type ActionService } from './actions.js';
+import { createAdministrationActionHandlers, createAdministrationService, AdministrationRequestError, type AdministrationService } from './administration.js';
+import { createAuthoringPublicationHandler, createAuthoringService, AuthoringRequestError } from './authoring.js';
 import { createDiscoveryService, type DiscoveryInput } from './discovery.js';
 import { UpstreamError } from './errors.js';
 import { createExploreService, ExploreRequestError } from './explore.js';
@@ -21,6 +23,8 @@ export interface ClientApplication {
   readonly fetch: typeof fetch;
   readonly observations: ObservationService;
   readonly actions: ActionService;
+  readonly authoring: ReturnType<typeof createAuthoringService>;
+  readonly administration: AdministrationService;
   resolveAdministratorCredential(accountId: string, targetActorId: string): Promise<string>;
   handle(request: IncomingMessage, response: ServerResponse): Promise<boolean>;
   close(): Promise<void>;
@@ -181,12 +185,36 @@ function resourcePath(pathname: string): { resourceId: string; refresh: boolean 
   }
 }
 
-function logisticsVesselPath(pathname: string): { vesselId: string; action?: 'refresh' | 'entry' | 'departure' | 'adoption' } | undefined {
-  const match = /^\/api\/logistics\/vessels\/([^/]+)(?:\/(refresh|entry|departure|adoption))?$/.exec(pathname);
+function draftPath(pathname: string): { draftId: string; publish: boolean } | undefined {
+  const publish = /^\/api\/drafts\/([^/]+)\/publish$/.exec(pathname);
+  if (publish) {
+    try {
+      return { draftId: decodeURIComponent(publish[1]!), publish: true };
+    } catch {
+      throw new ApiError(404, 'draft-not-found');
+    }
+  }
+  const detail = /^\/api\/drafts\/([^/]+)$/.exec(pathname);
+  if (!detail) return undefined;
+  try {
+    return { draftId: decodeURIComponent(detail[1]!), publish: false };
+  } catch {
+    throw new ApiError(404, 'draft-not-found');
+  }
+}
+
+function bodyKind(body: Record<string, unknown>): 'asset' | 'variety' {
+  const kind = body.kind;
+  if (kind !== 'asset' && kind !== 'variety') throw new ApiError(400, 'invalid-draft-kind');
+  return kind;
+}
+
+function logisticsVesselPath(pathname: string): { vesselId: string; action?: 'refresh' | 'entry' | 'departure' | 'adoption' | 'traverse' } | undefined {
+  const match = /^\/api\/logistics\/vessels\/([^/]+)(?:\/(refresh|entry|departure|adoption|traverse))?$/.exec(pathname);
   if (!match) return undefined;
   try {
     const vesselId = decodeURIComponent(match[1]!);
-    const action = match[2] as 'refresh' | 'entry' | 'departure' | 'adoption' | undefined;
+    const action = match[2] as 'refresh' | 'entry' | 'departure' | 'adoption' | 'traverse' | undefined;
     return { vesselId, ...(action === undefined ? {} : { action }) };
   } catch {
     throw new ApiError(404, 'vessel-not-found');
@@ -226,6 +254,16 @@ function productionJobPath(pathname: string): { jobId: string; refresh: boolean 
     return { jobId: decodeURIComponent(detail[1]!), refresh: false };
   } catch {
     throw new ApiError(404, 'job-not-found');
+  }
+}
+
+function administrationDecisionPath(pathname: string): { requestId: string; decision: 'approve' | 'reject' } | undefined {
+  const match = /^\/api\/administration\/entry-requests\/([^/]+)\/(approve|reject)$/.exec(pathname);
+  if (!match) return undefined;
+  try {
+    return { requestId: decodeURIComponent(match[1]!), decision: match[2] as 'approve' | 'reject' };
+  } catch {
+    throw new ApiError(404, 'request-not-found');
   }
 }
 
@@ -271,38 +309,56 @@ export async function createClientApplication(options: CreateClientApplicationOp
   const observations = createObservationService(state, {
     ...(options.observationTimeoutMs === undefined ? {} : { timeoutMs: options.observationTimeoutMs })
   });
+  const bindings = [...(options.administratorBindings ?? [])];
+  const credentials = { ...(options.administratorCredentials ?? {}) };
+  const resolveAdministratorCredential = async (accountId: string, targetActorId: string): Promise<string> => {
+    const account = await state.read((current) => current.accounts[accountId]);
+    if (!account || account.login.status !== 'signed-in') throw new Error('Account is not signed in');
+    const binding = bindings.find((candidate) => candidate.accountId === accountId && candidate.authorityActorIds.includes(targetActorId));
+    if (!binding) throw new Error('No administrator binding matches the account and target');
+    if (!Object.hasOwn(credentials, binding.credentialSource)) throw new Error('Administrator credential source is not configured');
+    const credential = credentials[binding.credentialSource];
+    if (typeof credential !== 'string' || !credential) throw new Error('Administrator credential source is not configured');
+    return credential;
+  };
   const builtInHandlers = createWorkflowActionHandlers(state, fetcher, observations, {
     ...(options.actionTimeoutMs === undefined ? {} : { timeoutMs: options.actionTimeoutMs })
   });
-  const actions = createActionService(state, {
-    handlers: { ...builtInHandlers, ...(options.actionHandlers ?? {}) },
+  const administrationHandlers = createAdministrationActionHandlers(state, fetcher, {
+    bindings, resolveCredential: resolveAdministratorCredential,
     ...(options.actionTimeoutMs === undefined ? {} : { timeoutMs: options.actionTimeoutMs })
   });
+  const actions = createActionService(state, {
+    handlers: {
+      ...builtInHandlers,
+    'authoring-publication': createAuthoringPublicationHandler(state, fetcher, observations),
+      ...administrationHandlers,
+      ...(options.actionHandlers ?? {})
+    },
+    ...(options.actionTimeoutMs === undefined ? {} : { timeoutMs: options.actionTimeoutMs })
+  });
+  const authoring = createAuthoringService(state, fetcher, observations, actions);
   const explore = createExploreService(state, fetcher, observations, {
     ...(options.observationTimeoutMs === undefined ? {} : { timeoutMs: options.observationTimeoutMs })
   });
+  const seedServers = [...(options.seedServers ?? [])];
   const logistics = createLogisticsService(state, fetcher, observations, actions, {
     ...(options.observationTimeoutMs === undefined ? {} : { timeoutMs: options.observationTimeoutMs })
   });
-  const bindings = [...(options.administratorBindings ?? [])];
-  const credentials = { ...(options.administratorCredentials ?? {}) };
+  const administration = createAdministrationService(state, fetcher, observations, actions, {
+    bindings, resolveCredential: resolveAdministratorCredential,
+    ...(options.observationTimeoutMs === undefined ? {} : { timeoutMs: options.observationTimeoutMs })
+  });
 
   return {
     state,
-    seedServers: [...(options.seedServers ?? [])],
+    seedServers,
     fetch: fetcher,
     observations,
     actions,
-    async resolveAdministratorCredential(accountId, targetActorId) {
-      const account = await state.read((current) => current.accounts[accountId]);
-      if (!account || account.login.status !== 'signed-in') throw new Error('Account is not signed in');
-      const binding = bindings.find((candidate) => candidate.accountId === accountId && candidate.authorityActorIds.includes(targetActorId));
-      if (!binding) throw new Error('No administrator binding matches the account and target');
-      if (!Object.hasOwn(credentials, binding.credentialSource)) throw new Error('Administrator credential source is not configured');
-      const credential = credentials[binding.credentialSource];
-      if (typeof credential !== 'string' || !credential) throw new Error('Administrator credential source is not configured');
-      return credential;
-    },
+    authoring,
+    administration,
+    resolveAdministratorCredential,
     async handle(request, response) {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1');
       const pathname = url.pathname;
@@ -336,6 +392,35 @@ export async function createClientApplication(options: CreateClientApplicationOp
         if (request.method === 'POST' && pathname === '/api/servers') {
           writeJson(response, 200, await discovery.discover(discoveryInput(await readJsonBody(request))));
           return true;
+        }
+        if (request.method === 'GET' && pathname === '/api/library') {
+          writeJson(response, 200, await authoring.library(queryAccountId(url)));
+          return true;
+        }
+        if (request.method === 'POST' && pathname === '/api/library/refresh') {
+          writeJson(response, 200, await authoring.refreshLibrary(bodyAccountId(await readJsonBody(request))));
+          return true;
+        }
+        if (request.method === 'POST' && pathname === '/api/drafts') {
+          const body = await readJsonBody(request);
+          writeJson(response, 201, await authoring.createDraft({ accountId: bodyAccountId(body), kind: bodyKind(body), fields: body.fields }));
+          return true;
+        }
+        const draft = draftPath(pathname);
+        if (draft) {
+          if (draft.publish && request.method === 'POST') {
+            writeJson(response, 200, await authoring.publishDraft(draft.draftId, bodyAccountId(await readJsonBody(request))));
+            return true;
+          }
+          if (!draft.publish && request.method === 'GET') {
+            writeJson(response, 200, await authoring.getDraft(draft.draftId, queryAccountId(url)));
+            return true;
+          }
+          if (!draft.publish && request.method === 'POST') {
+            const body = await readJsonBody(request);
+            writeJson(response, 200, await authoring.saveDraft(draft.draftId, { accountId: bodyAccountId(body), fields: body.fields }));
+            return true;
+          }
         }
         if (request.method === 'GET' && pathname === '/api/explore/places') {
           writeJson(response, 200, await explore.listPlaces(optionalQuery(url, 'accountId'), optionalQuery(url, 'vesselId')));
@@ -432,6 +517,15 @@ export async function createClientApplication(options: CreateClientApplicationOp
             writeJson(response, 200, { action: await logistics.adoption({ accountId, vesselId: logisticsVessel.vesselId, adoption: body.adoption }) });
             return true;
           }
+          if (action === 'traverse' && request.method === 'POST') {
+            const body = await readJsonBody(request);
+            const accountId = bodyAccountId(body);
+            await requireAccount(state, accountId);
+            const routePlanId = optionalBody(body, 'routePlanId');
+            if (routePlanId === undefined) throw new ApiError(400, 'route-plan-id-required');
+            writeJson(response, 200, { action: await logistics.traverse({ accountId, vesselId: logisticsVessel.vesselId, routePlanId }) });
+            return true;
+          }
         }
         if (request.method === 'GET' && pathname === '/api/production') {
           const accountId = queryAccountId(url);
@@ -479,6 +573,39 @@ export async function createClientApplication(options: CreateClientApplicationOp
             writeJson(response, 200, await logistics.job(productionJob.jobId, accountId, queryVesselId(url)));
             return true;
           }
+        }
+        if (request.method === 'GET' && pathname === '/api/administration') {
+          writeJson(response, 200, await administration.page(queryAccountId(url)));
+          return true;
+        }
+        if (request.method === 'POST' && pathname === '/api/administration/refresh') {
+          const body = await readJsonBody(request);
+          const authorityId = optionalBody(body, 'authorityId');
+          if (authorityId === undefined) throw new ApiError(400, 'authority-id-required');
+          writeJson(response, 200, await administration.refresh({ accountId: bodyAccountId(body), authorityId }));
+          return true;
+        }
+        if (request.method === 'POST' && pathname === '/api/administration/controls') {
+          const body = await readJsonBody(request);
+          const authorityId = optionalBody(body, 'authorityId');
+          const control = optionalBody(body, 'control');
+          if (authorityId === undefined) throw new ApiError(400, 'authority-id-required');
+          if (control === undefined) throw new ApiError(400, 'control-required');
+          const inputs = typeof body.inputs === 'object' && body.inputs !== null && !Array.isArray(body.inputs) ? body.inputs as Record<string, unknown> : {};
+          writeJson(response, 200, await administration.control({ accountId: bodyAccountId(body), authorityId, control, inputs }));
+          return true;
+        }
+        const administrationDecision = administrationDecisionPath(pathname);
+        if (administrationDecision && request.method === 'POST') {
+          const body = await readJsonBody(request);
+          const authorityId = optionalBody(body, 'authorityId');
+          if (authorityId === undefined) throw new ApiError(400, 'authority-id-required');
+          const reason = optionalBody(body, 'reason');
+          writeJson(response, 200, await administration.decide({
+            accountId: bodyAccountId(body), authorityId, requestId: administrationDecision.requestId,
+            decision: administrationDecision.decision, ...(reason === undefined ? {} : { reason })
+          }));
+          return true;
         }
         if (request.method === 'GET' && pathname === '/api/activity') {
           const accountId = queryAccountId(url);
@@ -531,7 +658,11 @@ export async function createClientApplication(options: CreateClientApplicationOp
           writeJson(response, error.status, { error: error.code });
           return true;
         }
-        if (error instanceof ExploreRequestError || error instanceof LogisticsRequestError) {
+        if (error instanceof ExploreRequestError || error instanceof LogisticsRequestError || error instanceof AdministrationRequestError) {
+          writeJson(response, error.status, { error: error.code });
+          return true;
+        }
+        if (error instanceof AuthoringRequestError) {
           writeJson(response, error.status, { error: error.code });
           return true;
         }

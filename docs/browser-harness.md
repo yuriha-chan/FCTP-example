@@ -1,10 +1,15 @@
-# Browser-backed CLI
+# Browser harness and application transport
 
-`node scripts/browser.mjs` is the canonical role gameplay interface for the active browser-backed run. It drives the real FCTP HTML/JavaScript client through visible controls. The adapter does not call application functions or construct gameplay HTTP requests. `run/browser.mjs` remains a compatibility wrapper. Do not use `node run/game.mjs` as a parallel gameplay path for active roleplay; that CLI and its API manuals are historical provenance and remain for supervisor/archive tooling. Board and observer archive commands are separate tools, not browser gameplay commands.
+`scripts/browser.mjs` is the role harness for a local FCTP run. It has two independent paths:
+
+- **Application commands** (`login`, `page`, `action`, `result`) call the client application API directly, return the same JSON page models and action records the browser client consumes, and do not start a browser or worker.
+- **DOM commands** (`open`, `view`, `fill`, `select`, `click`, `submit`, `batch`, `back`, `reload`, `close`) open the configured client origin in Chromium and operate visible controls. They are rendering and interaction checks, not a gameplay API.
+
+`scripts/browser-api.mjs` exports `createApplicationTransport({ origin, account, fetch? })`. The transport posts login requests to the configured client application, resolves the configured account's retained ID from `GET /api/accounts`, injects that scope into page and action requests, and never retains credentials or native tokens.
 
 ## Install and build
 
-Use Node 24 LTS and npm. From the repository root:
+Use Node 24 LTS and npm from the repository root:
 
 ```sh
 npm ci
@@ -13,17 +18,120 @@ npx playwright install-deps chromium
 npm run build
 ```
 
-Playwright's Chromium and host libraries are required. The host browser libraries have been installed for this environment. The compiled build is required before the CLI can start: the worker imports `dist/apps/browser-harness/index.js`, `dist/apps/demo/client-server.js`, and the generated client bundle. Rebuild after changing TypeScript/client sources.
+Application commands do not need Playwright. DOM commands need Chromium and the compiled browser harness. Rebuild after changing TypeScript or client sources.
 
-## Roles and session lifecycle
+## Start the local demo
 
-The CLI accepts only the public accounts configured in `run/runtime-config.json`. Each account's credential file, socket, audit log, and startup diagnostic live under `run/runtime/<runId>/<account>/`. Each opened account gets its own detached daemon, Chromium browser context, page, ephemeral static client server, and socket. The page state persists across separate CLI invocations for that account. Different accounts have isolated sessions and cannot share page memory. `open` reuses an already running account session; `close` shuts down that account's active daemon, browser, and static server.
+```sh
+npm run dev
+```
 
-The worker starts only the static server for the actual client bundle, on an ephemeral loopback port. It uses the origins and public Actor IDs from run config; it does not start Authority/Territory game services. The runtime config and account credential files must already exist and identify the configured own Player/Vessel or assigned administrator secret.
+`npm run dev` builds and launches the demo. The launcher binds the authority on `127.0.0.1:4100`, Policy Territory on `4101`, Simulation Territory on `4102`, and the client application on `4103`. The client origin is <http://127.0.0.1:4103>.
 
-To isolate config/runtime files for a test run, set `FCTP_BROWSER_CONFIG_ROOT` to a directory path relative to the repository root (or an absolute path). Put `runtime-config.json` and the `runtime/<runId>/<account>/credentials.json` tree below that root. The compiled imports and client assets remain rooted in the repository. With no override, the CLI uses `run/`.
+State is written under `.fctp-data/` by default. Set `FCTP_DATA_DIR` to choose another directory. The directory contains `authority.store.json`, `policy.store.json`, `simulation.store.json`, `client.store.json`, and signing keys. Restarting with the same data directory preserves accounts, drafts, route plans, pending actions and jobs, and retained observations.
 
-## Commands
+The demo fixture provisions two Players, one governor-bound administrator, and the connected outbound route. These credentials are development fixtures only:
+
+| Account | Handle | Password |
+| --- | --- | --- |
+| First Player | `@player@<authority-host>` | `demo-player-password` |
+| Second Player | `@player-2@<authority-host>` | `demo-player-2-password` |
+| Governor | `@governor@<authority-host>` | `demo-governor-password` |
+
+For the default launcher, `<authority-host>` is `127.0.0.1:4100`. The governor is bound to the Home/Registry, Policy, and Simulation administrator credentials. Fixture tokens and resource digests are provisioned server-side; the browser and CLI log in with passwords and do not receive manually injected native tokens.
+
+Administrator service secrets default to `demo-authority-admin`, `demo-policy-admin`, and `demo-sim-admin`. Override them with `DEMO_AUTHORITY_ADMIN_SECRET`, `DEMO_POLICY_ADMIN_SECRET`, and `DEMO_SIM_ADMIN_SECRET`. These service secrets are not browser accounts.
+
+## Runtime configuration
+
+The harness reads `runtime-config.json` from `run/` by default. Set `FCTP_BROWSER_CONFIG_ROOT` to another directory, relative to the repository root or absolute. For a demo run:
+
+```json
+{
+  "runId": "demo",
+  "clientOrigin": "http://127.0.0.1:4103",
+  "accounts": [
+    {
+      "name": "player",
+      "handle": "@player@127.0.0.1:4100",
+      "homeOrigin": "http://127.0.0.1:4100"
+    },
+    {
+      "name": "player-2",
+      "handle": "@player-2@127.0.0.1:4100",
+      "homeOrigin": "http://127.0.0.1:4100"
+    },
+    {
+      "name": "governor",
+      "handle": "@governor@127.0.0.1:4100",
+      "homeOrigin": "http://127.0.0.1:4100"
+    }
+  ]
+}
+```
+
+Account names are unique public CLI names using lowercase letters and digits, with optional hyphen-separated segments. `handle` identifies the Home account. `homeOrigin` is optional when the handle's server host is sufficient. The configuration contains no passwords. Sockets, audit records, and startup diagnostics live under `<config-root>/runtime/<runId>/<account>/`.
+
+## Application commands
+
+```text
+node scripts/browser.mjs <account> login
+node scripts/browser.mjs <account> page <path>
+node scripts/browser.mjs <account> action '<descriptor JSON>' '<inputs JSON>'
+node scripts/browser.mjs <account> result <actionId>
+```
+
+`login` reads the password from standard input and strips one trailing newline. Passwords are never accepted as command operands, placed in the runtime configuration, or printed. For example:
+
+```sh
+read -r -s PASSWORD
+printf '%s\n' "$PASSWORD" | node scripts/browser.mjs player login
+```
+
+```sh
+node scripts/browser.mjs player page /api/accounts
+node scripts/browser.mjs player page /api/servers
+```
+
+`page` reads an application path and prints the parsed JSON returned by the client application. A signed-in account's scope is appended from the configured handle; a caller-supplied `accountId` is replaced, not trusted. Public reads such as `/api/servers` and `/api/explore/places` work before login.
+
+`action` sends an `ActionDescriptor` and an inputs object. The descriptor must have no blockers, use `POST`, and target a same-origin `/api` path with no query, fragment, userinfo, or world proxy. Redirects are refused. The configured account scope is injected. A conflicting `accountId` or another account's logout path is rejected; password login uses the dedicated `login` command. Example:
+
+```sh
+node scripts/browser.mjs player action \
+  '{"id":"refresh-explore","label":"Refresh explore","endpoint":"/api/explore/refresh","method":"POST","inputs":[],"blockers":[]}' \
+  '{}'
+```
+
+```sh
+node scripts/browser.mjs player result 'action:<id>'
+```
+
+`result` reads one retained action record for the configured account scope. It does not refresh or contact a world service.
+
+Application command failures are bounded and readable. They include the HTTP status or a short reason, but never a password or native token.
+
+### Transport use in scripts
+
+```js
+import { createApplicationTransport } from './scripts/browser-api.mjs';
+
+const transport = createApplicationTransport({
+  origin: 'http://127.0.0.1:4103',
+  account: { name: 'player', handle: '@player@127.0.0.1:4100', homeOrigin: 'http://127.0.0.1:4100' }
+});
+
+await transport.login('demo-player-password');
+const servers = await transport.page('/api/servers');
+const places = await transport.action({
+  id: 'refresh', label: 'Refresh', endpoint: '/api/explore/refresh', method: 'POST', inputs: [], blockers: []
+});
+console.log(places.data);
+```
+
+The optional `fetch` argument injects a compatible fetch implementation for tests or bounded clients.
+
+## DOM rendering commands
 
 ```text
 node scripts/browser.mjs <account> open
@@ -38,56 +146,33 @@ node scripts/browser.mjs <account> reload
 node scripts/browser.mjs <account> close
 ```
 
-`open` starts a role session if needed, applies that role through the visible **Browser session** form, and prints the page. `view` prints a fresh snapshot. `fill` fills a visible input/textarea; `select` selects a visible option; `click` activates a visible button or link; `submit` uses the visible submit control's actual form submission and browser validation/events. These operations print the resulting live snapshot. `back` uses browser history. `reload` reloads the page and reapplies the same role through the session form with fresh refs. `close` ends the active browser and static server; call it while that role daemon is running.
+`open` starts a detached worker for that account if none is running and prints the rendered page from the configured `clientOrigin`. The worker opens only the application origin; it does not start a static server, inject credentials, or start world services. Keep the demo or another application server running at `clientOrigin` first.
 
-Example:
+`view` prints a fresh snapshot. `fill`, `select`, `click`, and `submit` operate visible controls and print the resulting snapshot. `submit` uses the form's actual submit path and browser validation. `back` uses browser history. `reload` reloads the page. `close` ends that account's worker and browser.
 
-```sh
-node scripts/browser.mjs <configured-public-account> open
-node scripts/browser.mjs <configured-public-account> view
-```
-
-Use refs printed by the latest snapshot. Single operations replace the prior ref set. Batch accepts 1–32 `{command,ref,value?}` steps (`value` is required only for `fill`/`select`), applies them sequentially against the starting handles, settles after each, and returns one fresh final snapshot. Example: `node scripts/browser.mjs <configured-public-account> batch '[{"command":"fill","ref":"<name-ref>","value":"Ada"},{"command":"select","ref":"<choice-ref>","value":"b"},{"command":"submit","ref":"<submit-ref>"}]'`. Validate all syntax before acting. If a step fails, later steps are skipped, starting refs are invalidated, and the error identifies the failing step and possible partial execution; no rollback occurs. Controls created/replaced during a batch need a later snapshot. Hidden, detached, disabled, wrong-kind, or stale controls fail rather than resolving elsewhere. Refs are compact session/generation/ordinal tokens, never DOM identifiers.
-
-### Saving and narrowing CLI output
-
-For longer sessions, retain full snapshots and mutation results in the launch-provided `ROLE_DIR`, the existing private directory assigned to your role. Do not write into historical run directories or a shared temporary directory. Redirect to a temporary file and move it into place only on success, leaving stderr visible and the previous known-good snapshot intact if capture fails:
+Use refs from the latest snapshot. Single operations replace the prior ref set. Batch accepts 1–32 `{command,ref,value?}` steps (`value` is required only for `fill`/`select`), applies them sequentially against the starting handles, settles after each, and returns one fresh final snapshot. If a step fails, later steps are skipped and the error identifies the failing step and possible partial execution. Hidden, detached, disabled, wrong-kind, or stale controls fail rather than resolving elsewhere. Refs are compact worker/generation/ordinal tokens, never DOM identifiers.
 
 ```sh
-ROLE_DIR='<launch-provided account-private directory>'
-node scripts/browser.mjs <configured-public-account> view > "$ROLE_DIR/browser.snapshot.tmp" && mv "$ROLE_DIR/browser.snapshot.tmp" "$ROLE_DIR/browser.snapshot.txt"
-sed -n '/Registry/,+24p' "$ROLE_DIR/browser.snapshot.txt"
+node scripts/browser.mjs player open
+node scripts/browser.mjs player view
 ```
 
-Choose the heading and line range that match the rendered content you need. If a section is missing from this excerpt, inspect the full snapshot or capture a fresh one; an excerpt does not establish that the section is absent. Save mutation output as well, since it contains the fresh snapshot and refs:
+### Saving snapshots
+
+For longer sessions, retain full snapshots under the account's private runtime directory. Redirect to a temporary file and move it into place only on success, leaving stderr visible:
 
 ```sh
-cp "$ROLE_DIR/browser.snapshot.txt" "$ROLE_DIR/browser.before.txt"
-REF='<ref from the latest full snapshot>'
-node scripts/browser.mjs <configured-public-account> click "$REF" > "$ROLE_DIR/browser.after.tmp" && mv "$ROLE_DIR/browser.after.tmp" "$ROLE_DIR/browser.after.txt" && diff -u "$ROLE_DIR/browser.before.txt" "$ROLE_DIR/browser.after.txt"
+ROLE_DIR='<config-root>/runtime/<runId>/<account>'
+node scripts/browser.mjs player view > "$ROLE_DIR/browser.snapshot.tmp" && mv "$ROLE_DIR/browser.snapshot.tmp" "$ROLE_DIR/browser.snapshot.txt"
+sed -n '/Accounts/,+24p' "$ROLE_DIR/browser.snapshot.txt"
 ```
 
-`diff` exit status 1 means there are differences; a status greater than 1 means the comparison failed. Chain capture, move, and diff with `&&` so a failed capture cannot compare a stale after-file. Operations invalidate prior refs on success and batch failure, even when output is redirected, piped, or trimmed. Use refs from the newest full saved output before the next operation; unchanged text in a diff does not authorize reuse of an old ref. For a quick excerpt directly from the CLI, `set -o pipefail` preserves browser command failures through the pipeline:
+Save mutation output as well, because it contains the fresh snapshot and refs. Prior refs are invalid after any successful mutation and after a failed batch, even if output was redirected or trimmed.
 
-```sh
-set -o pipefail
-node scripts/browser.mjs <configured-public-account> view | sed -n '/Registry/,+24p'
-```
+Visible input/select values appear in snapshots. Password inputs and controls whose labels or names indicate password, secret, token, or credential are shown as `[REDACTED]`; known values entered into sensitive fields are masked if echoed elsewhere. Do not pass credentials to `fill`: shell arguments may be visible to local process inspection. The DOM worker does not perform account login; use the page's visible Accounts form when testing browser sign-in.
 
-Use a direct pipeline only to inspect output, not as the source of refs for an action; capture a new full snapshot before acting. Keep stderr visible and inspect the full saved output when errors or unavailable reasons could affect an action. These techniques apply only to rendered client output; do not use HTTP/DOM bypasses or inspect credential stores or other role notes. The [gameplay manual](../run/manuals/browser.md#save-and-inspect-snapshots) has the same snapshot workflow in operator context.
+## Boundaries
 
-Ordinary visible input/select values appear in snapshots as page content (for example, a selected URI, count, or textarea value). Password inputs and controls whose labels/names indicate password, secret, token, or credential are shown as `[REDACTED]`; known values entered into sensitive fields are also masked if echoed elsewhere on the page and are redacted from worker errors. The run adapter bootstraps credentials internally, without putting them in CLI arguments or snapshots. Do not pass credentials or other secrets to `fill`: shell command arguments may be visible to local process inspection. The session form clears its credential field after applying the session.
+The application commands exercise the same account login, page reads, action submission, and retained action records as the client application. Gameplay assertions through the harness use `createApplicationTransport`, not direct world POSTs, manual native-token injection, or private service mutation. DOM checks verify rendering and visible controls separately.
 
-## Client behavior and boundaries
-
-The page's **Role / Player URI / Vessel URI / Credential / Apply session** form is the session entry point. A Player session must use its own configured Player and Vessel and native credential. Configured administrator accounts use their assigned service credential; they do not receive another account's credential. `session-status` reports role and optional identity, not secrets. Session state is held in page memory; `reload` in this CLI explicitly reapplies the same role using fresh visible refs.
-
-After applying a Player session, refresh Registry/A/B action discovery and choose only visible enabled actions. The browser client owns authentication scope, request construction, action semantics, and server calls. Delivery/acceptance status does not prove business completion. Administrator views expose their scoped controls; a session form is not the former collection of separate administrator password inputs. See [the client walkthrough](client-walkthrough.md) for page sections.
-
-The static client server receives public service origins and Actor IDs only. The worker keeps the role credential in its process. The Unix socket and role directory are restricted, audit records contain operation metadata but not values or rendered text, and CLI output is the live rendered page. A role's browser session is distinct from board identities, `agent-board`, and observer/archive access.
-
-## Verification status and limitations
-
-The bounded broad gate `timeout 180s npm test` passed: build (including browser bundle), test-source typechecking, ESLint, and 104 runtime tests, including eight migrated browser CLI adapter tests. CLI spawn checks use canonical tracked `scripts/browser*.mjs` sources. `git diff --check` was clean. Runtime coverage included rendered client controls, restored Player/administrator controls, browser CLI sessions and batching, authoring, and gameplay. This automated evidence does not claim human UI acceptance or full client-flow coverage.
-
-The browser integration checks remain bounded and do not establish every B/admin action or all client flows. The older `run/game.mjs` and `run/manuals/player.md` document the API CLI contract; for active roleplay their gameplay instructions are superseded by this browser boundary and are retained as historical provenance. Supervisor/archive tooling may still use its separately authorized interfaces.
+The older `run/game.mjs` and `run/manuals/player.md` are historical API provenance for supervisor/archive tooling, not an active browser gameplay path. Board and observer archive commands are separate tools.

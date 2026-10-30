@@ -3,22 +3,58 @@ import { spawn } from 'node:child_process';
 import net from 'node:net';
 import process from 'node:process';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath, URL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { applicationUrl, createApplicationTransport, normalizeOrigin } from './browser-api.mjs';
 
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const RUN_ROOT = resolve(REPOSITORY_ROOT, 'run');
-const COMMANDS = Object.freeze(['open', 'view', 'fill', 'select', 'click', 'submit', 'batch', 'back', 'reload', 'close']);
+const ACCOUNT_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const DOM_COMMANDS = Object.freeze(['open', 'view', 'fill', 'select', 'click', 'submit', 'batch', 'back', 'reload', 'close']);
+const API_COMMANDS = Object.freeze(['login', 'page', 'action', 'result']);
 const WORKER_PATH = resolve(dirname(fileURLToPath(import.meta.url)), 'browser-worker.mjs');
 
 export function runtimeConfigRoot(env = process.env) {
   return env.FCTP_BROWSER_CONFIG_ROOT ? resolve(REPOSITORY_ROOT, env.FCTP_BROWSER_CONFIG_ROOT) : RUN_ROOT;
 }
 
+function validatePagePath(pathname) {
+  applicationUrl('http://127.0.0.1', pathname);
+  return pathname;
+}
+
+function parseJsonObject(source, label) {
+  let value;
+  try { value = JSON.parse(source); } catch { throw new TypeError(`${label} must be valid JSON`); }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${label} must be a JSON object`);
+  return value;
+}
+
 export function parseCommand(args) {
   const [role, command, ...operands] = args;
-  if (typeof role !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(role)) throw new TypeError('Unknown browser account');
-  if (!COMMANDS.includes(command)) throw new TypeError('Unknown browser command');
+  if (typeof role !== 'string' || !ACCOUNT_PATTERN.test(role)) throw new TypeError('Unknown browser account');
+  if (API_COMMANDS.includes(command)) {
+    if (command === 'login') {
+      if (operands.length !== 0) throw new TypeError('Invalid operands for login');
+      return { role, command };
+    }
+    if (command === 'page') {
+      if (operands.length !== 1) throw new TypeError('Invalid operands for page');
+      return { role, command, path: validatePagePath(operands[0]) };
+    }
+    if (command === 'action') {
+      if (operands.length !== 2) throw new TypeError('Invalid operands for action');
+      return {
+        role,
+        command,
+        descriptor: parseJsonObject(operands[0], 'Action descriptor'),
+        inputs: parseJsonObject(operands[1], 'Action inputs')
+      };
+    }
+    if (operands.length !== 1 || typeof operands[0] !== 'string' || !operands[0]) throw new TypeError('Invalid operands for result');
+    return { role, command, actionId: operands[0] };
+  }
+  if (!DOM_COMMANDS.includes(command)) throw new TypeError('Unknown browser command');
   const counts = { open: 0, view: 0, fill: 2, select: 2, click: 1, submit: 1, batch: 1, back: 0, reload: 0, close: 0 };
   if (operands.length !== counts[command]) throw new TypeError(`Invalid operands for ${command}`);
   if (['fill', 'select', 'click', 'submit'].includes(command) && (!operands[0] || operands[0].length > 512)) throw new TypeError('Invalid control reference');
@@ -45,37 +81,28 @@ export function validateBatch(value) {
 
 export function validateRuntimeConfig(value) {
   if (!value || typeof value !== 'object' || typeof value.runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.runId)) throw new TypeError('Invalid run configuration');
-  const origins = value.origins;
-  const actors = value.actors;
-  const uri = (candidate) => typeof candidate === 'string' && new URL(candidate).protocol.startsWith('http');
-  if (!origins || !Array.isArray(origins.authority) || origins.authority.length !== 1 || !origins.territoryA || !origins.territoryB || !actors?.players || !actors?.vessels) throw new TypeError('Run configuration is missing public browser origins or actors');
-  if (!Array.isArray(value.players) || value.players.length !== 5 || !Array.isArray(value.administrators) || value.administrators.length !== 3) throw new TypeError('Run config must contain five Players and three administrators');
-  const playerNames = value.players.map((player) => player?.name);
-  const administratorNames = value.administrators.map((administrator) => administrator?.name);
-  if ([...playerNames, ...administratorNames].some((name) => typeof name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) || new Set([...playerNames, ...administratorNames]).size !== 8) throw new TypeError('Run config contains invalid or duplicate accounts');
-  if (value.players.some((player, index) => player.role !== playerNames[index] || !uri(player.player) || !uri(player.vessel)) || value.administrators.some((administrator, index) => administrator.sessionRole !== ['policy-admin', 'simulation-admin', 'authority-admin'][index])) throw new TypeError('Run config contains invalid role assignments');
-  if (Object.keys(actors.players).length !== 5 || Object.keys(actors.vessels).length !== 5 || playerNames.some((name) => !Object.hasOwn(actors.players, name) || !Object.hasOwn(actors.vessels, name))) throw new TypeError('Run config must contain exactly five Player and Vessel mappings');
-  const authorityOrigin = new URL(origins.authority[0]);
-  const territoryAOrigin = new URL(origins.territoryA);
-  const territoryBOrigin = new URL(origins.territoryB);
-  if (![authorityOrigin, territoryAOrigin, territoryBOrigin].every((url) => ['http:', 'https:'].includes(url.protocol))) throw new TypeError('Invalid service origin');
-  for (const field of ['registry', 'home']) if (!uri(actors[field])) throw new TypeError(`Invalid public actor: ${field}`);
-  for (const key of playerNames) {
-    if (!uri(actors.players[key]) || !uri(actors.vessels[key])) throw new TypeError(`Run config must define ${key} and its vessel`);
+  const client = normalizeOrigin(value.clientOrigin, 'client origin');
+  if (!Array.isArray(value.accounts) || value.accounts.length === 0) throw new TypeError('Run configuration requires application accounts');
+  const names = new Set();
+  for (const account of value.accounts) {
+    if (!account || typeof account !== 'object' || typeof account.name !== 'string' || !ACCOUNT_PATTERN.test(account.name)) throw new TypeError('Run configuration contains an invalid account name');
+    if (names.has(account.name)) throw new TypeError('Run configuration contains duplicate account names');
+    names.add(account.name);
+    if (typeof account.handle !== 'string' || !account.handle.trim()) throw new TypeError('Run configuration account requires a handle');
+    if (account.homeOrigin !== undefined) normalizeOrigin(account.homeOrigin, 'account home origin');
   }
-  if (!uri(actors.territoryA) || !uri(actors.territoryB)) throw new TypeError('Run config must define both Territory Actors');
-  return { authority: authorityOrigin.origin, policy: territoryAOrigin.origin, simulation: territoryBOrigin.origin };
+  return { client };
 }
 
 export function socketPathFor(config, role, runRoot = RUN_ROOT) {
   validateRuntimeConfig(config);
-  if (![...config.players, ...config.administrators].some((entry) => entry.name === role)) throw new TypeError('Unknown browser account');
+  if (!config.accounts.some((entry) => entry.name === role)) throw new TypeError('Unknown browser account');
   return resolve(runRoot, 'runtime', config.runId, role, 'browser.sock');
 }
 
 export function startupDiagnosticPathFor(config, role, runRoot = RUN_ROOT) {
   validateRuntimeConfig(config);
-  if (![...config.players, ...config.administrators].some((entry) => entry.name === role)) throw new TypeError('Unknown browser account');
+  if (!config.accounts.some((entry) => entry.name === role)) throw new TypeError('Unknown browser account');
   return resolve(runRoot, 'runtime', config.runId, role, 'browser-startup-failure.txt');
 }
 
@@ -136,12 +163,35 @@ async function waitReady(socketPath, child, config, role, runRoot) {
   throw new Error(lastError?.code === 'ENOENT' ? 'Browser daemon did not become ready' : 'Browser daemon failed to start');
 }
 
+async function readPassword() {
+  let password = '';
+  process.stdin.setEncoding('utf8');
+  for await (const chunk of process.stdin) password += chunk;
+  if (password.endsWith('\r\n')) return password.slice(0, -2);
+  if (password.endsWith('\n')) return password.slice(0, -1);
+  return password;
+}
+
+async function apiCommand(parsed, account, config) {
+  const transport = createApplicationTransport({ origin: config.clientOrigin, account });
+  if (parsed.command === 'login') return transport.login(await readPassword());
+  if (parsed.command === 'page') return transport.page(parsed.path);
+  if (parsed.command === 'action') return transport.action(parsed.descriptor, parsed.inputs);
+  return transport.result(parsed.actionId);
+}
+
 export async function main(args = process.argv.slice(2)) {
   try {
     const parsed = parseCommand(args);
     const configRoot = runtimeConfigRoot();
     const config = await readConfig(configRoot);
-    if (![...config.players, ...config.administrators].some((entry) => entry.name === parsed.role)) throw new TypeError('Unknown browser account');
+    const account = config.accounts.find((entry) => entry.name === parsed.role);
+    if (!account) throw new TypeError('Unknown browser account');
+    if (API_COMMANDS.includes(parsed.command)) {
+      const result = await apiCommand(parsed, account, config);
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+      return;
+    }
     const runRoot = configRoot;
     const socketPath = socketPathFor(config, parsed.role, runRoot);
     if (parsed.command === 'open') {

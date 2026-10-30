@@ -55,6 +55,44 @@
         <div id="explore-detail" aria-live="polite"></div>
         <div id="explore-plan" aria-live="polite"></div>
       </section>
+      <section id="authoring-controls" aria-labelledby="authoring-title">
+        <h2 id="authoring-title">Author &amp; Publish</h2>
+        <p>Draft Assets and Varieties with the selected account. Draft reads use retained state; refresh reads the authenticated authoring catalog and published Player creations.</p>
+        <button id="authoring-refresh-library" type="button">Refresh library</button>
+        <p id="authoring-status" role="status" aria-live="polite">Select an account, then refresh the library.</p>
+        <h3>Library</h3>
+        <div id="authoring-library" aria-live="polite"></div>
+        <form id="authoring-draft-form" class="grid-form">
+          <label>Draft kind<select name="draftKind">
+            <option value="asset">Asset</option>
+            <option value="variety">Variety</option>
+          </select></label>
+          <label>Draft name<input name="draftName" autocomplete="off"></label>
+          <label>Draft text<textarea name="draftText" rows="3"></textarea></label>
+          <label>Mass<input name="draftMass" type="number" step="any"></label>
+          <label>Version<input name="draftVersion" autocomplete="off"></label>
+          <label>Asset reference URI<input name="draftAsset" type="url" autocomplete="off"></label>
+          <label>Production target<select name="productionTarget">
+            <option value="asset">Asset reference</option>
+            <option value="tool">Production tool</option>
+            <option value="ingredient">Production ingredient</option>
+          </select></label>
+          <label>Production mode<select name="productionMode">
+            <option value="structured">Structured editor</option>
+            <option value="advanced">Advanced JSON</option>
+          </select></label>
+          <div id="production-structured">
+            <button type="button" data-production-add-entry>Add production entry</button>
+            <div id="production-entries"></div>
+          </div>
+          <div id="production-advanced" hidden>
+            <label>Advanced Production JSON<textarea name="productionAdvanced" rows="4">[]</textarea></label>
+          </div>
+          <button id="authoring-new-draft" type="button">New draft</button>
+          <button id="authoring-save" type="button">Save draft</button>
+          <button id="authoring-publish" type="button">Publish draft</button>
+        </form>
+      </section>
       <section id="logistics-production" aria-labelledby="logistics-production-title">
         <h2 id="logistics-production-title">Logistics &amp; Production</h2>
         <p>The selected place and route IDs are carried from Explore. Registry, Territory cargo, shared stock, production, and jobs are retained observations; refresh performs world reads.</p>
@@ -65,6 +103,7 @@
           <button id="logistics-refresh-production" type="button">Refresh production</button>
           <p id="logistics-status" role="status" aria-live="polite">Select an account, enter a vessel URI, then refresh.</p>
           <div id="logistics-summary" aria-live="polite"></div>
+          <div id="logistics-journey" aria-live="polite"></div>
           <div id="logistics-actions" aria-live="polite"></div>
           <div id="production-authority-panel" aria-live="polite"></div>
           <div id="production-operations" aria-live="polite"></div>
@@ -72,6 +111,14 @@
           <div id="logistics-technical" aria-live="polite"></div>
           <div id="production-technical" aria-live="polite"></div>
         </div>
+      </section>
+      <section id="administration-controls" aria-labelledby="administration-title">
+        <h2 id="administration-title">Administration</h2>
+        <p>Administrator decisions and controls use the selected account's exact bindings or the governor native token for its issuing Home. Reads use retained state; refresh reads the selected target.</p>
+        <label>Administration target<select id="administration-target"></select></label>
+        <button id="administration-refresh" type="button">Refresh administration</button>
+        <p id="administration-status" role="status" aria-live="polite">Select an account, then refresh Administration.</p>
+        <div id="administration-content" aria-live="polite"></div>
       </section>
       <section id="resource-reader-controls" aria-labelledby="resource-reader-title">
         <h2 id="resource-reader-title">Resource reader</h2>

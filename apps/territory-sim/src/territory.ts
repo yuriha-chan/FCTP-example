@@ -61,12 +61,40 @@ export interface SimulationVisit {
   exited: boolean;
 }
 
+export interface SimulationAdmission {
+  reviewMode: 'automatic' | 'manual';
+  acceptedRegistries: URI[];
+  acceptedTerritories: URI[];
+  manifestPolicy: ManifestPolicy;
+  requireExitEvidence: boolean;
+}
+
+export interface SimulationEntryRecord {
+  request: EntryRequest;
+  hash: string;
+  sender: URI;
+  activityId: string;
+  receivedAt: string;
+  verification: unknown;
+  inbox: URI;
+  evidence?: ExitEvent;
+  evidenceVerification?: unknown;
+  evidenceBinding?: { bound: boolean };
+  status: 'pending' | 'accepted' | 'rejected';
+  decision?: { accepted: boolean; reason: string; manifestSource?: 'request' | 'evidence' };
+  tick?: number;
+  event?: { id: URI; type: 'BerthingEvent' | 'EntryRejected' };
+  decidedAt?: string;
+}
+
 export interface SimulationTerritoryState {
   simulation: SimulationState;
   visits: Record<string, SimulationVisit>;
   handledIds: Record<string, string>;
   decisions: Array<{ request: string; accepted: boolean; reason: string; tick: number }>;
   evidence: Record<string, ExitEvent>;
+  admission: SimulationAdmission;
+  requests: Record<string, SimulationEntryRecord>;
 }
 
 export interface SimulationTerritory {
@@ -78,6 +106,9 @@ export interface SimulationTerritory {
   configureMining(enabled: boolean, capacity: number): Promise<void>;
   configureManufacturing(slots: number, time: number): Promise<void>;
   configureFacilities(config: { mining?: { enabled: boolean; capacity: number }; manufacturing?: { slots: number; time: number }; port?: { capacity: number; berths: number } }): Promise<void>;
+  entryRequests(): Promise<Array<Record<string, unknown>>>;
+  decideEntryRequest(requestId: URI, action: 'approve' | 'reject', reason?: string): Promise<Record<string, unknown> | undefined>;
+  updateAdmission(input: Partial<SimulationAdmission>): Promise<SimulationAdmission>;
 }
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -99,7 +130,14 @@ export function installSimulationTerritory(host: Host, options: SimulationTerrit
   const tickDurationMs = options.tickDurationMs ?? 60_000;
   if (!Number.isFinite(Date.parse(epoch)) || !Number.isSafeInteger(tickDurationMs) || tickDurationMs < 1) throw new TypeError('Invalid simulation epoch or tick duration');
   const manifestPolicy = options.manifestPolicy ?? 'reject-difference';
-  const initial: SimulationTerritoryState = { simulation: createSimulationState(options.config), visits: {}, handledIds: {}, decisions: [], evidence: {} };
+  const initial: SimulationTerritoryState = {
+    simulation: createSimulationState(options.config), visits: {}, handledIds: {}, decisions: [], evidence: {},
+    admission: {
+      reviewMode: 'automatic', acceptedRegistries: [...options.acceptedRegistries], acceptedTerritories: [...options.acceptedTerritories],
+      manifestPolicy, requireExitEvidence: options.requireExitEvidence === true
+    },
+    requests: {}
+  };
   let queue: Promise<void> = Promise.resolve();
   const serialized = <T>(operation: () => Promise<T>): Promise<T> => {
     const next = queue.then(operation);
@@ -135,6 +173,66 @@ export function installSimulationTerritory(host: Host, options: SimulationTerrit
     }, [outgoing]);
   };
 
+  const admitState = (
+    state: SimulationTerritoryState,
+    request: EntryRequest,
+    evidence: ExitEvent | undefined,
+    evidenceVerification: unknown,
+    evidenceBinding: { bound: boolean } | undefined
+  ): { accepted: boolean; reason: string } => {
+    const admission = state.admission;
+    if (request.destination.territory !== actorId || !admission.acceptedRegistries.includes(request.vessel.registry)) {
+      return { accepted: false, reason: 'registry-or-destination-not-accepted' };
+    }
+    if (request.destination.port !== options.port || request.destination.route !== options.route) {
+      return { accepted: false, reason: 'port-or-route-not-accepted' };
+    }
+    if (request.journey.exitEvidence && !evidence) return { accepted: false, reason: 'exit-evidence-invalid-or-unbound' };
+    if (evidence) {
+      const verification = evidenceVerification as { cryptographic?: { verified?: boolean }; attribution?: { attributed?: boolean }; expectedIssuer?: { matches?: boolean } } | undefined;
+      if (!verification?.cryptographic?.verified || !verification.attribution?.attributed || !verification.expectedIssuer?.matches || !evidenceBinding?.bound) {
+        return { accepted: false, reason: 'exit-evidence-invalid-or-unbound' };
+      }
+      if (!admission.acceptedTerritories.includes(evidence.territory)) {
+        return { accepted: false, reason: 'prior-territory-not-accepted' };
+      }
+    } else if (admission.requireExitEvidence) {
+      return { accepted: false, reason: 'exit-evidence-required' };
+    }
+    const manifestSource = evidence && admission.manifestPolicy === 'evidence' ? 'evidence' : 'request';
+    const difference = evidence ? compareCargo(request.cargo, evidence.cargo) : undefined;
+    if (admission.manifestPolicy === 'reject-difference' && difference && (difference.leftOnly.length > 0 || difference.rightOnly.length > 0)) {
+      return { accepted: false, reason: 'cargo-differs-from-exit-evidence' };
+    }
+    const cargo = manifestSource === 'evidence' && evidence ? evidence.cargo : request.cargo;
+    if (Object.values(state.visits).some((visit) => visit.decision.accepted && visit.vessel === request.vessel.id && !visit.exited)) {
+      return { accepted: false, reason: 'vessel-already-visiting' };
+    }
+    const simulation = structuredClone(state.simulation);
+    const simulationVessel = `${request.vessel.id}#${encodeURIComponent(request.id)}`;
+    try {
+      admitVessel(simulation, simulationVessel, request.vessel.capacity, cargo);
+    } catch (error) {
+      if (!(error instanceof Error) || ![
+        'invalid or duplicate vessel',
+        'cargo commodity mass is not configured',
+        'vessel capacity exceeded',
+      ].includes(error.message)) throw error;
+      return { accepted: false, reason: error.message };
+    }
+    const visit: SimulationVisit = {
+      request: structuredClone(request), registry: request.vessel.registry, possessor: request.vessel.possessor,
+      vessel: request.vessel.id, simulationVessel, port: request.destination.port, route: request.destination.route,
+      ...(evidence ? { evidence: structuredClone(evidence), evidenceVerification } : {}),
+      decision: { accepted: true, reason: 'locally-accepted', manifestSource }, exited: false,
+    };
+    state.simulation = simulation;
+    state.visits[request.id] = visit;
+    state.decisions.push({ request: request.id, accepted: true, reason: visit.decision.reason, tick: simulation.tick });
+    if (evidence) state.evidence[evidence.id] = structuredClone(evidence);
+    return { accepted: true, reason: visit.decision.reason };
+  };
+
   const onEntry = async (context: HandlerContext, raw: unknown): Promise<void> => serialized(async () => {
     const checked = validateModel<EntryRequest>(raw as Record<string, unknown>, 'EntryRequest');
     if (!checked.success) throw new TypeError(`Invalid EntryRequest: ${checked.issues.map((issue) => issue.message).join(', ')}`);
@@ -149,69 +247,44 @@ export function installSimulationTerritory(host: Host, options: SimulationTerrit
     if (context.senderActor !== request.vessel.registry || !context.verification.cryptographic.verified || !context.verification.attribution.attributed || !context.verification.expectedIssuer.matches) {
       return;
     }
-    if (request.destination.territory !== actorId || !options.acceptedRegistries.includes(request.vessel.registry)) {
-      await reject(request, request.vessel.registry, 'registry-or-destination-not-accepted');
-      return;
-    }
-    if (request.destination.port !== options.port || request.destination.route !== options.route) {
-      await reject(request, request.vessel.registry, 'port-or-route-not-accepted');
+    if (request.destination.territory !== actorId || request.destination.port !== options.port || request.destination.route !== options.route) {
+      await reject(request, request.vessel.registry, request.destination.territory !== actorId ? 'registry-or-destination-not-accepted' : 'port-or-route-not-accepted');
       return;
     }
     const evidenceUri = request.journey.exitEvidence;
     let evidence: ExitEvent | undefined;
     let evidenceVerification: unknown;
+    let evidenceBinding: { bound: boolean } | undefined;
     if (evidenceUri) {
       const resolved = await resolveExitEvidence(evidenceUri, { vessel: request.vessel.id, registry: request.vessel.registry }, { fetcher });
       evidenceVerification = resolved.verification;
+      evidenceBinding = { bound: resolved.binding.bound };
       evidence = resolved.exit;
-      if (!resolved.exit || !resolved.verification.cryptographic.verified || !resolved.verification.attribution.attributed || !resolved.verification.expectedIssuer.matches || !resolved.binding.bound) {
-        await reject(request, request.vessel.registry, 'exit-evidence-invalid-or-unbound');
-        return;
-      }
-      if (!options.acceptedTerritories.includes(resolved.exit.territory)) {
-        await reject(request, request.vessel.registry, 'prior-territory-not-accepted');
-        return;
-      }
-    } else if (options.requireExitEvidence) {
-      await reject(request, request.vessel.registry, 'exit-evidence-required');
+    }
+    const reviewMode = current.admission.reviewMode ?? 'automatic';
+    if (reviewMode === 'manual') {
+      const inbox = await inboxFor(context.senderActor);
+      await commit((state) => {
+        state.requests[request.id] = {
+          request: structuredClone(request), hash, sender: context.senderActor, activityId: context.activityId,
+          receivedAt: new Date().toISOString(), verification: structuredClone(context.verification), inbox,
+          ...(evidence === undefined ? {} : { evidence: structuredClone(evidence) }),
+          ...(evidenceVerification === undefined ? {} : { evidenceVerification }),
+          ...(evidenceBinding === undefined ? {} : { evidenceBinding }),
+          status: 'pending'
+        };
+        state.handledIds[request.id] = hash;
+      });
       return;
     }
-    const manifestSource = evidence && manifestPolicy === 'evidence' ? 'evidence' : 'request';
-    const difference = evidence ? compareCargo(request.cargo, evidence.cargo) : undefined;
-    if (manifestPolicy === 'reject-difference' && difference && (difference.leftOnly.length > 0 || difference.rightOnly.length > 0)) {
-      await reject(request, request.vessel.registry, 'cargo-differs-from-exit-evidence');
+    const result = admitState(current, request, evidence, evidenceVerification, evidenceBinding);
+    if (!result.accepted) {
+      await reject(request, request.vessel.registry, result.reason);
       return;
     }
-    const cargo = manifestSource === 'evidence' && evidence ? evidence.cargo : request.cargo;
-    if (Object.values(current.visits).some((visit) => visit.decision.accepted && visit.vessel === request.vessel.id && !visit.exited)) {
-      await reject(request, request.vessel.registry, 'vessel-already-visiting');
-      return;
-    }
-    const simulation = structuredClone(current.simulation);
-    const simulationVessel = `${request.vessel.id}#${encodeURIComponent(request.id)}`;
-    try {
-      admitVessel(simulation, simulationVessel, request.vessel.capacity, cargo);
-    } catch (error) {
-      if (!(error instanceof Error) || ![
-        'invalid or duplicate vessel',
-        'cargo commodity mass is not configured',
-        'vessel capacity exceeded',
-      ].includes(error.message)) throw error;
-      await reject(request, request.vessel.registry, error.message);
-      return;
-    }
-    const visit: SimulationVisit = {
-      request: structuredClone(request), registry: request.vessel.registry, possessor: request.vessel.possessor,
-      vessel: request.vessel.id, simulationVessel, port: request.destination.port, route: request.destination.route,
-      ...(evidence ? { evidence: structuredClone(evidence), evidenceVerification } : {}),
-      decision: { accepted: true, reason: 'locally-accepted', manifestSource }, exited: false,
-    };
     await commit((state) => {
-      state.simulation = simulation;
-      state.visits[request.id] = visit;
-      state.decisions.push({ request: request.id, accepted: true, reason: visit.decision.reason, tick: simulation.tick });
+      Object.assign(state, current);
       state.handledIds[request.id] = hash;
-      if (evidence) state.evidence[evidence.id] = structuredClone(evidence);
     });
   });
 
@@ -277,6 +350,66 @@ export function installSimulationTerritory(host: Host, options: SimulationTerrit
       if (facilities.port) configurePort(simulation, facilities.port.capacity, facilities.port.berths);
       await commit((state) => { state.simulation = simulation; });
     }),
+    entryRequests: () => snapshot().then((state) => Object.values(state.requests ?? {}).map((record) => ({
+      requestId: record.request.id, request: record.request, sender: record.sender, receivedAt: record.receivedAt,
+      status: record.status, ...(record.decision === undefined ? {} : { decision: record.decision }),
+      ...(record.event === undefined ? {} : { event: record.event }), ...(record.tick === undefined ? {} : { tick: record.tick }),
+      ...(record.decidedAt === undefined ? {} : { decidedAt: record.decidedAt })
+    }))),
+    decideEntryRequest: (requestId, action, reason) => serialized(async () => {
+      const current = await snapshot();
+      const record = current.requests?.[requestId];
+      if (!record) return undefined;
+      if (record.status !== 'pending') {
+        return {
+          requestId, accepted: record.decision?.accepted === true, ...(record.decision?.reason === undefined ? {} : { reason: record.decision.reason }),
+          ...(record.decision === undefined ? {} : { decision: record.decision }), ...(record.event === undefined ? {} : { event: record.event }),
+          ...(record.decidedAt === undefined ? {} : { decidedAt: record.decidedAt })
+        };
+      }
+      const now = new Date().toISOString();
+      if (action === 'reject') {
+        const rejectionReason = reason ?? 'rejected-by-administrator';
+        const rejected: EntryRejected = { id: uri('entry-rejected'), type: 'EntryRejected', request: requestId, territory: actorId as URI, reason: rejectionReason };
+        const outgoing = await outbound(record.sender, rejected, `${rejected.id}/activity`);
+        await commit((state) => {
+          const target = state.requests[requestId]!;
+          target.status = 'rejected';
+          target.decision = { accepted: false, reason: rejectionReason };
+          target.event = { id: rejected.id, type: 'EntryRejected' };
+          target.tick = state.simulation.tick;
+          target.decidedAt = now;
+          state.decisions.push({ request: requestId, accepted: false, reason: rejectionReason, tick: state.simulation.tick });
+          state.handledIds[requestId] = record.hash;
+        }, [outgoing]);
+        return { requestId, accepted: false, reason: rejectionReason, decision: { accepted: false, reason: rejectionReason }, event: { id: rejected.id, type: 'EntryRejected' }, decidedAt: now };
+      }
+      const next = structuredClone(current);
+      const target = next.requests[requestId]!;
+      const result = admitState(next, record.request, record.evidence, record.evidenceVerification, record.evidenceBinding);
+      target.status = result.accepted ? 'accepted' : 'rejected';
+      target.decision = { accepted: result.accepted, reason: result.reason, ...(result.accepted && next.visits[requestId] !== undefined ? { manifestSource: next.visits[requestId]!.decision.manifestSource } : {}) };
+      target.tick = next.simulation.tick;
+      target.decidedAt = now;
+      next.handledIds[requestId] = record.hash;
+      let event: { id: URI; type: 'BerthingEvent' | 'EntryRejected' } | undefined;
+      let outgoing: Array<Awaited<ReturnType<typeof outbound>>> = [];
+      if (!result.accepted) {
+        const rejected: EntryRejected = { id: uri('entry-rejected'), type: 'EntryRejected', request: requestId, territory: actorId as URI, reason: result.reason };
+        event = { id: rejected.id, type: 'EntryRejected' };
+        target.event = event;
+        next.decisions.push({ request: requestId, accepted: false, reason: result.reason, tick: next.simulation.tick });
+        outgoing = [await outbound(record.sender, rejected, `${rejected.id}/activity`)];
+      }
+      await commit((state) => Object.assign(state, next), outgoing);
+      return { requestId, accepted: result.accepted, ...(result.accepted ? {} : { reason: result.reason }), decision: target.decision, ...(event === undefined ? {} : { event }), decidedAt: now };
+    }),
+    updateAdmission: (input) => serialized(async () => {
+      const current = await snapshot();
+      const admission = { ...current.admission, ...structuredClone(input) };
+      await commit((state) => { state.admission = admission; });
+      return admission;
+    }),
     tick: () => serialized(async () => {
       const current = await snapshot(); const state = structuredClone(current); const completed = advanceTick(state.simulation);
       const outgoing: Array<Awaited<ReturnType<typeof outbound>>> = [];
@@ -285,6 +418,8 @@ export function installSimulationTerritory(host: Host, options: SimulationTerrit
           const visit = Object.values(state.visits).find((item) => item.simulationVessel === effect.vessel && !item.exited);
           if (!visit) throw new Error(`Missing admitted visit for vessel ${effect.vessel}`);
           const event = { id: uri('berthing'), type: 'BerthingEvent', vessel: visit.vessel, territory: actorId, port: visit.port, request: visit.request.id, effectiveAt: stamp(effect.tick) };
+          const record = state.requests[visit.request.id];
+          if (record) record.event = { id: event.id, type: 'BerthingEvent' };
           outgoing.push(await outbound(visit.registry, event, `${event.id}/activity`));
         }
         if (effect.type === 'cargo-operation' && effect.vessel && effect.operation && effect.cargo) {

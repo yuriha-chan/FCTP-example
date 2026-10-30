@@ -8,7 +8,7 @@ import type { installPolicyTerritory } from './territory.js';
 type Territory = ReturnType<typeof installPolicyTerritory>;
 
 export async function discoverPolicyActions(input: {
-  actor: URI; player: URI; vessel: URI; ids: PolicyAppIds; origin: string; fetcher: typeof fetch; territory: Territory;
+  actor: URI; player: URI; vessel: URI; ids: PolicyAppIds; origin: string; routes?: Array<{ id: URI; from: string; to: string }>; fetcher: typeof fetch; territory: Territory;
 }): Promise<LocalActionDiscovery> {
   const ledger = await input.territory.ledger;
   const visit = ledger.visits[input.vessel];
@@ -55,6 +55,18 @@ export async function discoverPolicyActions(input: {
   }
   if (visit && !visit.departed) actions.push({ id: 'depart-current-visit', label: 'Request departure from current berth', available: true, request: { method: 'POST', href: new URL('/local/registry/departure', visit.registry).href, body: { vessel: input.vessel, territory: input.actor, port: visit.port, route: visit.route } }, effect: 'Requests Registry processing for this persisted current berth and route; Registry native authentication is required.' });
   else actions.push({ id: 'depart-current-visit', label: 'Request departure from current berth', available: false, reason: 'no-active-local-berth', effect: 'A current local berth is required.' });
+  if (visit && !visit.departed && visit.possessor === input.player) {
+    for (const route of input.routes ?? []) {
+      if (route.from !== visit.port || !input.ids.ports.includes(route.to as URI) || route.to === visit.port) continue;
+      actions.push({
+        id: `traverse-${String(route.id).split('/').at(-1)}`,
+        label: `Traverse selected route to ${input.ids.ports.indexOf(route.to as URI) === 0 ? 'East Haven' : 'West Haven'}`,
+        available: true,
+        request: { method: 'POST', href: `${input.origin}/local/traverse`, body: { vessel: input.vessel, route: route.id } },
+        effect: 'Moves this persisted visit to the route destination port with an authoritative local movement event.'
+      });
+    }
+  }
   return { kind: 'policy', actor: input.actor, player: input.player, vessel: input.vessel, observedAt: new Date().toISOString(), state: snapshot, actions, notes: ['Shared stock and policy values describe local Territory resources, not personal balances.', 'Only this vessel’s persisted local visit and cargo are shown; no other vessel, audit history, or global location is disclosed.', 'Entry requests are local examples, not evidence of departure elsewhere or a promise of global eligibility. Action availability is advisory and execution revalidates.'] };
 }
 

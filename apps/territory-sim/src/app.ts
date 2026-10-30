@@ -14,6 +14,7 @@ export interface CreateSimulationAppOptions {
   playerNames?: string[];
   peerOrigin: string;
   adminSecret: string;
+  additionalRoutes?: Route[];
   fetcher?: typeof fetch;
 }
 
@@ -81,8 +82,12 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
   const routes = `${origin}/objects/collections/routes` as URI;
   const listings = `${origin}/objects/collections/listings/main` as URI;
   const portIds = [mainPort];
-  const routeIds = [`${origin}/objects/routes/approach` as URI];
   const routeId = `${origin}/objects/routes/approach` as URI;
+  const boundaryId = `${origin}/objects/boundaries/east` as URI;
+  const defaultRoute: Route = { id: routeId, from: boundaryId, to: mainPort, distance: 12 };
+  const extraRoutes = canonicalAdditionalRoutes(options.additionalRoutes, origin, [routeId]);
+  const allRoutes = [defaultRoute, ...extraRoutes];
+  const routeIds = allRoutes.map((route) => route.id as URI);
   const map = `${origin}/objects/maps/territory` as URI;
   const ids: SimulationAppIds = {
     actor: actorId, ports: portIds, routes: routeIds, areas: areas.map((area) => area.id), map,
@@ -150,13 +155,12 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
   const localAssets = [oreAsset, metalAsset, refinedAsset];
   const localVarieties = [variety(ids.varieties.ore, 'Ore', 1, oreAsset.id, [productionOre]), variety(ids.varieties.metal, 'Metal', 2, metalAsset.id, [nativeProduction]), variety(ids.varieties.refined, 'Refined Metal', 3, refinedAsset.id, [importedProduction])];
   const port = { id: mainPort, name: 'Simulation Harbor', territory: actorId, area: portArea, listings };
-  const boundary = { id: `${origin}/objects/boundaries/east`, name: 'Eastern Boundary', territory: actorId };
-  const route: Route = { id: routeId, from: boundary.id, to: mainPort, distance: 12 };
+  const boundary = { id: boundaryId, name: 'Eastern Boundary', territory: actorId };
   const listing: Listing = { id: `${origin}/objects/listings/metal`, port: mainPort, seller: actorId, offered: { entries: [{ variety: ids.varieties.metal, count: 5, data: {} }] }, description: 'Locally produced metal' };
   host.server.registerResource(ports, { '@context': 'https://www.w3.org/ns/activitystreams', id: ports, type: 'Collection', totalItems: 1, orderedItems: [port] });
-  host.server.registerResource(routes, { '@context': 'https://www.w3.org/ns/activitystreams', id: routes, type: 'Collection', totalItems: 1, orderedItems: [route] });
+  host.server.registerResource(routes, { '@context': 'https://www.w3.org/ns/activitystreams', id: routes, type: 'Collection', totalItems: allRoutes.length, orderedItems: allRoutes });
   host.server.registerResource(listings, { '@context': 'https://www.w3.org/ns/activitystreams', id: listings, type: 'Collection', totalItems: 1, orderedItems: [listing] });
-  for (const item of [...areas, boundary, port, route, listing, ...localAssets, ...localVarieties]) host.server.registerResource(item.id, item);
+  for (const item of [...areas, boundary, port, ...allRoutes, listing, ...localAssets, ...localVarieties]) host.server.registerResource(item.id, item);
   host.server.registerResource(map, { id: map, representations: [{ format: 'https://fctp.example/formats/ascii', resources: [{ role: 'map', url: `${origin}/objects/maps/territory/ascii`, mediaType: 'text/plain; charset=utf-8' }] }] }, { public: false, actorId });
 
   host.server.addRoute(async ({ request, response, url }) => {
@@ -208,7 +212,9 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
       json(response, 200, discoverSimulationActions({ simulation: state.simulation, actor: actorId, player, vesselId: vesselId as URI, vessel, origin, ...(activeVisit ? { visit: activeVisit } : {}) }));
       return true;
     }
-    const admin = url.pathname === '/local/admin/facilities' || url.pathname === '/local/admin/tick';
+    const entryDecision = /^\/local\/admin\/entry-requests\/([^/]+)\/(approve|reject)$/.exec(url.pathname);
+    const admin = url.pathname === '/local/admin/facilities' || url.pathname === '/local/admin/tick' || url.pathname === '/local/admin/admission' ||
+      url.pathname === '/local/admin/entry-requests' || entryDecision !== null;
     const playerOperation = ['/local/mine', '/local/manufacture', '/local/load', '/local/unload'].includes(url.pathname);
     if (admin ? !isAdmin : playerOperation ? !isPlayer : !isPlayer && !isAdmin) {
       const status = isPlayer || isAdmin ? 403 : 401;
@@ -216,6 +222,20 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
       return true;
     }
     if (url.pathname === '/local/state' && request.method === 'GET') { json(response, 200, await territory.state()); return true; }
+    if (url.pathname === '/local/admin/entry-requests' && request.method === 'GET') { json(response, 200, { requests: await territory.entryRequests() }); return true; }
+    if (entryDecision && request.method === 'POST') {
+      let requestId: string;
+      try { requestId = decodeURIComponent(entryDecision[1]!); } catch { json(response, 404, { error: 'not-found' }); return true; }
+      const input = await body(request);
+      const result = await territory.decideEntryRequest(requestId, entryDecision[2] === 'approve' ? 'approve' : 'reject', typeof input.reason === 'string' ? input.reason : undefined);
+      if (!result) { json(response, 404, { error: 'not-found' }); return true; }
+      json(response, 200, result); return true;
+    }
+    if (url.pathname === '/local/admin/admission' && request.method === 'POST') {
+      const input = await body(request);
+      if (!validAdmission(input)) { json(response, 400, { error: 'invalid-admission' }); return true; }
+      json(response, 200, { admission: await territory.updateAdmission(input as Parameters<typeof territory.updateAdmission>[0]) }); return true;
+    }
     if (url.pathname === '/local/admin/tick' && request.method === 'POST') { json(response, 200, await territory.tick()); return true; }
     if (request.method !== 'POST') { json(response, 404, { error: 'not-found' }); return true; }
     const input = await body(request);
@@ -244,6 +264,19 @@ type ValidCargoManifest = CargoManifest & {
   >;
 }
 
+function canonicalAdditionalRoutes(values: Route[] | undefined, origin: string, defaultIds: readonly URI[]): Route[] {
+  if (values === undefined) return [];
+  if (!Array.isArray(values)) throw new TypeError('Invalid additional routes');
+  const seen = new Set<string>(defaultIds);
+  return values.map((value) => {
+    if (!value || typeof value !== 'object') throw new TypeError('Invalid additional route');
+    const id = value.id;
+    if (typeof id !== 'string' || !id.startsWith(`${origin}/objects/routes/`) || seen.has(id)) throw new TypeError('Additional routes must have unique owned route IDs');
+    if (typeof value.from !== 'string' || !URL.canParse(value.from) || typeof value.to !== 'string' || !URL.canParse(value.to) || value.from === value.to) throw new TypeError('Additional routes require distinct absolute endpoints');
+    seen.add(id);
+    return structuredClone(value);
+  });
+}
 function canonicalAuthorityOrigins(primary: string, additional: string[] | undefined): string[] {
   if (additional !== undefined && !Array.isArray(additional)) throw new TypeError('Invalid authority origins');
   return [...new Set([primary, ...(additional ?? [])].map((value) => {
@@ -265,6 +298,17 @@ function validManifest(value: unknown): value is ValidCargoManifest {
   return value.entries.every((entry) => typeof entry === 'object' && entry !== null && typeof entry.variety === 'string' &&
     typeof entry.data === 'object' && entry.data !== null && !Array.isArray(entry.data) &&
     ('id' in entry ? typeof entry.id === 'string' : Number.isSafeInteger(entry.count) && Number(entry.count) > 0));
+}
+
+function validAdmission(value: Record<string, unknown>): boolean {
+  const uris = (item: unknown): boolean => Array.isArray(item) && item.every((entry) => typeof entry === 'string' && URL.canParse(entry));
+  return Object.entries(value).every(([key, item]) => {
+    if (key === 'reviewMode') return item === 'automatic' || item === 'manual';
+    if (key === 'acceptedRegistries' || key === 'acceptedTerritories') return uris(item);
+    if (key === 'manifestPolicy') return ['request', 'evidence', 'reject-difference'].includes(String(item));
+    if (key === 'requireExitEvidence') return typeof item === 'boolean';
+    return false;
+  });
 }
 
 function validFacilities(value: Record<string, unknown>): value is Parameters<SimulationTerritory['configureFacilities']>[0] {

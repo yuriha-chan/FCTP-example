@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { ActionEvidence, ActionRecord } from '@fctp/client-sdk';
+import type { ActionEvidence, ActionRecord, JourneyProgress } from '@fctp/client-sdk';
 import type { ClientApplicationState } from './store.js';
 import { withDeadline } from './deadline.js';
 
@@ -36,6 +36,7 @@ export interface ActionSubmission {
   result?: string;
   references?: readonly ActionReference[];
   evidenceBaseline?: readonly ActionEvidence[];
+  journey?: JourneyProgress;
 }
 
 export interface ActionReconcileInput {
@@ -53,6 +54,7 @@ export interface ActionReconciliation {
   error?: string;
   references?: readonly ActionReference[];
   result?: string;
+  journey?: JourneyProgress;
 }
 
 export interface ActionHandler {
@@ -123,6 +125,64 @@ export function createActionService(state: ClientApplicationState, options: Acti
       const action = current.actions[actionId];
       return action && action.accountId === accountId ? action : undefined;
     });
+  };
+
+  const reconcileLocks = new Map<string, Promise<ActionRecord>>();
+
+  const reconcileInternal = async (actionId: string, accountId: string): Promise<ActionRecord> => {
+    await recovered;
+    const action = await requireAction(actionId, accountId);
+    if (!action) throw new Error('Action not found for this account');
+    if (action.submission.status === 'sending' || action.submission.status === 'rejected') return action;
+    const handler = handlers[action.intent.kind];
+    if (!handler?.reconcile) return action;
+
+    let reconciliation: ActionReconciliation;
+    try {
+      reconciliation = await withDeadline(timeoutMs, (signal) => handler.reconcile!({
+        accountId: action.accountId,
+        targetId: action.targetId,
+        intent: action.intent,
+        action,
+        references: action.resultReferences,
+        signal
+      }));
+    } catch (error) {
+      const failure = errorMessage(error);
+      const current = await requireAction(actionId, accountId) ?? action;
+      const uncertain: ActionRecord = {
+        ...current,
+        submission: current.submission,
+        outcome: { status: 'unverified', evidence: [], error: failure }
+      };
+      await state.transaction((store) => { store.actions[uncertain.id] = uncertain; });
+      return uncertain;
+    }
+
+    const evidence = [...(reconciliation.evidence ?? [])];
+    const completedWithoutEvidence = reconciliation.status === 'completed' && evidence.length === 0;
+    const status = completedWithoutEvidence ? 'unverified' : reconciliation.status;
+    const failure = completedWithoutEvidence ? 'Completion requires nonempty evidence' : reconciliation.error;
+    const base = await requireAction(actionId, accountId) ?? action;
+    const reconciled: ActionRecord = {
+      ...base,
+      resultReferences: [...base.resultReferences, ...(reconciliation.references ?? [])]
+        .filter((reference, index, references) => references.findIndex((candidate) => candidate.kind === reference.kind && candidate.id === reference.id) === index),
+      outcome: {
+        status,
+        evidence,
+        ...(failure === undefined ? {} : { error: failure })
+      },
+      ...(reconciliation.journey === undefined ? (base.journey === undefined ? {} : { journey: base.journey }) : { journey: reconciliation.journey })
+    };
+    await state.transaction((current) => {
+      current.actions[reconciled.id] = reconciled;
+      for (const reference of reconciled.resultReferences) {
+        if (reference.kind === 'request') current.followedRequests[`${reconciled.id}:${reference.kind}:${reference.id}`] = followedEntry(reference, reconciled);
+        if (reference.kind === 'job') current.followedJobs[`${reconciled.id}:${reference.kind}:${reference.id}`] = followedEntry(reference, reconciled);
+      }
+    });
+    return reconciled;
   };
 
   return {
@@ -202,7 +262,8 @@ export function createActionService(state: ClientApplicationState, options: Acti
           ...(submission.result === undefined ? {} : { result: submission.result }),
           ...(submission.evidenceBaseline === undefined ? {} : { evidenceBaseline: [...submission.evidenceBaseline] })
         },
-        outcome: { status: 'pending', evidence: [] }
+        outcome: { status: 'pending', evidence: [] },
+        ...(submission.journey === undefined ? {} : { journey: submission.journey })
       };
       await state.transaction((current) => {
         current.actions[accepted.id] = accepted;
@@ -214,55 +275,14 @@ export function createActionService(state: ClientApplicationState, options: Acti
       return accepted;
     },
     async reconcile(actionId, accountId) {
-      await recovered;
-      const action = await requireAction(actionId, accountId);
-      if (!action) throw new Error('Action not found for this account');
-      if (action.submission.status === 'sending' || action.submission.status === 'rejected') return action;
-      const handler = handlers[action.intent.kind];
-      if (!handler?.reconcile) return action;
-
-      let reconciliation: ActionReconciliation;
+      const previous = reconcileLocks.get(actionId) ?? Promise.resolve();
+      const next = previous.catch(() => undefined).then(() => reconcileInternal(actionId, accountId));
+      reconcileLocks.set(actionId, next);
       try {
-        reconciliation = await withDeadline(timeoutMs, (signal) => handler.reconcile!({
-          accountId: action.accountId,
-          targetId: action.targetId,
-          intent: action.intent,
-          action,
-          references: action.resultReferences,
-          signal
-        }));
-      } catch (error) {
-        const failure = errorMessage(error);
-        const uncertain: ActionRecord = {
-          ...action,
-          outcome: { status: 'unverified', evidence: [], error: failure }
-        };
-        await state.transaction((current) => { current.actions[uncertain.id] = uncertain; });
-        return uncertain;
+        return await next;
+      } finally {
+        if (reconcileLocks.get(actionId) === next) reconcileLocks.delete(actionId);
       }
-
-      const evidence = [...(reconciliation.evidence ?? [])];
-      const completedWithoutEvidence = reconciliation.status === 'completed' && evidence.length === 0;
-      const status = completedWithoutEvidence ? 'unverified' : reconciliation.status;
-      const failure = completedWithoutEvidence ? 'Completion requires nonempty evidence' : reconciliation.error;
-      const reconciled: ActionRecord = {
-        ...action,
-        resultReferences: [...action.resultReferences, ...(reconciliation.references ?? [])]
-          .filter((reference, index, references) => references.findIndex((candidate) => candidate.kind === reference.kind && candidate.id === reference.id) === index),
-        outcome: {
-          status,
-          evidence,
-          ...(failure === undefined ? {} : { error: failure })
-        }
-      };
-      await state.transaction((current) => {
-        current.actions[reconciled.id] = reconciled;
-        for (const reference of reconciled.resultReferences) {
-          if (reference.kind === 'request') current.followedRequests[`${reconciled.id}:${reference.kind}:${reference.id}`] = followedEntry(reference, reconciled);
-          if (reference.kind === 'job') current.followedJobs[`${reconciled.id}:${reference.kind}:${reference.id}`] = followedEntry(reference, reconciled);
-        }
-      });
-      return reconciled;
     },
     async get(actionId, accountId) {
       await recovered;

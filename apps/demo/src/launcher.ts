@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { access, mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { startClientServer } from './client-server.js';
 import { createClientApplication, type ClientApplication } from '../../client-server/src/app.js';
@@ -28,7 +28,18 @@ export interface StartDemoOptions {
 const defaultPorts: DemoPorts = { authority: 4100, policy: 4101, simulation: 4102, client: 4103 };
 const serviceNames = ['authority', 'policy', 'simulation', 'client'] as const;
 const demoPlayerPassword = 'demo-player-password';
+const demoPlayer2Password = 'demo-player-2-password';
 const demoGovernorPassword = 'demo-governor-password';
+
+async function storeExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
 
 export async function startDemo(options: StartDemoOptions) {
   const ports = { ...defaultPorts, ...options.ports };
@@ -46,6 +57,8 @@ export async function startDemo(options: StartDemoOptions) {
   const origin = (port: number): string => `http://127.0.0.1:${port}`;
   const dataDir = resolve(options.dataDir);
   await mkdir(dataDir, { recursive: true });
+  const freshAuthority = !await storeExists(resolve(dataDir, 'authority.store.json'));
+  const freshPolicy = !await storeExists(resolve(dataDir, 'policy.store.json'));
   let authority: Awaited<ReturnType<typeof createAuthorityApp>> | undefined;
   let policy: Awaited<ReturnType<typeof createPolicyApp>> | undefined;
   let simulation: Awaited<ReturnType<typeof createSimulationApp>> | undefined;
@@ -70,12 +83,20 @@ export async function startDemo(options: StartDemoOptions) {
       storeFile: resolve(dataDir, 'authority.store.json'),
       keyFile: resolve(dataDir, 'authority.keys.json'),
       adminSecret: secrets.authority,
-      playerNames: ['player'],
+      playerNames: ['player', 'player-2'],
       administratorNames: ['governor'],
-      accountPasswords: { player: demoPlayerPassword, governor: demoGovernorPassword }
+      accountPasswords: { player: demoPlayerPassword, 'player-2': demoPlayer2Password, governor: demoGovernorPassword }
     });
-    policy = await createPolicyApp({ origin: origin(ports.policy), storeFile: resolve(dataDir, 'policy.store.json'), keyFile: resolve(dataDir, 'policy.keys.json'), authorityOrigin: origin(ports.authority), peerOrigin: origin(ports.simulation), adminSecret: secrets.policy });
-    simulation = await createSimulationApp({ origin: origin(ports.simulation), storeFile: resolve(dataDir, 'simulation.store.json'), keyFile: resolve(dataDir, 'simulation.keys.json'), authorityOrigin: origin(ports.authority), peerOrigin: origin(ports.policy), adminSecret: secrets.simulation });
+    policy = await createPolicyApp({
+      origin: origin(ports.policy), storeFile: resolve(dataDir, 'policy.store.json'), keyFile: resolve(dataDir, 'policy.keys.json'),
+      authorityOrigin: origin(ports.authority), peerOrigin: origin(ports.simulation), adminSecret: secrets.policy,
+      playerNames: ['player', 'player-2'],
+      additionalRoutes: [{
+        id: `${origin(ports.policy)}/objects/routes/outbound`, type: 'Route', name: 'Outbound Passage',
+        from: `${origin(ports.policy)}/objects/ports/west`, to: `${origin(ports.simulation)}/objects/boundaries/east`
+      }]
+    });
+    simulation = await createSimulationApp({ origin: origin(ports.simulation), storeFile: resolve(dataDir, 'simulation.store.json'), keyFile: resolve(dataDir, 'simulation.keys.json'), authorityOrigin: origin(ports.authority), peerOrigin: origin(ports.policy), adminSecret: secrets.simulation, playerNames: ['player', 'player-2'] });
 
     await authority.authority.listen(ports.authority, '127.0.0.1');
     await policy.host.listen(ports.policy, '127.0.0.1');
@@ -86,6 +107,28 @@ export async function startDemo(options: StartDemoOptions) {
       policy: origin(ports.policy),
       simulation: origin(ports.simulation)
     };
+    if (freshPolicy) {
+      const admission = await fetch(new URL('/local/admin/admission', origins.policy), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${secrets.policy}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ publicPorts: policy.ids.ports })
+      });
+      if (!admission.ok) throw new Error(`Demo admission fixture failed: HTTP ${admission.status}`);
+    }
+    if (freshAuthority) {
+      for (const name of ['player', 'player-2']) {
+        const playerId = authority.ids.players[name]!;
+        await authority.home.issueNativeToken(playerId);
+        for (const territory of [policy, simulation]) {
+          await authority.home.requestDigest(playerId, { id: territory.ids.actor, inbox: territory.host.actor('territory').inbox });
+        }
+      }
+    }
+    for (let round = 0; round < 3; round += 1) {
+      await authority.authority.server.processOutbox();
+      await policy.host.server.processInbox();
+      await simulation.host.server.processInbox();
+    }
     const governorAccountId = `@governor@${new URL(authority.ids.actor.home).host}`;
     application = await createClientApplication({
       storeFile: resolve(dataDir, 'client.store.json'),

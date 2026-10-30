@@ -2,6 +2,8 @@ import { deriveDiplomaticToken } from '@fctp/auth';
 import type {
   AccountRecord,
   ActionRecord,
+  JourneyProgress,
+  JourneyStep,
   LogisticsRegistryObservation,
   LogisticsTerritoryObservation,
   LogisticsVesselData,
@@ -14,7 +16,7 @@ import type {
 } from '@fctp/client-sdk';
 import type { URI } from '@fctp/protocol';
 import { withDeadline } from './deadline.js';
-import type { ActionHandler, ActionService } from './actions.js';
+import type { ActionHandler, ActionReconcileInput, ActionReconciliation, ActionReference, ActionService } from './actions.js';
 import type { ObservationService } from './observations.js';
 import type { ClientApplicationState } from './store.js';
 import {
@@ -62,6 +64,7 @@ export class LogisticsRequestError extends Error {
 export interface LogisticsService {
   vessel(accountId: string, vesselId: string): Promise<PageResponse<LogisticsVesselData>>;
   refreshVessel(accountId: string, vesselId: string): Promise<PageResponse<LogisticsVesselData>>;
+  traverse(input: { accountId: string; vesselId: string; routePlanId: string }): Promise<ActionRecord>;
   entry(input: { accountId: string; vesselId: string; territoryId: string; portId: string; routeId: string }): Promise<ActionRecord>;
   departure(input: { accountId: string; vesselId: string; territoryId: string; portId: string; routeId: string }): Promise<ActionRecord>;
   adoption(input: { accountId: string; vesselId: string; adoption: boolean }): Promise<ActionRecord>;
@@ -429,6 +432,17 @@ export function createLogisticsService(
       await reconcilePendingRegistryActions(accountId);
       return logisticsPage(account, vesselId);
     },
+    async traverse(input) {
+      const account = await signedInAccount(input.accountId);
+      const plan = await state.read((current) => current.routePlans[input.routePlanId]);
+      if (!isRecord(plan) || plan.accountId !== account.id) throw new LogisticsRequestError(404, 'route-plan-not-found');
+      await ensureVessel(account, input.vesselId, true);
+      return actions.submit({
+        accountId: account.id,
+        targetId: input.vesselId,
+        intent: { kind: 'traverse', inputs: { vesselId: input.vesselId, routePlanId: input.routePlanId } }
+      });
+    },
     async entry(input) {
       const account = await signedInAccount(input.accountId);
       const context = await ensureVessel(account, input.vesselId, true);
@@ -488,15 +502,18 @@ export function createLogisticsService(
       const account = await signedInAccount(accountId);
       await ensureVessel(account, vesselId, true);
       const token = account.login.status === 'signed-in' ? account.login.nativeToken : '';
-      for (const authority of await territoryAuthorities()) {
+      const authorities = await territoryAuthorities();
+      for (const authority of authorities) {
         const diplomatic = await deriveDiplomaticToken(token, authority.actorId as URI);
         const source = new URL('/local/actions', authority.actorId).href;
+        let territorySummary: Record<string, unknown> | undefined;
         await observations.refresh({
           key: productionKey(accountId, vesselId),
           source,
           load: (signal) => call(async () => {
             const snapshot = await territorySnapshot(fetcher, authority.actorId, vesselId, diplomatic, signal);
             const operations = snapshot.kind === 'policy' ? policyOperations(snapshot) : simulationOperations(snapshot);
+            territorySummary = snapshot.kind === 'policy' ? policyTerritorySummary(snapshot) : simulationTerritorySummary(snapshot);
             return {
               recordType: 'territory-production',
               authorityId: authority.actorId,
@@ -506,6 +523,14 @@ export function createLogisticsService(
             };
           })
         });
+        if (territorySummary) {
+          const summary = territorySummary;
+          await observations.refresh({
+            key: logisticsKey(accountId, vesselId),
+            source,
+            load: async () => ({ recordType: 'territory', ...summary, observedAt: new Date().toISOString() })
+          });
+        }
       }
       for (const action of await pendingProductionActions(accountId)) {
         if (action.outcome.status === 'pending') await actions.reconcile(action.id, accountId);
@@ -792,10 +817,279 @@ export function createWorkflowActionHandlers(
     }
   });
 
+  class JourneyRejected extends Error {}
+
+  const findJourneyRecord = (value: unknown, predicate: (record: Record<string, unknown>) => boolean): Record<string, unknown> | undefined => {
+    if (!isRecord(value)) return undefined;
+    if (predicate(value)) return value;
+    for (const item of Object.values(value)) {
+      if (Array.isArray(item)) {
+        for (const entry of item) {
+          const found = findJourneyRecord(entry, predicate);
+          if (found) return found;
+        }
+      } else {
+        const found = findJourneyRecord(item, predicate);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  };
+
+  const persistJourney = async (actionId: string, accountId: string, journey: JourneyProgress): Promise<void> => {
+    await state.transaction((current) => {
+      const record = current.actions[actionId];
+      if (record && record.accountId === accountId) current.actions[actionId] = { ...record, journey };
+    });
+  };
+
+  const journeyEvidence = (journey: JourneyProgress) => journey.legs.flatMap((leg) => leg.status !== 'completed' ? [] : [{
+    source: leg.territoryId,
+    observedAt: leg.observedAt ?? journey.updatedAt,
+    changes: { routeId: leg.routeId, kind: leg.kind, ...(leg.eventId === undefined ? {} : { eventId: leg.eventId }) }
+  }]);
+
+  const journeyReferences = (journey: JourneyProgress): ActionReference[] => journey.legs.flatMap((leg) => [
+    ...(leg.requestId === undefined ? [] : [{ kind: 'request' as const, id: leg.requestId }]),
+    ...(leg.eventId === undefined ? [] : [{ kind: 'event' as const, id: leg.eventId }])
+  ]);
+
+  const classifyJourneyLeg = async (leg: JourneyStep, signal: AbortSignal): Promise<{ kind?: JourneyStep['kind']; error?: string }> => {
+    const routeResponse = await fetcher(leg.routeId, { method: 'GET', headers: { Accept: 'application/ld+json, application/json' }, cache: 'no-store', signal });
+    if (!routeResponse.ok) return { error: 'published-route-unavailable' };
+    const route = await routeResponse.json() as unknown;
+    if (!isRecord(route) || route.from !== leg.from || route.to !== leg.to) return { error: 'published-route-endpoints-changed' };
+    const territory = await territoryInfo(fetcher, leg.territoryId, signal);
+    const ids = record(territory.info.ids);
+    const ports = Array.isArray(ids.ports) ? ids.ports.filter((value): value is string => typeof value === 'string') : [];
+    const fromPort = ports.includes(leg.from);
+    const toPort = ports.includes(leg.to);
+    if (fromPort && toPort) return { kind: 'local-movement' };
+    if (fromPort && !toPort) return { kind: 'departure' };
+    if (!fromPort && toPort) return { kind: 'entry' };
+    return { error: 'route-endpoints-not-supported-by-territory' };
+  };
+
+  const submitLocalMovement = async (leg: JourneyStep, account: AccountRecord & { login: { status: 'signed-in'; nativeToken: string } }, vesselId: string, signal: AbortSignal): Promise<string> => {
+    const token = await deriveDiplomaticToken(account.login.nativeToken, leg.territoryId as URI);
+    const response = await fetcher(new URL('/local/traverse', leg.territoryId).href, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ vessel: vesselId, route: leg.routeId }),
+      cache: 'no-store',
+      signal
+    });
+    if (!response.ok) throw new JourneyRejected(`Local movement was refused: HTTP ${response.status}`);
+    const payload = await response.json() as unknown;
+    const event = findJourneyRecord(payload, (record) => record.type === 'VoyageEvent' && record.kind === 'local-movement' && record.vessel === vesselId);
+    if (!event || typeof event.id !== 'string') throw new Error('Local movement did not return an authoritative event');
+    return event.id;
+  };
+
+  const submitRegistryLeg = async (kind: 'entry' | 'departure', leg: JourneyStep, account: AccountRecord & { login: { status: 'signed-in'; nativeToken: string } }, registryId: string, vesselId: string, signal: AbortSignal): Promise<string> => {
+    const path = kind === 'entry' ? '/local/registry/entry' : '/local/registry/departure';
+    const response = await fetcher(new URL(path, registryId).href, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${account.login.nativeToken}` },
+      body: JSON.stringify({
+        vessel: vesselId,
+        territory: leg.territoryId,
+        port: kind === 'entry' ? leg.to : leg.from,
+        route: leg.routeId
+      }),
+      cache: 'no-store',
+      signal
+    });
+    if (!response.ok) throw new JourneyRejected(`Registry ${kind} was refused: HTTP ${response.status}`);
+    const payload = await response.json() as unknown;
+    if (!isRecord(payload) || typeof payload.id !== 'string') throw new Error(`Registry ${kind} did not return a request reference`);
+    return payload.id;
+  };
+
+  const settleDepartureLeg = async (leg: JourneyStep, account: AccountRecord & { login: { status: 'signed-in'; nativeToken: string } }, registryId: string, vesselId: string, signal: AbortSignal): Promise<{ status: 'pending' | 'completed'; eventId?: string }> => {
+    if (leg.requestId === undefined) return { status: 'pending' };
+    const view = await registryStateFor(account.id, registryId, vesselId, signal);
+    const events = Array.isArray(view.payload.events) ? view.payload.events.filter(isRecord) : [];
+    const departure = events.find((event) => event.type === 'DepartureEvent' && event.request === leg.requestId);
+    if (!departure || typeof departure.id !== 'string') return { status: 'pending' };
+    const exit = events.find((event) => event.type === 'ExitEvent' && event.departureEvent === departure.id);
+    if (!exit || typeof exit.id !== 'string') return { status: 'pending' };
+    if (typeof exit.route === 'string' && exit.route !== leg.routeId) return { status: 'pending' };
+    return { status: 'completed', eventId: exit.id };
+  };
+
+  const settleEntryLeg = async (leg: JourneyStep, account: AccountRecord & { login: { status: 'signed-in'; nativeToken: string } }, registryId: string, vesselId: string, signal: AbortSignal): Promise<{ status: 'pending' | 'completed' | 'failed'; eventId?: string; error?: string }> => {
+    if (leg.requestId === undefined) return { status: 'pending' };
+    const view = await registryStateFor(account.id, registryId, vesselId, signal);
+    const events = Array.isArray(view.payload.events) ? view.payload.events.filter(isRecord) : [];
+    const berthing = events.find((event) => event.type === 'BerthingEvent' && event.request === leg.requestId);
+    if (berthing && typeof berthing.id === 'string') return { status: 'completed', eventId: berthing.id };
+    const rejected = events.find((event) => event.type === 'EntryRejected' && event.request === leg.requestId);
+    if (rejected && typeof rejected.id === 'string') return { status: 'failed', eventId: rejected.id, error: typeof rejected.reason === 'string' ? rejected.reason : 'entry-rejected' };
+    return { status: 'pending' };
+  };
+
+  const recoverLocalMovement = async (leg: JourneyStep, account: AccountRecord & { login: { status: 'signed-in'; nativeToken: string } }, vesselId: string, signal: AbortSignal): Promise<boolean> => {
+    const token = await deriveDiplomaticToken(account.login.nativeToken, leg.territoryId as URI);
+    const endpoint = new URL('/local/actions', leg.territoryId);
+    endpoint.searchParams.set('vessel', vesselId);
+    const response = await fetcher(endpoint.href, { method: 'GET', headers: { Accept: 'application/json', Authorization: `Bearer ${token}` }, cache: 'no-store', signal });
+    if (!response.ok) return false;
+    const payload = await response.json() as unknown;
+    const visits = isRecord(payload) && isRecord(payload.state) && Array.isArray(payload.state.visits) ? payload.state.visits.filter(isRecord) : [];
+    return visits.some((candidate) => candidate.departed !== true && candidate.port === leg.to && candidate.route === leg.routeId);
+  };
+
+  const reconcileJourney = async (input: ActionReconcileInput): Promise<ActionReconciliation> => {
+    if (input.action.submission.status !== 'accepted') return { status: 'unverified', error: 'The parent journey submission was not confirmed' };
+    const journey = input.action.journey;
+    if (!journey) return { status: 'unverified', error: 'Journey progress is unavailable' };
+    if (journey.status === 'completed') return { status: 'completed', evidence: journeyEvidence(journey), references: journeyReferences(journey), journey };
+    if (journey.status === 'failed') return { status: 'failed', evidence: journeyEvidence(journey), references: journeyReferences(journey), journey, ...(journey.error === undefined ? {} : { error: journey.error }) };
+    const vesselId = requiredString(input.intent.inputs, 'vesselId');
+    const metadata = observationValue<{ registry?: string }>((await observations.read(vesselMetadataKey(vesselId)))[0]);
+    if (!metadata?.registry) return { status: 'unverified', evidence: journeyEvidence(journey), journey, error: 'Vessel metadata is unavailable' };
+    const registryId = metadata.registry;
+    const account = await accountFor(input.accountId);
+    const next = structuredClone(journey);
+
+    const finish = async (status: 'pending' | 'completed' | 'failed' | 'unverified', error?: string): Promise<ActionReconciliation> => {
+      next.status = status;
+      next.updatedAt = new Date().toISOString();
+      if (error !== undefined) next.error = error; else delete next.error;
+      await persistJourney(input.action.id, input.accountId, next);
+      return { status, evidence: journeyEvidence(next), references: journeyReferences(next), journey: next, ...(error === undefined ? {} : { error }) };
+    };
+
+    for (const leg of next.legs) {
+      if (leg.status === 'completed') continue;
+      if (leg.status === 'failed') return finish('failed', leg.error ?? 'A journey step failed');
+      if (leg.status === 'sending' || leg.status === 'unverified') {
+        if (leg.kind === 'local-movement') {
+          const recovered = await recoverLocalMovement(leg, account, vesselId, input.signal);
+          if (recovered) {
+            leg.status = 'completed';
+            leg.observedAt = new Date().toISOString();
+            continue;
+          }
+        }
+        leg.status = 'unverified';
+        leg.observedAt = new Date().toISOString();
+        return finish('unverified', leg.error ?? 'A child submission is uncertain and will not be replayed');
+      }
+      if (leg.status === 'pending') {
+        if (leg.kind === 'departure') {
+          const result = await settleDepartureLeg(leg, account, registryId, vesselId, input.signal);
+          if (result.status === 'pending') return finish('pending');
+          leg.status = 'completed';
+          if (result.eventId !== undefined) leg.eventId = result.eventId;
+          leg.observedAt = new Date().toISOString();
+          continue;
+        }
+        if (leg.kind === 'entry') {
+          const result = await settleEntryLeg(leg, account, registryId, vesselId, input.signal);
+          if (result.status === 'pending') return finish('pending');
+          if (result.eventId !== undefined) leg.eventId = result.eventId;
+          leg.observedAt = new Date().toISOString();
+          if (result.status === 'failed') {
+            leg.status = 'failed';
+            const reason = result.error ?? 'entry-rejected';
+            leg.error = reason;
+            return finish('failed', reason);
+          }
+          leg.status = 'completed';
+          continue;
+        }
+        leg.status = 'unverified';
+        return finish('unverified', 'A pending journey step has no supported observation');
+      }
+      const classification = await classifyJourneyLeg(leg, input.signal);
+      if (classification.kind === undefined) {
+        const reason = classification.error ?? 'route-leg-not-executable';
+        leg.status = 'failed';
+        leg.error = reason;
+        return finish('failed', reason);
+      }
+      leg.kind = classification.kind;
+      if (classification.kind === 'entry' && next.legs.every((candidate) => candidate.status !== 'completed')) {
+        const view = await registryStateFor(account.id, registryId, vesselId, input.signal);
+        const location = record(view.payload.location);
+        const requests = Array.isArray(view.payload.pendingRequests) ? view.payload.pendingRequests : [];
+        if (location.status === 'berthed' || location.status === 'departed-awaiting-exit' || requests.length > 0) {
+          leg.status = 'failed';
+          return finish('failed', 'A boundary-start journey requires no recorded active berth or pending Registry request');
+        }
+      }
+      leg.status = 'sending';
+      next.updatedAt = new Date().toISOString();
+      await persistJourney(input.action.id, input.accountId, next);
+      try {
+        if (classification.kind === 'local-movement') {
+          const eventId = await submitLocalMovement(leg, account, vesselId, input.signal);
+          leg.eventId = eventId;
+          if (!await recoverLocalMovement(leg, account, vesselId, input.signal)) {
+            leg.status = 'unverified';
+            return finish('unverified', 'Local movement was acknowledged but the destination visit is not observed');
+          }
+          leg.status = 'completed';
+        } else {
+          const requestId = await submitRegistryLeg(classification.kind, leg, account, registryId, vesselId, input.signal);
+          leg.requestId = requestId;
+          leg.status = 'pending';
+        }
+        leg.observedAt = new Date().toISOString();
+        next.updatedAt = new Date().toISOString();
+        await persistJourney(input.action.id, input.accountId, next);
+      } catch (error) {
+        if (error instanceof JourneyRejected) {
+          leg.status = 'failed';
+          leg.error = error.message;
+          return finish('failed', error.message);
+        }
+        leg.status = 'unverified';
+        leg.error = error instanceof Error ? error.message : String(error);
+        return finish('unverified', leg.error);
+      }
+      if (leg.status === 'pending') return finish('pending');
+    }
+    return finish('completed');
+  };
+
+  const traverse: ActionHandler = {
+    async prepare(input) {
+      const routePlanId = inputString(input.intent.inputs, 'routePlanId');
+      const vesselId = inputString(input.intent.inputs, 'vesselId');
+      if (!routePlanId || !vesselId) return { accepted: false, reason: 'A saved route plan and vessel are required' };
+      const plan = await state.read((current) => current.routePlans[routePlanId]);
+      if (!isRecord(plan) || plan.accountId !== input.accountId) return { accepted: false, reason: 'Saved route plan not found for this account' };
+      const legs = Array.isArray(plan.legs) ? plan.legs.filter(isRecord) : [];
+      if (legs.length === 0) return { accepted: false, reason: 'Saved route plan has no executable legs' };
+      return { accepted: true };
+    },
+    async submit(input) {
+      const routePlanId = requiredString(input.intent.inputs, 'routePlanId');
+      const vesselId = requiredString(input.intent.inputs, 'vesselId');
+      const plan = await state.read((current) => current.routePlans[routePlanId]);
+      if (!isRecord(plan) || plan.accountId !== input.accountId) throw new Error('Saved route plan not found for this account');
+      const planLegs = Array.isArray(plan.legs) ? plan.legs.filter(isRecord) : [];
+      const legs: JourneyStep[] = planLegs.map((leg) => ({
+        routeId: String(leg.routeId),
+        from: String(leg.from),
+        to: String(leg.to),
+        territoryId: String(leg.territoryId),
+        status: 'queued'
+      }));
+      const journey: JourneyProgress = { routePlanId, vesselId, status: 'queued', legs, updatedAt: new Date().toISOString() };
+      return { result: `journey ${routePlanId}`, journey };
+    },
+    reconcile: reconcileJourney
+  };
+
   return {
     entry: entryOrDeparture('entry'),
     departure: entryOrDeparture('departure'),
     adoption,
+    traverse,
     mine: production('mine'),
     manufacture: production('manufacture'),
     transfer: production('transfer'),

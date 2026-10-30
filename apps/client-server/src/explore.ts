@@ -614,6 +614,20 @@ function createScopedExploreService(
     return { key, source: resourceId, storedKey: `${key}${SEP}${resourceId}` };
   };
 
+  const mediaUrls = (value: unknown): string[] => {
+    if (!isRecord(value) || !Array.isArray(value.media)) return [];
+    return value.media.flatMap((entry) => isRecord(entry) && typeof entry.url === 'string' ? [entry.url] : []);
+  };
+
+  const mediaObservations = async (value: unknown, accountId: string | undefined): Promise<Record<string, SourcedObservation<unknown>>> => {
+    const observationsByKey: Record<string, SourcedObservation<unknown>> = {};
+    for (const url of mediaUrls(value)) {
+      const { key, source, storedKey } = resourceKey(url, accountId);
+      observationsByKey[storedKey] = await observations.readOne(key, source);
+    }
+    return observationsByKey;
+  };
+
   const resourcePage = async (resourceId: string, accountId: string | undefined, authorityId: string | undefined, observation: SourcedObservation<unknown>, storedKey: string): Promise<PageResponse<ResourceReaderData>> => {
     const value = retainedValue(observation);
     return {
@@ -623,7 +637,7 @@ function createScopedExploreService(
         ...(authorityId === undefined ? {} : { authorityId }),
         ...(value === undefined ? {} : { value })
       },
-      observations: { [storedKey]: observation },
+      observations: { [storedKey]: observation, ...await mediaObservations(value, accountId) },
       actions: []
     };
   };
@@ -732,6 +746,18 @@ function createScopedExploreService(
           return readPublicFirst(resourceId, signal, input.authorityId);
         }
       });
+      const value = retainedValue(observation);
+      if (isRecord(value)) {
+        for (const url of mediaUrls(value)) {
+          const mediaKey = resourceKey(url, input.accountId);
+          await observations.refresh<unknown>({
+            key: mediaKey.key,
+            source: mediaKey.source,
+            timeoutMs,
+            load: (signal) => readPublicFirst(url, signal, input.authorityId)
+          });
+        }
+      }
       return resourcePage(resourceId, input.accountId, input.authorityId, observation, storedKey);
     }
   };

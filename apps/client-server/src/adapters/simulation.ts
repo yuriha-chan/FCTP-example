@@ -113,7 +113,8 @@ export function simulationOperations(snapshot: SimulationSnapshot): ProductionOp
       defaults.count = typeof body.count === 'number' ? body.count : 1;
       defaults.duration = typeof body.duration === 'number' ? body.duration : 1;
     } else if (kind === 'manufacture') {
-      inputs.push({ name: 'recipe', label: 'Recipe', type: 'choice', required: true, ...(typeof body.recipe === 'string' ? { default: body.recipe } : {}), choices: recipes });
+      const choices = typeof body.recipe === 'string' ? [{ value: body.recipe, label: body.recipe }] : recipes;
+      inputs.push({ name: 'recipe', label: 'Recipe', type: 'choice', required: true, ...(typeof body.recipe === 'string' ? { default: body.recipe } : {}), choices });
       inputs.push({ name: 'count', label: 'Quantity', type: 'count', required: true, default: 1, minimum: 1 });
       if (typeof body.recipe === 'string') defaults.recipe = body.recipe;
       defaults.count = typeof body.count === 'number' ? body.count : 1;

@@ -1,4 +1,4 @@
-import type { ActionRecord, AuthorityRecord, ExplorePlaceDetailData, ExplorePlacesData, LogisticsVesselData, PageResponse, ProductionData, ProductionJob, ProductionOperation, PublicAccountRecord, ResourceReaderData, RoutePlanRecord, ServerRecord } from '@fctp/client-sdk';
+import type { ActionRecord, AdministrationData, AuthoringDraft, AuthoringKind, AuthorityRecord, ExplorePlaceDetailData, ExplorePlacesData, LibraryData, LogisticsVesselData, PageResponse, ProductionData, ProductionJob, ProductionOperation, PublicAccountRecord, ResourceReaderData, RoutePlanRecord, ServerRecord } from '@fctp/client-sdk';
 
 export interface AccountListResponse {
   accounts: PublicAccountRecord[];
@@ -146,6 +146,35 @@ export function refreshResourceReader(resourceId: string, input: { accountId?: s
 }
 
 
+export type LibraryResponse = PageResponse<LibraryData>;
+export interface DraftResponse { draft: AuthoringDraft }
+export interface DraftPublicationResponse { action: ActionRecord; draft: AuthoringDraft }
+
+export function readLibrary(accountId: string): Promise<LibraryResponse> {
+  return request(`/api/library?accountId=${encodeURIComponent(accountId)}`);
+}
+
+export function refreshLibrary(accountId: string): Promise<LibraryResponse> {
+  return request('/api/library/refresh', { method: 'POST', body: JSON.stringify({ accountId }) });
+}
+
+export function createDraft(input: { accountId: string; kind: AuthoringKind; fields: Record<string, unknown> }): Promise<DraftResponse> {
+  return request('/api/drafts', { method: 'POST', body: JSON.stringify(input) });
+}
+
+export function readDraft(draftId: string, accountId: string): Promise<DraftResponse> {
+  return request(`/api/drafts/${encodeURIComponent(draftId)}?accountId=${encodeURIComponent(accountId)}`);
+}
+
+export function saveDraft(draftId: string, input: { accountId: string; fields: Record<string, unknown> }): Promise<DraftResponse> {
+  return request(`/api/drafts/${encodeURIComponent(draftId)}`, { method: 'POST', body: JSON.stringify(input) });
+}
+
+export function publishDraft(draftId: string, accountId: string): Promise<DraftPublicationResponse> {
+  return request(`/api/drafts/${encodeURIComponent(draftId)}/publish`, { method: 'POST', body: JSON.stringify({ accountId }) });
+}
+
+
 export type LogisticsVesselResponse = PageResponse<LogisticsVesselData>;
 export type ProductionResponse = PageResponse<ProductionData>;
 export type ProductionOperationResponse = PageResponse<{ operation: ProductionOperation }>;
@@ -160,6 +189,13 @@ export function refreshLogisticsVessel(accountId: string, vesselId: string): Pro
   return request(`/api/logistics/vessels/${encodeURIComponent(vesselId)}/refresh`, {
     method: 'POST',
     body: JSON.stringify({ accountId })
+  });
+}
+
+export function submitLogisticsTraverse(input: { accountId: string; vesselId: string; routePlanId: string }): Promise<ActionResponse> {
+  return request(`/api/logistics/vessels/${encodeURIComponent(input.vesselId)}/traverse`, {
+    method: 'POST',
+    body: JSON.stringify({ accountId: input.accountId, routePlanId: input.routePlanId })
   });
 }
 
@@ -211,5 +247,27 @@ export function refreshProductionJob(jobId: string, accountId: string, vesselId:
   return request(`/api/production/jobs/${encodeURIComponent(jobId)}/refresh`, {
     method: 'POST',
     body: JSON.stringify({ accountId, vesselId })
+  });
+}
+
+
+export type AdministrationResponse = PageResponse<AdministrationData>;
+
+export function readAdministration(accountId: string): Promise<AdministrationResponse> {
+  return request(`/api/administration?accountId=${encodeURIComponent(accountId)}`);
+}
+
+export function refreshAdministration(accountId: string, authorityId: string): Promise<AdministrationResponse> {
+  return request('/api/administration/refresh', { method: 'POST', body: JSON.stringify({ accountId, authorityId }) });
+}
+
+export function applyAdministrationControl(accountId: string, authorityId: string, control: string, inputs: Record<string, unknown>): Promise<ActionResponse> {
+  return request('/api/administration/controls', { method: 'POST', body: JSON.stringify({ accountId, authorityId, control, inputs }) });
+}
+
+export function decideAdministrationEntry(accountId: string, authorityId: string, requestId: string, decision: 'approve' | 'reject', reason?: string): Promise<ActionResponse> {
+  return request(`/api/administration/entry-requests/${encodeURIComponent(requestId)}/${decision}`, {
+    method: 'POST',
+    body: JSON.stringify({ accountId, authorityId, ...(reason === undefined ? {} : { reason }) })
   });
 }

@@ -1,25 +1,21 @@
 import { chmod, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import process from 'node:process';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parseCommand, runtimeConfigRoot, socketPathFor, startupDiagnosticPathFor, validateBatch, validateRuntimeConfig } from './browser.mjs';
 import { createJsonLineServer, createSerializedDispatcher } from './browser-transport.mjs';
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const role = process.argv[2];
 const configRoot = runtimeConfigRoot();
 const runtimeRoot = resolve(configRoot, 'runtime');
 const configPath = resolve(configRoot, 'runtime-config.json');
 const auditPathFor = (runId) => resolve(runtimeRoot, runId, role, 'browser-audit.jsonl');
 let browser;
-let clientServer;
 let server;
 let closing;
 let config;
 let socketPath;
 let auditPath;
 let createBrowserSession;
-let startClientServer;
 
 function redact(message) {
   return String(message).slice(0, 500);
@@ -58,7 +54,6 @@ async function shutdown() {
   closing = (async () => {
     const outcomes = await Promise.allSettled([
       browser?.close(),
-      clientServer?.close(),
       new Promise((resolveClose, rejectClose) => {
         if (!server?.listening) resolveClose();
         else server.close((error) => error ? rejectClose(error) : resolveClose());
@@ -76,13 +71,11 @@ async function start() {
   config = JSON.parse(await readFile(configPath, 'utf8'));
   const origins = validateRuntimeConfig(config);
   ({ createBrowserSession } = await import('../dist/apps/browser-harness/index.js'));
-  ({ startClientServer } = await import('../dist/apps/demo/client-server.js'));
   socketPath = socketPathFor(config, role, configRoot);
   auditPath = auditPathFor(config.runId);
   await mkdir(dirname(socketPath), { recursive: true, mode: 0o700 });
   await chmod(dirname(socketPath), 0o700);
-  clientServer = await startClientServer({ port: 0, host: '127.0.0.1', root: ROOT });
-  browser = await createBrowserSession({ url: clientServer.origin, allowedOrigins: [clientServer.origin, ...Object.values(origins)] });
+  browser = await createBrowserSession({ url: origins.client, allowedOrigins: [origins.client] });
   const initialView = await browser.view();
   const serializedDispatch = createSerializedDispatcher(async (request) => {
     try {

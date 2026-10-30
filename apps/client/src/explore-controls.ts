@@ -1,8 +1,11 @@
 import type { ExploreConnectionRecord, ExplorePlaceDetailData, ExplorePlaceRecord, ExplorePlacesData, RoutePlanRecord } from '@fctp/client-sdk';
-import { createRoutePlan, readExplorePlace, refreshExplorePlaces, refreshResourceReader, type ResourceReaderResponse } from './application-api.js';
+import { createRoutePlan, readExplorePlace, refreshExplorePlaces, type ResourceReaderResponse } from './application-api.js';
+import type { ResourceReaderController } from './resource-reader.js';
+import { clearExploreRouteSelection, setExploreRouteSelection } from './route-selection.js';
 
 export interface ExploreControlsOptions {
   selectedAccountId: () => string | undefined;
+  reader?: ResourceReaderController;
 }
 
 interface ExploreQuery {
@@ -58,8 +61,7 @@ export function setupExploreControls(options: ExploreControlsOptions): ExploreCo
   const detailPanel = element<HTMLElement>('explore-detail');
   const planPanel = element<HTMLElement>('explore-plan');
   const logisticsPanel = element<HTMLElement>('logistics-selection');
-  const resourceResult = element<HTMLElement>('resource-reader-result');
-  if (!exploreSection || !vesselField || !refreshButton || !status || !placesPanel || !detailPanel || !planPanel || !logisticsPanel || !resourceResult) return;
+  if (!exploreSection || !vesselField || !refreshButton || !status || !placesPanel || !detailPanel || !planPanel || !logisticsPanel) return;
 
   let current: ExplorePlacesData | undefined;
   let query: ExploreQuery = {};
@@ -224,56 +226,9 @@ export function setupExploreControls(options: ExploreControlsOptions): ExploreCo
     setStatus(`Retained detail for ${displayName(response.data.place)}.`);
   };
 
-  const renderResource = (resourceId: string, response: ResourceReaderResponse): void => {
-    resourceResult.replaceChildren();
-    const heading = document.createElement('h3');
-    heading.textContent = 'Resource';
-    resourceResult.append(heading);
-    const observation = Object.values(response.observations).find((candidate) => candidate.source === resourceId);
-    const source = observation?.source ?? resourceId;
-    const observedAt = observation !== undefined && 'observedAt' in observation ? observation.observedAt : 'not retrieved';
-    const state = observation?.state ?? 'not-retrieved';
-    const value = response.data.value;
-    const renderedValue = value === undefined ? '' : typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-    const summary = document.createElement('p');
-    summary.textContent = `${state}${observedAt === 'not retrieved' ? '' : ` · ${observedAt}`}${observation !== undefined && 'error' in observation && observation.error ? ` · ${observation.error}` : ''}`;
-    resourceResult.append(summary);
-    if (typeof value === 'string') {
-      const body = document.createElement('pre');
-      body.textContent = renderedValue;
-      resourceResult.append(body);
-    } else if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-      const resource = value as Record<string, unknown>;
-      heading.textContent = typeof resource.name === 'string' ? resource.name : typeof resource.type === 'string' ? resource.type : 'Resource';
-      const references: Array<{ label: string; id: string }> = [];
-      for (const key of ['creator', 'holder', 'asset', 'assets', 'varieties', 'media', 'resources']) {
-        const reference = resource[key];
-        const values = Array.isArray(reference) ? reference : reference !== null && typeof reference === 'object' ? Object.values(reference) : [reference];
-        for (const entry of values) {
-          const id = typeof entry === 'string' ? entry : entry !== null && typeof entry === 'object' ? (entry as Record<string, unknown>).url ?? (entry as Record<string, unknown>).id : undefined;
-          if (typeof id === 'string' && /^https?:\/\//.test(id)) references.push({ label: key, id });
-        }
-      }
-      for (const reference of references) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.textContent = `Read linked ${reference.label}`;
-        button.addEventListener('click', () => { void withBusy(() => openResource(reference.id, response.data.authorityId)); });
-        resourceResult.append(button);
-      }
-    }
-    resourceResult.append(detailsBlock('Resource technical details', `Source ${source}\nAuthority ${response.data.authorityId ?? ''}\nObserved ${observedAt}\nState ${state}\n${renderedValue}`));
-  };
-
   const openResource = async (resourceId: string, authorityId?: string): Promise<void> => {
-    const startedAccount = options.selectedAccountId();
-    const startedOperation = operation;
-    const response = await refreshResourceReader(resourceId, {
-      ...(startedAccount === undefined ? {} : { accountId: startedAccount }),
-      ...(authorityId === undefined ? {} : { authorityId })
-    });
-    if (options.selectedAccountId() !== startedAccount || operation !== startedOperation) return;
-    renderResource(resourceId, response);
+    if (!options.reader) return;
+    await options.reader.open(resourceId, authorityId);
     setStatus('Resource reader opened.');
   };
 
@@ -303,6 +258,7 @@ export function setupExploreControls(options: ExploreControlsOptions): ExploreCo
         ...(current?.places.find((place) => place.id === plan.to) === undefined ? {} : { to: current.places.find((place) => place.id === plan.to)! }),
         ...(routeName === undefined ? {} : { routeName })
       };
+      setExploreRouteSelection({ accountId: plan.accountId, plan });
       renderLogistics();
       setStatus('Selection carried to Logistics & Production.');
     });
@@ -385,11 +341,11 @@ export function setupExploreControls(options: ExploreControlsOptions): ExploreCo
       selectedOrigin = undefined;
       selectedDestination = undefined;
       lastSelection = undefined;
+      clearExploreRouteSelection();
       vesselField.value = '';
       placesPanel.replaceChildren();
       detailPanel.replaceChildren();
       planPanel.replaceChildren();
-      resourceResult.replaceChildren();
       renderLogistics();
       setStatus('');
     }

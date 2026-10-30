@@ -101,6 +101,95 @@ test('provides deterministic player and governor login without exposing bindings
   }
 });
 
+test('provisions a second Player account and vessel that both Territories enroll', async () => {
+  const host = new URL(demo.origins.authority).host;
+  const login = async (handle: string, password: string) => {
+    const response = await fetch(new URL('/api/accounts/login', demo.origins.client), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ handle, password, homeOrigin: demo.origins.authority })
+    });
+    assert.equal(response.status, 200);
+    return await response.json() as { account: { id: string; handle: string; login: { status: string } }; status: string };
+  };
+  const player = await login(`@player@${host}`, 'demo-player-password');
+  const player2 = await login(`@player-2@${host}`, 'demo-player-2-password');
+  assert.equal(player2.status, 'signed-in');
+  assert.equal(player2.account.handle, `@player-2@${host}`);
+  assert.notEqual(player2.account.id, player.account.id);
+  assert.deepEqual(Object.keys(demo.authority.ids.vessels).sort(), ['player', 'player-2']);
+  assert.notEqual(demo.authority.ids.vessels.player, demo.authority.ids.vessels['player-2']);
+
+  const vessel2 = demo.authority.ids.vessels['player-2']!;
+  for (const origin of [demo.origins.policy, demo.origins.simulation]) {
+    const discovery = await fetch(new URL('/api/servers', demo.origins.client), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ origin })
+    });
+    assert.equal(discovery.status, 200);
+  }
+  const refresh = await fetch(new URL('/api/production/refresh', demo.origins.client), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ accountId: player2.account.id, vesselId: vessel2 })
+  });
+  assert.equal(refresh.status, 200);
+  const productionResponse = await fetch(new URL(`/api/production?accountId=${encodeURIComponent(player2.account.id)}&vesselId=${encodeURIComponent(vessel2)}`, demo.origins.client));
+  assert.equal(productionResponse.status, 200);
+  const production = await productionResponse.json() as { data?: { operations?: Array<{ authorityId?: string }> } };
+  const authorities = new Set((production.data?.operations ?? []).map((operation) => operation.authorityId));
+  assert.ok(authorities.has(demo.policy.ids.actor));
+  assert.ok(authorities.has(demo.simulation.ids.actor));
+});
+
+test('publishes the outbound fixture route and both public Policy ports', async () => {
+  const outbound = `${demo.origins.policy}/objects/routes/outbound`;
+  assert.ok(demo.policy.ids.routes.map(String).includes(outbound));
+  const routeResponse = await fetch(outbound);
+  assert.equal(routeResponse.status, 200);
+  const route = await routeResponse.json() as { from: string; to: string };
+  assert.equal(route.from, `${demo.origins.policy}/objects/ports/west`);
+  assert.equal(route.to, `${demo.origins.simulation}/objects/boundaries/east`);
+
+  const ledger = await demo.policy.territory.ledger;
+  assert.deepEqual([...ledger.admission.publicPorts].sort(), [...demo.policy.ids.ports].sort());
+});
+
+test('demo restart preserves admission changes and disabled accounts without reprovisioning credentials', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-demo-restart-'));
+  const ports = await Promise.all(Array.from({ length: 4 }, () => freePort()));
+  const options = { dataDir: directory, ports: { authority: ports[0]!, policy: ports[1]!, simulation: ports[2]!, client: ports[3]! } };
+  let fixture = await startDemo(options);
+  const post = async (path: string, body: unknown) => fetch(new URL(path, fixture.origins.client), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  try {
+    const host = new URL(fixture.origins.authority).host;
+    const login = await post('/api/accounts/login', { handle: `@governor@${host}`, password: 'demo-governor-password', homeOrigin: fixture.origins.authority });
+    assert.equal(login.status, 200);
+    const { account } = await login.json() as { account: { id: string } };
+    assert.equal((await post('/api/servers', { origin: fixture.origins.authority })).status, 200);
+    const admission = await post('/api/administration/controls', {
+      accountId: account.id, authorityId: fixture.policy.ids.actor, control: 'admission', inputs: { publicPorts: [fixture.policy.ids.ports[0]] }
+    });
+    assert.equal(admission.status, 200);
+    const availability = await post('/api/administration/controls', {
+      accountId: account.id, authorityId: fixture.authority.ids.actor.home, control: 'availability', inputs: { handle: `@player@${host}`, available: false }
+    });
+    assert.equal(availability.status, 200);
+    const disabledBefore = await post('/api/accounts/login', { handle: `@player@${host}`, password: 'demo-player-password', homeOrigin: fixture.origins.authority });
+    assert.equal((await disabledBefore.json() as { status: string }).status, 'unavailable');
+    await fixture.close();
+    fixture = await startDemo(options);
+    assert.deepEqual((await fixture.policy.territory.ledger).admission.publicPorts, [fixture.policy.ids.ports[0]]);
+    const disabledAfter = await post('/api/accounts/login', { handle: `@player@${host}`, password: 'demo-player-password', homeOrigin: fixture.origins.authority });
+    assert.equal(disabledAfter.status, 401);
+    assert.equal((await disabledAfter.json() as { status: string }).status, 'unavailable');
+  } finally {
+    await fixture.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('closes all listeners cleanly', async () => {
   const clientResponse = await fetch(new URL('/', demo.origins.client));
   assert.equal(clientResponse.status, 200);
