@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, unlink } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import net from 'node:net';
 import process from 'node:process';
@@ -11,8 +11,9 @@ const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const RUN_ROOT = resolve(REPOSITORY_ROOT, 'run');
 const ACCOUNT_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const DOM_COMMANDS = Object.freeze(['open', 'view', 'fill', 'select', 'click', 'submit', 'batch', 'back', 'reload', 'close']);
-const API_COMMANDS = Object.freeze(['login', 'page', 'action', 'result']);
+const API_COMMANDS = Object.freeze(['login', 'logout', 'page', 'action', 'result']);
 const WORKER_PATH = resolve(dirname(fileURLToPath(import.meta.url)), 'browser-worker.mjs');
+const CLIENT_SESSION_FILE = 'client-session.json';
 
 export function runtimeConfigRoot(env = process.env) {
   return env.FCTP_BROWSER_CONFIG_ROOT ? resolve(REPOSITORY_ROOT, env.FCTP_BROWSER_CONFIG_ROOT) : RUN_ROOT;
@@ -34,8 +35,8 @@ export function parseCommand(args) {
   const [role, command, ...operands] = args;
   if (typeof role !== 'string' || !ACCOUNT_PATTERN.test(role)) throw new TypeError('Unknown browser account');
   if (API_COMMANDS.includes(command)) {
-    if (command === 'login') {
-      if (operands.length !== 0) throw new TypeError('Invalid operands for login');
+    if (command === 'login' || command === 'logout') {
+      if (operands.length !== 0) throw new TypeError(`Invalid operands for ${command}`);
       return { role, command };
     }
     if (command === 'page') {
@@ -106,6 +107,57 @@ export function startupDiagnosticPathFor(config, role, runRoot = RUN_ROOT) {
   return resolve(runRoot, 'runtime', config.runId, role, 'browser-startup-failure.txt');
 }
 
+export function clientSessionPathFor(config, role, runRoot = RUN_ROOT) {
+  validateRuntimeConfig(config);
+  if (!config.accounts.some((entry) => entry.name === role)) throw new TypeError('Unknown browser account');
+  return resolve(runRoot, 'runtime', config.runId, role, CLIENT_SESSION_FILE);
+}
+
+function storedClientSession(value, config, account) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  if (value.origin !== config.clientOrigin || value.handle !== account.handle) return undefined;
+  if (typeof value.accountId !== 'string' || !value.accountId) return undefined;
+  if (typeof value.clientToken !== 'string' || !value.clientToken) return undefined;
+  return { accountId: value.accountId, handle: value.handle, clientToken: value.clientToken };
+}
+
+async function readClientSession(path, config, account) {
+  let stats;
+  try {
+    stats = await lstat(path);
+  } catch (error) {
+    if (error.code === 'ENOENT') return undefined;
+    throw error;
+  }
+  if (!stats.isFile() || stats.isSymbolicLink()) throw new TypeError('Client session path must be a regular file');
+  const parsed = JSON.parse(await readFile(path, 'utf8'));
+  return storedClientSession(parsed, config, account);
+}
+
+async function writeClientSession(path, session, origin) {
+  const directory = dirname(path);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
+  try {
+    const stats = await lstat(path);
+    if (!stats.isFile() || stats.isSymbolicLink()) throw new TypeError('Client session path must be a regular file');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(temporary, `${JSON.stringify({ origin, ...session })}\n`, { mode: 0o600, flag: 'wx' });
+  await chmod(temporary, 0o600);
+  await rename(temporary, path);
+}
+
+async function removeClientSession(path) {
+  try {
+    await unlink(path);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+
 async function readConfig(configRoot = runtimeConfigRoot()) {
   const config = JSON.parse(await readFile(resolve(configRoot, 'runtime-config.json'), 'utf8'));
   validateRuntimeConfig(config);
@@ -172,12 +224,30 @@ async function readPassword() {
   return password;
 }
 
-async function apiCommand(parsed, account, config) {
-  const transport = createApplicationTransport({ origin: config.clientOrigin, account });
+async function apiCommand(parsed, account, config, configRoot) {
+  const sessionPath = clientSessionPathFor(config, parsed.role, configRoot);
+  const clientSession = await readClientSession(sessionPath, config, account);
+  const transport = createApplicationTransport({
+    origin: config.clientOrigin,
+    account,
+    ...(clientSession === undefined ? {} : { clientSession }),
+    onSessionChanged: async (session) => {
+      if (session) await writeClientSession(sessionPath, session, config.clientOrigin);
+      else await removeClientSession(sessionPath);
+    }
+  });
   if (parsed.command === 'login') return transport.login(await readPassword());
+  if (parsed.command === 'logout') return transport.logout();
   if (parsed.command === 'page') return transport.page(parsed.path);
   if (parsed.command === 'action') return transport.action(parsed.descriptor, parsed.inputs);
   return transport.result(parsed.actionId);
+}
+
+function visibleLoginResult(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+  const visible = { ...result };
+  delete visible.clientToken;
+  return visible;
 }
 
 export async function main(args = process.argv.slice(2)) {
@@ -188,8 +258,8 @@ export async function main(args = process.argv.slice(2)) {
     const account = config.accounts.find((entry) => entry.name === parsed.role);
     if (!account) throw new TypeError('Unknown browser account');
     if (API_COMMANDS.includes(parsed.command)) {
-      const result = await apiCommand(parsed, account, config);
-      process.stdout.write(`${JSON.stringify(result)}\n`);
+      const result = await apiCommand(parsed, account, config, configRoot);
+      process.stdout.write(`${JSON.stringify(parsed.command === 'login' ? visibleLoginResult(result) : result)}\n`);
       return;
     }
     const runRoot = configRoot;

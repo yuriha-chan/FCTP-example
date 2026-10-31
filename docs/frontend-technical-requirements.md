@@ -110,7 +110,7 @@ The client authenticates using a handle and password. The home server verifies t
 2. The frontend or harness submits the handle and password to the client web server.
 3. The client web server identifies the home server from the handle and submits the login request to that server.
 4. The home server verifies the password against its stored password hash and checks account availability.
-5. On success, the client web server retains the issued native token in that account's login state and returns the account/login result.
+5. On success, the client web server retains the issued native token in that account's login state and returns the public account/login result with a client session token.
 6. On failure, the client returns the authentication error for display and correction.
 
 The home server issues the native token. Retain login state per account rather than keeping one application-wide token.
@@ -122,6 +122,12 @@ The home server issues the native token. Retain login state per account rather t
 | `nativeToken` | Native token obtained through login. |
 | `status` | Signed in, signed out, or authentication rejected. |
 | `expiresAt` | Token expiration when supplied by the server. |
+
+The native token (`T`) stays in the client web server's account state and is never returned to the browser or harness. Successful `POST /api/accounts/login` returns the public account/login state plus a client session token (`S`). Account-scoped requests carry `Authorization: Bearer S` for the handle bound to that session. `GET /api/accounts` returns only the authenticated session's own account. Multiple `S` sessions may coexist for one account and across accounts; they are independent per login.
+
+The browser stores per-account `{accountId, handle, clientToken}` sessions in `localStorage`, so a reload retains signed-in accounts. The CLI harness saves the same binding, with its origin, in a private `client-session.json` under the account runtime directory.
+
+Logout deletes only the current `S`. When no session remains for that handle, the client login state becomes signed out. Logout does not revoke `T` at Home. Client sessions have no implicit expiry, and Home availability changes do not synchronize to existing sessions; neither behavior is promised.
 
 Keep a separate active-account selection for the identity the user intends to act as. Switching the active account retains other accounts and their login states.
 
@@ -171,10 +177,10 @@ Client web server
 
 - Add or discover a server without requiring login.
 - Browse public places and resources before authenticating.
-- Log in using an account handle and password and retain its home-server-issued native token.
+- Log in using an account handle and password; the client web server retains the home-server-issued native token and returns a client session token for account-scoped application requests.
 - Show the acting account and the authority receiving an action.
 - Switch accounts without discarding known servers or other login sessions.
-- Log out of an account while retaining discovered servers and public resource identities.
+- Log out of an account, removing only its current client session, while retaining discovered servers and public resource identities.
 - Make server addresses and authority identities inspectable from connection details.
 
 ## Client application API
@@ -254,13 +260,13 @@ Submission and completion are separate states. The same action record follows an
 
 | Endpoint | Responsibility |
 | --- | --- |
-| `GET /api/accounts` | Return retained account identities and login status. |
-| `POST /api/accounts/login` | Accept `handle` and `password`, authenticate with Home, retain the native token, and return account/login state. |
-| `POST /api/accounts/:accountId/logout` | End the account's client login state while retaining its identity. |
+| `GET /api/accounts` | With `Authorization: Bearer S`, return only the authenticated session's own account identity and login status. |
+| `POST /api/accounts/login` | Accept `handle` and `password`, authenticate with Home, retain the native token `T`, and return the public account/login state plus a client session token `S`. |
+| `POST /api/accounts/:accountId/logout` | With `Authorization: Bearer S` for that account, delete only this client session; clear the client login state when no session remains. Does not revoke `T` at Home or remove the account identity. |
 | `GET /api/servers` | Return known servers and authority relationships. |
 | `POST /api/servers` | Accept a server address and discover and retain its public identities. |
 
-Native tokens remain in the client web server's account state; account and page responses expose the identity and login status needed by the frontend and harness.
+Native tokens remain in the client web server's account state; account and page responses expose only the identity and login status needed by the frontend and harness. Account-scoped requests carry `Bearer S`, which is independent per login so concurrent sessions do not share credentials. The browser keeps sessions in `localStorage`; the harness persists its origin/handle-bound session in a private `client-session.json`. Client sessions do not implicitly expire, and Home availability changes do not synchronize to them.
 
 ## Implementation delta by layer
 

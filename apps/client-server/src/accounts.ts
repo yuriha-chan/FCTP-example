@@ -1,5 +1,6 @@
 import { createFctpClient, toPublicAccount, type AccountRecord, type LoginState, type PublicAccountRecord } from '@fctp/client-sdk';
 import { boundedFetcher } from './errors.js';
+import { createClientToken, digestClientToken } from './sessions.js';
 import type { ClientApplicationState } from './store.js';
 
 export interface LoginInput {
@@ -9,13 +10,14 @@ export interface LoginInput {
 }
 
 export type LoginOutcome =
-  | { status: 'signed-in'; account: PublicAccountRecord }
+  | { status: 'signed-in'; account: PublicAccountRecord; clientToken: string }
   | { status: 'rejected' | 'unavailable'; reason?: string };
 
 export interface AccountService {
   list(): Promise<PublicAccountRecord[]>;
+  get(accountId: string): Promise<PublicAccountRecord | undefined>;
   login(input: LoginInput): Promise<LoginOutcome>;
-  logout(accountId: string): Promise<PublicAccountRecord | undefined>;
+  logout(accountId: string, clientTokenDigest: string): Promise<PublicAccountRecord | undefined>;
 }
 
 export function createAccountService(state: ClientApplicationState, fetcher: typeof fetch): AccountService {
@@ -24,6 +26,10 @@ export function createAccountService(state: ClientApplicationState, fetcher: typ
     async list() {
       const accounts = await state.read((current) => Object.values(current.accounts));
       return accounts.map(toPublicAccount);
+    },
+    async get(accountId) {
+      const account = await state.read((current) => current.accounts[accountId]);
+      return account ? toPublicAccount(account) : undefined;
     },
     async login(input) {
       if (typeof input.handle !== 'string' || !input.handle.trim() || typeof input.password !== 'string' || !input.password) {
@@ -49,16 +55,21 @@ export function createAccountService(state: ClientApplicationState, fetcher: typ
         homeAuthority: resolution.homeAuthority,
         login
       };
+      const clientToken = createClientToken();
+      const digest = digestClientToken(clientToken);
       await state.transaction((current) => {
         current.accounts[id] = account;
+        current.clientSessions[digest] = { accountId: id, issuedAt: new Date().toISOString() };
       });
-      return { status: 'signed-in', account: toPublicAccount(account) };
+      return { status: 'signed-in', account: toPublicAccount(account), clientToken };
     },
-    async logout(accountId) {
+    async logout(accountId, clientTokenDigest) {
       return state.transaction((current) => {
+        delete current.clientSessions[clientTokenDigest];
         const account = current.accounts[accountId];
         if (!account) return undefined;
-        account.login = { status: 'signed-out' };
+        const remaining = Object.values(current.clientSessions).some((session) => session.accountId === accountId);
+        if (!remaining) account.login = { status: 'signed-out' };
         return toPublicAccount(account);
       });
     }

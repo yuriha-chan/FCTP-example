@@ -250,6 +250,202 @@ test('application transport refuses redirects and suppresses echoed login passwo
   });
 });
 
+function fakeApplication({ accountId = 'account:player', handle = '@player@127.0.0.1:4100', token = 'fixture-client-token', loginAccount = undefined, logoutStatus = 200 } = {}) {
+  const base = { id: accountId, handle, homeServer: '127.0.0.1:4100', login: { status: 'signed-in' } };
+  const account = loginAccount ?? base;
+  const requests = [];
+  const fetcher = async (url, init = {}) => {
+    const target = new URL(String(url));
+    const headers = new globalThis.Headers(init.headers);
+    const authorization = headers.get('authorization');
+    requests.push({
+      path: target.pathname,
+      search: target.search,
+      method: init.method ?? 'GET',
+      authorization,
+      body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined
+    });
+    if (target.pathname === '/api/accounts/login') {
+      return globalThis.Response.json({ status: 'signed-in', account, clientToken: token });
+    }
+    if (target.pathname === '/api/accounts') {
+      if (authorization !== `Bearer ${token}`) return globalThis.Response.json({ error: 'session-required' }, { status: 401 });
+      return globalThis.Response.json({ accounts: [account] });
+    }
+    if (/^\/api\/accounts\/[^/]+\/logout$/.test(target.pathname)) {
+      if (authorization !== `Bearer ${token}`) return globalThis.Response.json({ error: 'session-required' }, { status: 401 });
+      if (logoutStatus !== 200) return globalThis.Response.json({ error: `rejected ${token}` }, { status: logoutStatus });
+      return globalThis.Response.json({ account: { ...account, login: { status: 'signed-out' } } });
+    }
+    if (target.pathname.startsWith('/api/activity')) {
+      if (authorization === null) return globalThis.Response.json({ error: 'session-required' }, { status: 401 });
+      if (authorization !== `Bearer ${token}`) return globalThis.Response.json({ error: `unauthorized ${token}` }, { status: 401 });
+      return globalThis.Response.json({ context: { accountId }, data: { actions: [] }, observations: {}, actions: [] });
+    }
+    if (target.pathname === '/api/servers') return globalThis.Response.json({ servers: [], authorities: [] });
+    return globalThis.Response.json({ context: authorization ? { accountId } : {}, data: {}, observations: {}, actions: [] });
+  };
+  return { account, requests, fetcher, token };
+}
+
+test('application transport keeps each client session in memory and attaches only its own bearer token', async () => {
+  const application = fakeApplication();
+  const changes = [];
+  const player = createApplicationTransport({
+    origin: 'http://127.0.0.1:4103',
+    account: { name: 'player', handle: '@player@127.0.0.1:4100' },
+    fetch: application.fetcher,
+    onSessionChanged: async (session) => { changes.push(session); }
+  });
+
+  await player.page('/api/servers');
+  assert.equal(application.requests.at(-1).authorization, null);
+
+  const login = await player.login('fixture-password');
+  assert.equal(login.clientToken, application.token);
+  assert.deepEqual(changes.at(-1), { accountId: application.account.id, handle: application.account.handle, clientToken: application.token });
+
+  await player.page('/api/accounts');
+  assert.equal(application.requests.at(-1).authorization, `Bearer ${application.token}`);
+  await player.page('/api/activity');
+  assert.equal(application.requests.at(-1).authorization, `Bearer ${application.token}`);
+  await player.login('fixture-password');
+  assert.equal(application.requests.at(-1).path, '/api/accounts/login');
+  assert.equal(application.requests.at(-1).authorization, null, 'a new login never sends the previous session token');
+  assert.equal(JSON.stringify(login).includes('fixture-password'), false);
+});
+
+test('application transport resumes a caller-owned session without logging in again', async () => {
+  const application = fakeApplication({ token: 'resumed-client-token' });
+  const player = createApplicationTransport({
+    origin: 'http://127.0.0.1:4103',
+    account: { name: 'player', handle: '@player@127.0.0.1:4100' },
+    clientSession: { accountId: 'account:player', handle: '@player@127.0.0.1:4100', clientToken: application.token },
+    fetch: application.fetcher
+  });
+
+  await player.page('/api/accounts');
+  assert.equal(application.requests.some((request) => request.path === '/api/accounts/login'), false);
+  assert.equal(application.requests.at(-1).authorization, `Bearer ${application.token}`);
+
+  assert.throws(() => createApplicationTransport({
+    origin: 'http://127.0.0.1:4103',
+    account: { name: 'player', handle: '@player@127.0.0.1:4100' },
+    clientSession: { accountId: 'account:other', handle: '@other@127.0.0.1:4100', clientToken: application.token }
+  }), /handle|session|account/i);
+});
+
+test('application transport validates returned account binding and redacts session tokens from failures', async () => {
+  const mismatched = fakeApplication({ accountId: 'account:other', handle: '@other@127.0.0.1:4100' });
+  const changes = [];
+  const player = createApplicationTransport({
+    origin: 'http://127.0.0.1:4103',
+    account: { name: 'player', handle: '@player@127.0.0.1:4100' },
+    fetch: mismatched.fetcher,
+    onSessionChanged: (session) => { changes.push(session); }
+  });
+  await assert.rejects(() => player.login('fixture-password'), /account|binding|handle/i);
+  assert.deepEqual(changes, []);
+
+  const application = fakeApplication({ token: 'leaked-client-token' });
+  const stale = createApplicationTransport({
+    origin: 'http://127.0.0.1:4103',
+    account: { name: 'player', handle: '@player@127.0.0.1:4100' },
+    clientSession: { accountId: 'account:player', handle: '@player@127.0.0.1:4100', clientToken: 'revoked-client-token' },
+    fetch: application.fetcher
+  });
+  await assert.rejects(() => stale.page('/api/activity'), (error) => {
+    assert.equal(error.message.includes('revoked-client-token'), false);
+    assert.equal(error.message.length <= 500, true);
+    return true;
+  });
+});
+
+test('application transport clears a session only after a successful logout', async () => {
+  const application = fakeApplication({ logoutStatus: 500 });
+  const changes = [];
+  const player = createApplicationTransport({
+    origin: 'http://127.0.0.1:4103',
+    account: { name: 'player', handle: '@player@127.0.0.1:4100' },
+    fetch: application.fetcher,
+    onSessionChanged: (session) => { changes.push(session); }
+  });
+  await player.login('fixture-password');
+  await assert.rejects(() => player.logout(), /logout|failed|HTTP/i);
+  assert.equal(changes.at(-1)?.clientToken, application.token, 'a failed logout keeps the local session');
+  await player.page('/api/accounts');
+  assert.equal(application.requests.at(-1).authorization, `Bearer ${application.token}`);
+
+  const succeeding = fakeApplication();
+  const clearing = [];
+  const playerAgain = createApplicationTransport({
+    origin: 'http://127.0.0.1:4103',
+    account: { name: 'player', handle: '@player@127.0.0.1:4100' },
+    fetch: succeeding.fetcher,
+    onSessionChanged: (session) => { clearing.push(session); }
+  });
+  await playerAgain.login('fixture-password');
+  await playerAgain.logout();
+  assert.equal(clearing.at(-1), null);
+  await assert.rejects(() => playerAgain.page('/api/activity'), /account|session|sign/i);
+});
+
+test('independent transports never share another account session', async () => {
+  const first = fakeApplication({ accountId: 'account:first', handle: '@first@127.0.0.1:4100', token: 'first-token' });
+  const second = fakeApplication({ accountId: 'account:second', handle: '@second@127.0.0.1:4100', token: 'second-token' });
+  const one = createApplicationTransport({ origin: 'http://127.0.0.1:4103', account: { name: 'first', handle: '@first@127.0.0.1:4100' }, fetch: first.fetcher });
+  const two = createApplicationTransport({ origin: 'http://127.0.0.1:4103', account: { name: 'second', handle: '@second@127.0.0.1:4100' }, fetch: second.fetcher });
+  await one.login('first-password');
+  await two.login('second-password');
+  const twoPage = await two.page('/api/accounts');
+  assert.equal(record(twoPage).accounts[0].id, 'account:second');
+  assert.equal(first.requests.some((request) => request.authorization === 'Bearer second-token'), false);
+  assert.equal(second.requests.some((request) => request.authorization === 'Bearer first-token'), false);
+});
+
+test('a stale unauthorized response never clears a newer client session', async () => {
+  const changes = [];
+  let startOld;
+  const started = new Promise((resolve) => { startOld = resolve; });
+  let releaseOld;
+  const gate = new Promise((resolve) => { releaseOld = resolve; });
+  const account = { id: 'account:1', handle: '@player@127.0.0.1:4100', homeServer: '127.0.0.1:4100', login: { status: 'signed-in' } };
+  const fetcher = async (url, init = {}) => {
+    const target = new URL(String(url));
+    const authorization = new globalThis.Headers(init.headers).get('authorization');
+    if (target.pathname === '/api/accounts' && authorization === 'Bearer old-token') {
+      startOld();
+      await gate;
+      return globalThis.Response.json({ error: 'session-revoked' }, { status: 401 });
+    }
+    if (target.pathname === '/api/accounts' && authorization === 'Bearer new-token') {
+      return globalThis.Response.json({ accounts: [account] });
+    }
+    if (target.pathname === '/api/accounts/login') {
+      return globalThis.Response.json({ status: 'signed-in', account, clientToken: 'new-token' });
+    }
+    if (target.pathname === '/api/activity') {
+      return globalThis.Response.json({ context: { accountId: account.id }, data: { actions: [] }, observations: {}, actions: [] });
+    }
+    return globalThis.Response.json({ servers: [], authorities: [] });
+  };
+  const player = createApplicationTransport({
+    origin: 'http://127.0.0.1:4103',
+    account: { name: 'player', handle: account.handle },
+    clientSession: { accountId: account.id, handle: account.handle, clientToken: 'old-token' },
+    fetch: fetcher,
+    onSessionChanged: (session) => { changes.push(session); }
+  });
+  const pending = player.page('/api/activity');
+  await started;
+  await player.login('fixture-password');
+  releaseOld();
+  await assert.rejects(pending, /HTTP 401|revoked/i);
+  assert.equal(changes.at(-1)?.clientToken, 'new-token', 'the newer login survives the older unauthorized response');
+  const page = await player.page('/api/accounts');
+  assert.equal(record(page).accounts[0].id, account.id);
+});
+
 test('Unix socket transport returns an asynchronous response after the client ends its write side', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'browser-transport-'));
   const socketPath = join(directory, 'browser.sock');

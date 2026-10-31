@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,10 +12,85 @@ import { actionIsComplete } from '@fctp/client-sdk';
 import type { AccountRecord, ActionRecord, AuthorityRecord, PageResponse, PublicAccountRecord, ServerRecord, SourcedObservation } from '@fctp/client-sdk';
 import type { ActionHandler } from '../apps/client-server/src/actions.js';
 import { createClientApplication, type ClientApplication, type CreateClientApplicationOptions } from '../apps/client-server/src/app.js';
+import { createClientToken, digestClientToken } from '../apps/client-server/src/sessions.js';
 import { startClientServer } from '../apps/demo/src/client-server.js';
 import { createPolicyApp } from '../apps/territory-policy/src/app.js';
 import { createSimulationApp } from '../apps/territory-sim/src/app.js';
 import { createAuthorityApp } from '../apps/test-authority/src/app.js';
+
+const unauthenticatedFetch: typeof fetch = globalThis.fetch.bind(globalThis);
+const clientOrigins = new Set<string>();
+const clientApplications = new Map<string, ClientApplication>();
+const clientTokens = new Map<string, string>();
+
+function tokenKey(origin: string, accountId: string): string {
+  return `${origin}\0${accountId}`;
+}
+
+function registerClientToken(origin: string, accountId: string, token: string): void {
+  clientTokens.set(tokenKey(origin, accountId), token);
+}
+
+async function ensureClientSession(origin: string, accountId: string): Promise<string | undefined> {
+  const existing = clientTokens.get(tokenKey(origin, accountId));
+  if (existing !== undefined) return existing;
+  const application = clientApplications.get(origin);
+  if (!application) return undefined;
+  const account = await application.state.read((state) => state.accounts[accountId]);
+  if (!account || account.login.status !== 'signed-in') return undefined;
+  const token = createClientToken();
+  clientTokens.set(tokenKey(origin, accountId), token);
+  await application.state.transaction((state) => {
+    state.clientSessions[digestClientToken(token)] = { accountId, issuedAt: new Date().toISOString() };
+  });
+  return token;
+}
+
+function requestedAccountId(input: RequestInfo | URL, init?: RequestInit): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(input instanceof Request ? input.url : String(input));
+  } catch {
+    return undefined;
+  }
+  const query = url.searchParams.getAll('accountId').map((value) => value.trim()).filter((value) => value.length > 0);
+  if (query.length === 1) return query[0];
+  const logout = /^\/api\/accounts\/([^/]+)\/logout$/.exec(url.pathname);
+  if (logout) {
+    try {
+      return decodeURIComponent(logout[1]!);
+    } catch {
+      return undefined;
+    }
+  }
+  if (typeof init?.body === 'string') {
+    try {
+      const body: unknown = JSON.parse(init.body);
+      if (isRecord(body) && typeof body.accountId === 'string' && body.accountId.trim()) return body.accountId.trim();
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+async function fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  let origin: string;
+  try {
+    origin = new URL(input instanceof Request ? input.url : String(input)).origin;
+  } catch {
+    return unauthenticatedFetch(input, init);
+  }
+  if (!clientOrigins.has(origin)) return unauthenticatedFetch(input, init);
+  const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+  if (headers.has('Authorization')) return unauthenticatedFetch(input, init);
+  const accountId = requestedAccountId(input, init);
+  if (accountId !== undefined) {
+    const token = await ensureClientSession(origin, accountId);
+    if (token !== undefined) headers.set('Authorization', `Bearer ${token}`);
+  }
+  return unauthenticatedFetch(input, { ...init, headers });
+}
 
 test('serves the browser client and static assets on an isolated port', async () => {
   const client = await startClientServer({ port: 0 });
@@ -347,11 +423,14 @@ function authorityResponse(authority: FixtureAuthority, url: string, parsed: URL
 async function openFixtureApplication(storeFile: string, fetchImpl?: typeof fetch, extra: Partial<CreateClientApplicationOptions> = {}) {
   const application = await createClientApplication({ storeFile, ...(fetchImpl ? { fetch: fetchImpl } : {}), ...extra });
   const client = await startClientServer({ port: 0, application });
+  clientOrigins.add(client.origin);
+  clientApplications.set(client.origin, application);
+  for (const key of clientTokens.keys()) if (key.startsWith(`${client.origin}\0`)) clientTokens.delete(key);
   return { application, client };
 }
 
-async function readAccounts(origin: string): Promise<{ accounts: PublicAccountRecord[] }> {
-  const response = await fetch(new URL('/api/accounts', origin));
+async function readAccounts(origin: string, token: string): Promise<{ accounts: PublicAccountRecord[] }> {
+  const response = await fetch(new URL('/api/accounts', origin), { headers: authorization(token) });
   assert.equal(response.status, 200);
   return await response.json() as { accounts: PublicAccountRecord[] };
 }
@@ -478,8 +557,8 @@ test('logs in distinct accounts concurrently and retains them across restart whi
     ]);
     assert.equal(firstResponse.status, 200);
     assert.equal(secondResponse.status, 200);
-    const firstBody = await firstResponse.json() as { account: PublicAccountRecord; status: string };
-    const secondBody = await secondResponse.json() as { account: PublicAccountRecord; status: string };
+    const firstBody = await firstResponse.json() as { account: PublicAccountRecord; status: string; clientToken: string };
+    const secondBody = await secondResponse.json() as { account: PublicAccountRecord; status: string; clientToken: string };
     assert.equal(firstBody.status, 'signed-in');
     assert.equal(secondBody.status, 'signed-in');
     assert.equal(firstBody.account.handle, firstLoginAccount.handle);
@@ -487,6 +566,9 @@ test('logs in distinct accounts concurrently and retains them across restart whi
     assert.equal(firstBody.account.login.status, 'signed-in');
     assert.equal(secondBody.account.login.status, 'signed-in');
     assert.notEqual(firstBody.account.id, secondBody.account.id);
+    assert.notEqual(firstBody.clientToken, secondBody.clientToken);
+    registerClientToken(opened.client.origin, firstBody.account.id, firstBody.clientToken);
+    registerClientToken(opened.client.origin, secondBody.account.id, secondBody.clientToken);
     for (const text of [JSON.stringify(firstBody), JSON.stringify(secondBody)]) {
       assert.equal(text.includes(firstLoginAccount.nativeToken), false);
       assert.equal(text.includes(secondLoginAccount.nativeToken), false);
@@ -500,31 +582,35 @@ test('logs in distinct accounts concurrently and retains them across restart whi
     assert.deepEqual(callsByOrigin.get(firstHome.origin)?.body, { handle: firstLoginAccount.handle, password: firstLoginAccount.password });
     assert.deepEqual(callsByOrigin.get(secondHome.origin)?.body, { handle: secondLoginAccount.handle, password: secondLoginAccount.password });
 
-    const listed = await readAccounts(opened.client.origin);
-    assert.deepEqual(listed.accounts.map((account) => account.id).sort(), [firstBody.account.id, secondBody.account.id].sort());
+    const listed = await readAccounts(opened.client.origin, firstBody.clientToken);
+    assert.deepEqual(listed.accounts.map((account) => account.id), [firstBody.account.id]);
     assert.equal(listed.accounts.every((account) => account.login.status === 'signed-in'), true);
+    const listedSecond = await readAccounts(opened.client.origin, secondBody.clientToken);
+    assert.deepEqual(listedSecond.accounts.map((account) => account.id), [secondBody.account.id]);
 
     const firstId = firstBody.account.id;
     const secondId = secondBody.account.id;
     await opened.client.close();
     await opened.application.close();
     opened = await openFixtureApplication(storeFile, fixture.fetch);
-    const reopened = await readAccounts(opened.client.origin);
-    assert.deepEqual(reopened.accounts.map((account) => account.id).sort(), [firstId, secondId].sort());
+    const reopened = await readAccounts(opened.client.origin, firstBody.clientToken);
+    assert.deepEqual(reopened.accounts.map((account) => account.id), [firstId]);
     assert.equal(reopened.accounts.every((account) => account.login.status === 'signed-in'), true);
 
-    const logoutResponse = await fetch(new URL(`/api/accounts/${encodeURIComponent(firstId)}/logout`, opened.client.origin), { method: 'POST' });
+    const logoutResponse = await fetch(new URL(`/api/accounts/${encodeURIComponent(firstId)}/logout`, opened.client.origin), { method: 'POST', headers: authorization(firstBody.clientToken) });
     assert.equal(logoutResponse.status, 200);
     const logoutBody = await logoutResponse.json() as { account: PublicAccountRecord };
     assert.equal(logoutBody.account.id, firstId);
     assert.equal(logoutBody.account.handle, firstLoginAccount.handle);
     assert.equal(logoutBody.account.login.status, 'signed-out');
     assert.equal(JSON.stringify(logoutBody).includes(firstLoginAccount.nativeToken), false);
-    const afterLogout = await readAccounts(opened.client.origin);
-    assert.equal(afterLogout.accounts.find((account) => account.id === firstId)?.login.status, 'signed-out');
-    assert.equal(afterLogout.accounts.find((account) => account.id === secondId)?.login.status, 'signed-in');
-    assert.equal(afterLogout.accounts.some((account) => account.handle === firstLoginAccount.handle), true);
-    assert.equal(afterLogout.accounts.some((account) => account.handle === secondLoginAccount.handle), true);
+    const afterLogout = await readAccounts(opened.client.origin, secondBody.clientToken);
+    assert.deepEqual(afterLogout.accounts.map((account) => account.id), [secondId]);
+    assert.equal(afterLogout.accounts[0]?.login.status, 'signed-in');
+    const retainedFirst = await opened.application.state.read((state) => state.accounts[firstId]);
+    assert.equal(retainedFirst?.login.status, 'signed-out');
+    assert.equal(retainedFirst?.handle, firstLoginAccount.handle);
+    assert.equal((await fetch(new URL('/api/accounts', opened.client.origin), { headers: authorization(firstBody.clientToken) })).status, 401);
   } finally {
     await opened.client.close();
     await opened.application.close();
@@ -555,10 +641,11 @@ test('rejected and unavailable logins return client errors without retaining sig
     assert.notEqual(unavailableBody.account?.login.status, 'signed-in');
     assert.equal(JSON.stringify(unavailableBody).includes(blocked.nativeToken), false);
 
-    const listed = await readAccounts(opened.client.origin);
-    assert.equal(listed.accounts.some((account) => account.login.status === 'signed-in'), false);
-    assert.equal(JSON.stringify(listed).includes(firstLoginAccount.nativeToken), false);
-    assert.equal(JSON.stringify(listed).includes(blocked.nativeToken), false);
+    const retainedAccounts = await opened.application.state.read((state) => state.accounts);
+    assert.deepEqual(retainedAccounts, {});
+    assert.equal(JSON.stringify(retainedAccounts).includes(firstLoginAccount.nativeToken), false);
+    assert.equal(JSON.stringify(retainedAccounts).includes(blocked.nativeToken), false);
+    assert.equal((await fetch(new URL('/api/accounts', opened.client.origin))).status, 401);
   } finally {
     await opened.client.close();
     await opened.application.close();
@@ -576,8 +663,9 @@ test('failed server discovery leaves every retained account signed in', async ()
       fetch(new URL('/api/accounts/login', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: firstLoginAccount.handle, password: firstLoginAccount.password, homeOrigin: firstHome.origin }) }),
       fetch(new URL('/api/accounts/login', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: secondLoginAccount.handle, password: secondLoginAccount.password, homeOrigin: secondHome.origin }) })
     ]);
-    const bodies = await Promise.all(logins.map(async (response) => { assert.equal(response.status, 200); return await response.json() as { account: PublicAccountRecord } }));
+    const bodies = await Promise.all(logins.map(async (response) => { assert.equal(response.status, 200); return await response.json() as { account: PublicAccountRecord; clientToken: string } }));
     const ids = bodies.map((body) => body.account.id).sort();
+    for (const body of bodies) registerClientToken(opened.client.origin, body.account.id, body.clientToken);
 
     const failure = await fetch(new URL('/api/servers', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ origin: 'http://broken.test:4300' }) });
     assert.ok(failure.status >= 400);
@@ -588,9 +676,9 @@ test('failed server discovery leaves every retained account signed in', async ()
     assert.equal(failureText.includes(firstLoginAccount.nativeToken), false);
     assert.equal(failureText.includes(secondLoginAccount.nativeToken), false);
 
-    const listed = await readAccounts(opened.client.origin);
-    assert.deepEqual(listed.accounts.map((account) => account.id).sort(), ids);
-    assert.equal(listed.accounts.every((account) => account.login.status === 'signed-in'), true);
+    const listed = await Promise.all(bodies.map((body) => readAccounts(opened.client.origin, body.clientToken)));
+    assert.deepEqual(listed.flatMap((entry) => entry.accounts.map((account) => account.id)).sort(), ids);
+    assert.equal(listed.every((entry) => entry.accounts.every((account) => account.login.status === 'signed-in')), true);
   } finally {
     await opened.client.close();
     await opened.application.close();
@@ -613,7 +701,7 @@ test('discovers public server authorities before login and retains them after re
   const fixture = createFixtureFetch([], [authority]);
   let opened = await openFixtureApplication(storeFile, fixture.fetch);
   try {
-    assert.deepEqual((await readAccounts(opened.client.origin)).accounts, []);
+    assert.equal((await fetch(new URL('/api/accounts', opened.client.origin))).status, 401);
     const response = await fetch(new URL('/api/servers', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ origin: authority.origin }) });
     assert.equal(response.status, 200);
     const body = await response.json() as { servers: ServerRecord[]; authorities: AuthorityRecord[] };
@@ -645,7 +733,7 @@ test('discovers public server authorities before login and retains them after re
     const reopenedResponse = await fetch(new URL('/api/servers', opened.client.origin));
     assert.equal(reopenedResponse.status, 200);
     assert.deepEqual(await reopenedResponse.json(), body);
-    assert.deepEqual((await readAccounts(opened.client.origin)).accounts, []);
+    assert.equal((await fetch(new URL('/api/accounts', opened.client.origin))).status, 401);
   } finally {
     await opened.client.close();
     await opened.application.close();
@@ -702,8 +790,9 @@ test('resolves administrator credentials only for signed-in explicitly bound acc
   try {
     const login = await fetch(new URL('/api/accounts/login', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: firstLoginAccount.handle, password: firstLoginAccount.password, homeOrigin: firstHome.origin }) });
     assert.equal(login.status, 200);
-    const loginBody = await login.json() as { account: PublicAccountRecord };
+    const loginBody = await login.json() as { account: PublicAccountRecord; clientToken: string };
     const accountId = loginBody.account.id;
+    registerClientToken(opened.client.origin, accountId, loginBody.clientToken);
     await opened.client.close();
     await opened.application.close();
 
@@ -721,14 +810,14 @@ test('resolves administrator credentials only for signed-in explicitly bound acc
     await assert.rejects(resolver.resolveAdministratorCredential('account:missing', registryActor));
     await assert.rejects(resolver.resolveAdministratorCredential(accountId, missingSourceActor));
 
-    const accountsText = await (await fetch(new URL('/api/accounts', opened.client.origin))).text();
+    const accountsText = await (await fetch(new URL('/api/accounts', opened.client.origin), { headers: authorization(loginBody.clientToken) })).text();
     const serversText = await (await fetch(new URL('/api/servers', opened.client.origin))).text();
     for (const text of [accountsText, serversText]) {
       assert.equal(text.includes('registry-administrator-secret'), false);
       assert.equal(text.includes('missing-source'), false);
     }
 
-    const logout = await fetch(new URL(`/api/accounts/${encodeURIComponent(accountId)}/logout`, opened.client.origin), { method: 'POST' });
+    const logout = await fetch(new URL(`/api/accounts/${encodeURIComponent(accountId)}/logout`, opened.client.origin), { method: 'POST', headers: authorization(loginBody.clientToken) });
     assert.equal(logout.status, 200);
     await assert.rejects(resolver.resolveAdministratorCredential(accountId, registryActor));
   } finally {
@@ -2062,7 +2151,7 @@ test('logistics refresh retains scoped Registry and Territory observations, read
     const missingScope = await fetch(new URL(logisticsPath(vessel), opened.client.origin));
     assert.equal(missingScope.status, 400);
     const unknownAccount = await fetch(new URL(`${logisticsPath(vessel)}?accountId=${encodeURIComponent('account:unknown')}`, opened.client.origin));
-    assert.ok([403, 404].includes(unknownAccount.status));
+    assert.ok([401, 403, 404].includes(unknownAccount.status));
     const otherAccountRead = await fetch(new URL(`${logisticsPath(vessel)}?accountId=${encodeURIComponent(world.accounts.second.id)}`, opened.client.origin));
     assert.ok([403, 404].includes(otherAccountRead.status));
     const otherAccountRefresh = await fetch(new URL(logisticsPath(vessel, '/refresh'), opened.client.origin), {
@@ -3051,7 +3140,7 @@ test('administration page retains authorized targets without world IO and refres
     const missing = await getJson(new URL('/api/administration', opened.client.origin));
     assert.equal(missing.status, 400);
     const unknown = await getJson(administrationPageUrl(opened.client.origin, 'account:unknown'));
-    assert.ok([403, 404].includes(unknown.status));
+    assert.ok([401, 403, 404].includes(unknown.status));
 
     const refreshCalls = opened.calls.length;
     const refreshed = await administrationRefresh(opened.client.origin, { accountId, authorityId: world.policy.ids.actor });
@@ -3681,6 +3770,220 @@ test('a lost Registry submission response remains uncertain across restart witho
     assert.equal(departures.length, 1);
   } finally {
     await opened.client.close(); await opened.application.close(); await world.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+interface ClientLoginBody {
+  status: 'signed-in';
+  account: PublicAccountRecord;
+  clientToken: string;
+}
+
+async function loginClient(origin: string, account: FixtureHomeAccount, homeOrigin: string): Promise<ClientLoginBody> {
+  const response = await fetch(new URL('/api/accounts/login', origin), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ handle: account.handle, password: account.password, homeOrigin })
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json() as ClientLoginBody;
+  assert.equal(body.status, 'signed-in');
+  assert.equal(typeof body.clientToken, 'string');
+  assert.ok(body.clientToken.length >= 32);
+  return body;
+}
+
+function authorization(token: string): { Authorization: string } {
+  return { Authorization: `Bearer ${token}` };
+}
+
+async function readClientSessions(storeFile: string): Promise<{ raw: string; sessions: Record<string, Record<string, unknown>> }> {
+  const raw = await readFile(storeFile, 'utf8');
+  const stored: unknown = JSON.parse(raw);
+  assert.ok(isRecord(stored) && isRecord(stored.domain) && isRecord(stored.domain.client));
+  const sessions = stored.domain.client.clientSessions;
+  assert.ok(isRecord(sessions));
+  return {
+    raw,
+    sessions: Object.fromEntries(Object.entries(sessions).map(([digest, record]) => {
+      assert.ok(isRecord(record));
+      return [digest, record];
+    }))
+  };
+}
+
+test('login issues independent client tokens and persists only their digests across reopen', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-client-sessions-'));
+  const storeFile = join(directory, 'client.store.json');
+  const fixture = createFixtureFetch(fixtureHomes(), []);
+  let opened = await openFixtureApplication(storeFile, fixture.fetch);
+  try {
+    const first = await loginClient(opened.client.origin, firstLoginAccount, firstHome.origin);
+    const second = await loginClient(opened.client.origin, firstLoginAccount, firstHome.origin);
+    assert.notEqual(first.clientToken, second.clientToken);
+    assert.equal(first.account.id, second.account.id);
+    for (const body of [first, second]) {
+      assert.equal(JSON.stringify(body).includes(firstLoginAccount.nativeToken), false);
+      assert.equal(JSON.stringify(body).includes(firstLoginAccount.password), false);
+    }
+
+    const stored = await readClientSessions(storeFile);
+    assert.equal(stored.sessions[createHash('sha256').update(first.clientToken).digest('base64url')]?.accountId, first.account.id);
+    assert.equal(stored.sessions[createHash('sha256').update(second.clientToken).digest('base64url')]?.accountId, first.account.id);
+    assert.equal(stored.raw.includes(first.clientToken), false);
+    assert.equal(stored.raw.includes(second.clientToken), false);
+    assert.deepEqual(Object.keys(stored.sessions).sort(), [
+      createHash('sha256').update(first.clientToken).digest('base64url'),
+      createHash('sha256').update(second.clientToken).digest('base64url')
+    ].sort());
+
+    await opened.client.close();
+    await opened.application.close();
+    opened = await openFixtureApplication(storeFile, fixture.fetch);
+    for (const token of [first.clientToken, second.clientToken]) {
+      const response = await fetch(new URL('/api/accounts', opened.client.origin), { headers: authorization(token) });
+      assert.equal(response.status, 200);
+      const body = await response.json() as { accounts: PublicAccountRecord[] };
+      assert.deepEqual(body.accounts.map((account) => account.id), [first.account.id]);
+    }
+
+    const third = await loginClient(opened.client.origin, firstLoginAccount, firstHome.origin);
+    assert.notEqual(third.clientToken, first.clientToken);
+    assert.notEqual(third.clientToken, second.clientToken);
+    const earlier = await fetch(new URL('/api/accounts', opened.client.origin), { headers: authorization(first.clientToken) });
+    assert.equal(earlier.status, 200, 'a later successful login does not revoke an earlier session');
+  } finally {
+    await opened.client.close();
+    await opened.application.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('logout revokes only the requesting client session and signs out the account on its final session', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-client-logout-sessions-'));
+  const storeFile = join(directory, 'client.store.json');
+  const fixture = createFixtureFetch(fixtureHomes(), []);
+  const opened = await openFixtureApplication(storeFile, fixture.fetch);
+  try {
+    const first = await loginClient(opened.client.origin, firstLoginAccount, firstHome.origin);
+    const second = await loginClient(opened.client.origin, firstLoginAccount, firstHome.origin);
+    const callsAfterLogin = fixture.calls.length;
+    const logoutUrl = new URL(`/api/accounts/${encodeURIComponent(first.account.id)}/logout`, opened.client.origin);
+
+    const firstLogout = await fetch(logoutUrl, { method: 'POST', headers: authorization(first.clientToken) });
+    assert.equal(firstLogout.status, 200);
+    const firstLogoutBody = await firstLogout.json() as { account: PublicAccountRecord };
+    assert.equal(firstLogoutBody.account.id, first.account.id);
+    assert.equal(firstLogoutBody.account.login.status, 'signed-in');
+    assert.equal(JSON.stringify(firstLogoutBody).includes(firstLoginAccount.nativeToken), false);
+    assert.equal(fixture.calls.length, callsAfterLogin, 'logout does not contact the Home server');
+
+    assert.equal((await fetch(new URL('/api/accounts', opened.client.origin), { headers: authorization(first.clientToken) })).status, 401);
+    assert.equal((await fetch(new URL('/api/accounts', opened.client.origin), { headers: authorization(second.clientToken) })).status, 200);
+
+    const finalLogout = await fetch(logoutUrl, { method: 'POST', headers: authorization(second.clientToken) });
+    assert.equal(finalLogout.status, 200);
+    const finalBody = await finalLogout.json() as { account: PublicAccountRecord };
+    assert.equal(finalBody.account.login.status, 'signed-out');
+    assert.equal(fixture.calls.length, callsAfterLogin);
+    assert.equal((await fetch(new URL('/api/accounts', opened.client.origin), { headers: authorization(second.clientToken) })).status, 401);
+  } finally {
+    await opened.client.close();
+    await opened.application.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('client authentication rejects missing, native and cross-account credentials before IO', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-client-auth-'));
+  const storeFile = join(directory, 'client.store.json');
+  const fixture = createFixtureFetch(fixtureHomes(), []);
+  const opened = await openFixtureApplication(storeFile, fixture.fetch);
+  try {
+    const first = await loginClient(opened.client.origin, firstLoginAccount, firstHome.origin);
+    const second = await loginClient(opened.client.origin, secondLoginAccount, secondHome.origin);
+    const callsAfterLogin = fixture.calls.length;
+    const accountsUrl = new URL('/api/accounts', opened.client.origin);
+    const libraryUrl = new URL(`/api/library?accountId=${encodeURIComponent(first.account.id)}`, opened.client.origin);
+
+    assert.equal((await unauthenticatedFetch(accountsUrl)).status, 401);
+    assert.equal((await unauthenticatedFetch(accountsUrl, { headers: authorization(firstLoginAccount.nativeToken) })).status, 401, 'native Home credentials are not client tokens');
+    assert.equal((await unauthenticatedFetch(accountsUrl, { headers: authorization('not-a-client-token') })).status, 401);
+    const firstAccounts = await fetch(accountsUrl, { headers: authorization(first.clientToken) });
+    assert.equal(firstAccounts.status, 200);
+    assert.deepEqual(((await firstAccounts.json()) as { accounts: PublicAccountRecord[] }).accounts.map((account) => account.id), [first.account.id]);
+    const secondAccounts = await fetch(accountsUrl, { headers: authorization(second.clientToken) });
+    assert.equal(secondAccounts.status, 200);
+    assert.deepEqual(((await secondAccounts.json()) as { accounts: PublicAccountRecord[] }).accounts.map((account) => account.id), [second.account.id]);
+
+    assert.equal((await unauthenticatedFetch(libraryUrl)).status, 401);
+    assert.equal(fixture.calls.length, callsAfterLogin, 'authorization rejects before a private read performs world IO');
+    assert.equal((await unauthenticatedFetch(libraryUrl, { headers: authorization(second.clientToken) })).status, 403);
+    assert.equal((await unauthenticatedFetch(libraryUrl, { headers: authorization(first.clientToken) })).status, 200);
+
+    const duplicate = new URL(`/api/library?accountId=${encodeURIComponent(first.account.id)}&accountId=${encodeURIComponent(second.account.id)}`, opened.client.origin);
+    assert.equal((await unauthenticatedFetch(duplicate, { headers: authorization(first.clientToken) })).status, 400);
+    const conflicting = new URL(`/api/library/refresh?accountId=${encodeURIComponent(second.account.id)}`, opened.client.origin);
+    const conflictingResponse = await unauthenticatedFetch(conflicting, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...authorization(first.clientToken) },
+      body: JSON.stringify({ accountId: first.account.id })
+    });
+    assert.equal(conflictingResponse.status, 400);
+    assert.equal(fixture.calls.length, callsAfterLogin, 'a conflicting scope is rejected before refresh IO');
+    const unauthenticatedRefresh = await unauthenticatedFetch(new URL('/api/library/refresh', opened.client.origin), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accountId: first.account.id })
+    });
+    assert.equal(unauthenticatedRefresh.status, 401);
+    assert.equal(fixture.calls.length, callsAfterLogin);
+
+    const publicPlaces = new URL('/api/explore/places', opened.client.origin);
+    assert.equal((await unauthenticatedFetch(publicPlaces)).status, 200);
+    assert.equal((await unauthenticatedFetch(publicPlaces, { headers: authorization('invalid-client-token') })).status, 401, 'invalid credentials do not silently downgrade to anonymous');
+    assert.equal((await unauthenticatedFetch(new URL(`${publicPlaces.pathname}?accountId=${encodeURIComponent(first.account.id)}`, opened.client.origin))).status, 401);
+    assert.equal((await unauthenticatedFetch(new URL(`${publicPlaces.pathname}?accountId=${encodeURIComponent(first.account.id)}`, opened.client.origin), { headers: authorization(second.clientToken) })).status, 403);
+    assert.equal((await unauthenticatedFetch(new URL(`${publicPlaces.pathname}?accountId=${encodeURIComponent(first.account.id)}`, opened.client.origin), { headers: authorization(first.clientToken) })).status, 200);
+
+    const publicResource = new URL(`/api/resources/${encodeURIComponent('https://resources.test/public')}`, opened.client.origin);
+    assert.equal((await unauthenticatedFetch(publicResource)).status, 200);
+    assert.equal((await unauthenticatedFetch(new URL(`${publicResource.pathname}?accountId=${encodeURIComponent(first.account.id)}`, opened.client.origin))).status, 401);
+
+    const logoutUrl = new URL(`/api/accounts/${encodeURIComponent(first.account.id)}/logout`, opened.client.origin);
+    assert.equal((await unauthenticatedFetch(logoutUrl, { method: 'POST' })).status, 401);
+    assert.equal((await unauthenticatedFetch(logoutUrl, { method: 'POST', headers: authorization(second.clientToken) })).status, 403);
+    assert.equal((await unauthenticatedFetch(new URL('/api/accounts', opened.client.origin), { headers: authorization(first.clientToken) })).status, 200);
+  } finally {
+    await opened.client.close();
+    await opened.application.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('legacy retained login state without client sessions never authorizes by itself', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-client-legacy-sessions-'));
+  const storeFile = join(directory, 'client.store.json');
+  const legacyClient = {
+    servers: {},
+    authorities: {},
+    accounts: { [firstAccount.id]: firstAccount },
+    observations: {},
+    drafts: {},
+    routePlans: {},
+    actions: {},
+    followedRequests: {},
+    followedJobs: {}
+  };
+  await writeFile(storeFile, JSON.stringify({ domain: { client: legacyClient } }), 'utf8');
+  const application = await createClientApplication({ storeFile });
+  const client = await startClientServer({ port: 0, application });
+  try {
+    assert.deepEqual(await application.state.read((state) => state.clientSessions), {});
+    assert.equal((await fetch(new URL('/api/accounts', client.origin))).status, 401);
+    assert.equal((await fetch(new URL('/api/accounts', client.origin), { headers: authorization('first-native-token') })).status, 401);
+    assert.equal((await fetch(new URL(`/api/library?accountId=${encodeURIComponent(firstAccount.id)}`, client.origin))).status, 401);
+  } finally {
+    await client.close();
+    await application.close();
     await rm(directory, { recursive: true, force: true });
   }
 });

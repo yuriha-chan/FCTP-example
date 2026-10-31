@@ -78,7 +78,12 @@ test('provides deterministic player and governor login without exposing bindings
       body: JSON.stringify({ handle, password, homeOrigin: demo.origins.authority })
     });
     assert.equal(response.status, 200);
-    return await response.json() as { account: { id: string; handle: string; login: { status: string } }; status: string };
+    return await response.json() as { account: { id: string; handle: string; login: { status: string } }; clientToken: string; status: string };
+  };
+  const readAccounts = async (clientToken: string) => {
+    const response = await fetch(new URL('/api/accounts', demo.origins.client), { headers: { Authorization: `Bearer ${clientToken}` } });
+    assert.equal(response.status, 200);
+    return await response.json() as { accounts: Array<{ id: string; handle: string }> };
   };
   const player = await login(`@player@${host}`, 'demo-player-password');
   const governor = await login(`@governor@${host}`, 'demo-governor-password');
@@ -95,8 +100,13 @@ test('provides deterministic player and governor login without exposing bindings
   assert.equal(await application.resolveAdministratorCredential(governor.account.id, demo.authority.ids.actor.registry), 'demo-authority-admin');
   await assert.rejects(application.resolveAdministratorCredential(player.account.id, demo.policy.ids.actor));
 
-  const accountsBody = await (await fetch(new URL('/api/accounts', demo.origins.client))).text();
-  for (const secret of ['demo-player-password', 'demo-governor-password', 'demo-authority-admin', 'demo-policy-admin', 'demo-sim-admin', 'administratorBindings', 'administratorCredentials']) {
+  const playerAccounts = await readAccounts(player.clientToken);
+  assert.deepEqual(playerAccounts.accounts.map((account) => ({ id: account.id, handle: account.handle })), [{ id: player.account.id, handle: `@player@${host}` }]);
+  const governorAccounts = await readAccounts(governor.clientToken);
+  assert.deepEqual(governorAccounts.accounts.map((account) => ({ id: account.id, handle: account.handle })), [{ id: governor.account.id, handle: `@governor@${host}` }]);
+
+  const accountsBody = JSON.stringify(playerAccounts);
+  for (const secret of ['demo-player-password', 'demo-governor-password', 'demo-authority-admin', 'demo-policy-admin', 'demo-sim-admin', 'administratorBindings', 'administratorCredentials', player.clientToken, governor.clientToken, `@governor@${host}`]) {
     assert.equal(accountsBody.includes(secret), false, secret);
   }
 });
@@ -110,7 +120,7 @@ test('provisions a second Player account and vessel that both Territories enroll
       body: JSON.stringify({ handle, password, homeOrigin: demo.origins.authority })
     });
     assert.equal(response.status, 200);
-    return await response.json() as { account: { id: string; handle: string; login: { status: string } }; status: string };
+    return await response.json() as { account: { id: string; handle: string; login: { status: string } }; clientToken: string; status: string };
   };
   const player = await login(`@player@${host}`, 'demo-player-password');
   const player2 = await login(`@player-2@${host}`, 'demo-player-2-password');
@@ -129,11 +139,13 @@ test('provisions a second Player account and vessel that both Territories enroll
   }
   const refresh = await fetch(new URL('/api/production/refresh', demo.origins.client), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${player2.clientToken}` },
     body: JSON.stringify({ accountId: player2.account.id, vesselId: vessel2 })
   });
   assert.equal(refresh.status, 200);
-  const productionResponse = await fetch(new URL(`/api/production?accountId=${encodeURIComponent(player2.account.id)}&vesselId=${encodeURIComponent(vessel2)}`, demo.origins.client));
+  const productionResponse = await fetch(new URL(`/api/production?accountId=${encodeURIComponent(player2.account.id)}&vesselId=${encodeURIComponent(vessel2)}`, demo.origins.client), {
+    headers: { Authorization: `Bearer ${player2.clientToken}` }
+  });
   assert.equal(productionResponse.status, 200);
   const production = await productionResponse.json() as { data?: { operations?: Array<{ authorityId?: string }> } };
   const authorities = new Set((production.data?.operations ?? []).map((operation) => operation.authorityId));
@@ -159,28 +171,34 @@ test('demo restart preserves admission changes and disabled accounts without rep
   const ports = await Promise.all(Array.from({ length: 4 }, () => freePort()));
   const options = { dataDir: directory, ports: { authority: ports[0]!, policy: ports[1]!, simulation: ports[2]!, client: ports[3]! } };
   let fixture = await startDemo(options);
-  const post = async (path: string, body: unknown) => fetch(new URL(path, fixture.origins.client), {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  const post = async (path: string, body: unknown, clientToken?: string) => fetch(new URL(path, fixture.origins.client), {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...(clientToken === undefined ? {} : { Authorization: `Bearer ${clientToken}` }) }, body: JSON.stringify(body)
+  });
+  const get = async (path: string, clientToken: string) => fetch(new URL(path, fixture.origins.client), {
+    headers: { Authorization: `Bearer ${clientToken}` }
   });
   try {
     const host = new URL(fixture.origins.authority).host;
     const login = await post('/api/accounts/login', { handle: `@governor@${host}`, password: 'demo-governor-password', homeOrigin: fixture.origins.authority });
     assert.equal(login.status, 200);
-    const { account } = await login.json() as { account: { id: string } };
-    assert.equal((await post('/api/servers', { origin: fixture.origins.authority })).status, 200);
+    const { account, clientToken } = await login.json() as { account: { id: string }; clientToken: string };
+    assert.equal((await post('/api/servers', { origin: fixture.origins.authority }, clientToken)).status, 200);
     const admission = await post('/api/administration/controls', {
       accountId: account.id, authorityId: fixture.policy.ids.actor, control: 'admission', inputs: { publicPorts: [fixture.policy.ids.ports[0]] }
-    });
+    }, clientToken);
     assert.equal(admission.status, 200);
     const availability = await post('/api/administration/controls', {
       accountId: account.id, authorityId: fixture.authority.ids.actor.home, control: 'availability', inputs: { handle: `@player@${host}`, available: false }
-    });
+    }, clientToken);
     assert.equal(availability.status, 200);
     const disabledBefore = await post('/api/accounts/login', { handle: `@player@${host}`, password: 'demo-player-password', homeOrigin: fixture.origins.authority });
     assert.equal((await disabledBefore.json() as { status: string }).status, 'unavailable');
     await fixture.close();
     fixture = await startDemo(options);
     assert.deepEqual((await fixture.policy.territory.ledger).admission.publicPorts, [fixture.policy.ids.ports[0]]);
+    const persistedAccounts = await get('/api/accounts', clientToken);
+    assert.equal(persistedAccounts.status, 200, 'the persisted client session survives restart');
+    assert.deepEqual((await persistedAccounts.json() as { accounts: Array<{ id: string }> }).accounts.map((entry) => entry.id), [account.id]);
     const disabledAfter = await post('/api/accounts/login', { handle: `@player@${host}`, password: 'demo-player-password', homeOrigin: fixture.origins.authority });
     assert.equal(disabledAfter.status, 401);
     assert.equal((await disabledAfter.json() as { status: string }).status, 'unavailable');

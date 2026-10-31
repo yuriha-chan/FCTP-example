@@ -79,6 +79,38 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function accountActionRef(view: TextView, handle: string, action: 'Select account' | 'Log out'): string {
+  const start = view.markdown.indexOf(`${handle} ·`);
+  assert.ok(start >= 0, `Expected the account list entry for ${handle}`);
+  const match = new RegExp(`${action} \\[([A-Za-z0-9-]+)\\]`).exec(view.markdown.slice(start));
+  assert.ok(match, `Expected a ${action} reference for ${handle}`);
+  return match[1]!;
+}
+
+
+interface ClientSessionRecord {
+  accountId: string;
+  clientToken: string;
+}
+
+async function loginClientSession(origin: string, handle: string, password: string, homeOrigin?: string): Promise<ClientSessionRecord> {
+  const response = await fetch(new URL('/api/accounts/login', origin), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ handle, password, ...(homeOrigin ? { homeOrigin } : {}) })
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json() as { account?: { id?: string }; clientToken?: string };
+  assert.ok(body.account?.id);
+  assert.ok(body.clientToken);
+  return { accountId: body.account.id, clientToken: body.clientToken };
+}
+
+function authorizedHeaders(session: ClientSessionRecord, content = false): Record<string, string> {
+  return { Authorization: `Bearer ${session.clientToken}`, ...(content ? { 'Content-Type': 'application/json' } : {}) };
+}
+
+
 
 test('rendered accounts and connections controls log in, log out, and discover a public server', { timeout: 120_000 }, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-browser-accounts-'));
@@ -151,6 +183,11 @@ test('rendered accounts and connections controls log in, log out, and discover a
   assert.match(view.markdown, /signed[ -]?in/i);
   assert.equal(view.markdown.includes(playerPassword), false);
 
+  view = await browser.reload();
+  assert.match(view.markdown, new RegExp(escapeRegExp(handle)));
+  assert.match(view.markdown, /signed[ -]?in/i, 'the saved client session survives a reload');
+  view = await browser.click(accountActionRef(view, handle, 'Select account'));
+
   const signedInAccounts = await services.application!.state.read((state) => Object.values(state.accounts));
   const activityAccount = signedInAccounts.find((account) => account.handle === handle);
   assert.ok(activityAccount);
@@ -206,12 +243,110 @@ test('rendered accounts and connections controls log in, log out, and discover a
   assert.match(view.markdown, /signed[ -]?out/i);
   assert.match(view.markdown, new RegExp(escapeRegExp(handle)));
 
+  view = await browser.reload();
+  assert.doesNotMatch(view.markdown.split('## Accounts')[1]?.split('\n## ')[0] ?? '', /signed[ -]?in/i, 'a logged-out client session is not retained');
+  assert.match(view.markdown, /No known accounts/i);
+
   view = await fill(browser, view, /origin/i, origins.authority, 'Connections');
   view = await control(browser, view, /add server|discover server|connect server/i, 'submit', 'Connections');
   view = await control(browser, view, /registry authority details/i, 'click', 'Connections');
   assert.match(view.markdown, new RegExp(escapeRegExp(services.authority.ids.actor.registry)));
   assert.match(view.markdown, /registry/i);
   assert.match(view.markdown, /home/i);
+});
+
+test('rendered Accounts keeps per-account sessions, scopes activity by the selected session, and logs out one account', { timeout: 180_000 }, async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-browser-sessions-'));
+  const [authorityPort, clientPort] = await Promise.all([freePort(), freePort()]);
+  const origins = { authority: `http://127.0.0.1:${authorityPort}` };
+  const services: {
+    authority?: Awaited<ReturnType<typeof createAuthorityApp>>;
+    application?: Awaited<ReturnType<typeof createClientApplication>>;
+    clientServer?: Awaited<ReturnType<typeof startClientServer>>;
+  } = {};
+  const browsers: BrowserSession[] = [];
+  t.after(async () => {
+    await Promise.allSettled([
+      ...browsers.map((browser) => browser.close()),
+      ...(services.clientServer ? [services.clientServer.close()] : []),
+      ...(services.application ? [services.application.close()] : []),
+      ...(services.authority ? [services.authority.authority.close()] : [])
+    ]);
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  const playerPassword = 'browser-sessions-player-password';
+  const otherPassword = 'browser-sessions-other-password';
+  services.authority = await createAuthorityApp({
+    origin: origins.authority, storeFile: join(directory, 'authority.json'), adminSecret,
+    playerNames: ['player', 'other'], accountPasswords: { player: playerPassword, other: otherPassword }
+  });
+  await services.authority.authority.listen(authorityPort!, '127.0.0.1');
+  services.application = await createClientApplication({ storeFile: join(directory, 'client.store.json') });
+  services.clientServer = await startClientServer({ port: clientPort!, application: services.application });
+  const browser = await createBrowserSession({ url: services.clientServer.origin, allowedOrigins: [services.clientServer.origin, origins.authority] });
+  browsers.push(browser);
+  let view = await browser.view();
+
+  const playerHandle = `@player@${new URL(origins.authority).host}`;
+  const otherHandle = `@other@${new URL(origins.authority).host}`;
+  view = await fill(browser, view, /handle/i, playerHandle, 'Accounts');
+  view = await fill(browser, view, /password/i, playerPassword, 'Accounts');
+  view = await fill(browser, view, /home origin/i, origins.authority, 'Accounts');
+  view = await control(browser, view, /sign in|log in/i, 'submit', 'Accounts');
+
+  view = await fill(browser, view, /handle/i, otherHandle, 'Accounts');
+  view = await fill(browser, view, /password/i, otherPassword, 'Accounts');
+  view = await fill(browser, view, /home origin/i, origins.authority, 'Accounts');
+  view = await control(browser, view, /sign in|log in/i, 'submit', 'Accounts');
+  assert.match(view.markdown, new RegExp(escapeRegExp(playerHandle)));
+  assert.match(view.markdown, new RegExp(escapeRegExp(otherHandle)));
+
+  const playerAccount = (await services.application.state.read((state) => Object.values(state.accounts))).find((candidate) => candidate.handle === playerHandle);
+  const otherAccount = (await services.application.state.read((state) => Object.values(state.accounts))).find((candidate) => candidate.handle === otherHandle);
+  assert.ok(playerAccount);
+  assert.ok(otherAccount);
+  const playerActionId = 'action:sessions:player';
+  const otherActionId = 'action:sessions:other';
+  await services.application.state.transaction((state) => {
+    for (const [id, account] of [[playerActionId, playerAccount], [otherActionId, otherAccount]] as const) {
+      state.actions[id] = {
+        id,
+        statusUrl: `/api/activity/${encodeURIComponent(id)}`,
+        accountId: account.id,
+        targetId: services.authority!.ids.actor.registry,
+        resultReferences: [],
+        intent: { kind: 'mine', inputs: { owner: account.handle } },
+        submittedAt: '2026-10-29T12:00:00Z',
+        submission: { status: 'accepted', result: id },
+        outcome: { status: 'pending', evidence: [] }
+      };
+    }
+  });
+
+  view = await browser.click(accountActionRef(view, playerHandle, 'Select account'));
+  view = await control(browser, view, /refresh activity/i, 'click', 'Activity');
+  assert.match(view.markdown, new RegExp(escapeRegExp(playerActionId)));
+  assert.equal(view.markdown.includes(otherActionId), false, 'the player session does not read the other account activity');
+
+  view = await browser.click(accountActionRef(view, otherHandle, 'Select account'));
+  view = await control(browser, view, /refresh activity/i, 'click', 'Activity');
+  assert.match(view.markdown, new RegExp(escapeRegExp(otherActionId)));
+  assert.equal(view.markdown.includes(playerActionId), false, 'the other session does not read the player activity');
+
+  view = await browser.reload();
+  assert.match(view.markdown, new RegExp(escapeRegExp(playerHandle)));
+  assert.match(view.markdown, new RegExp(escapeRegExp(otherHandle)));
+
+  view = await browser.click(accountActionRef(view, otherHandle, 'Log out'));
+  assert.match(view.markdown, /Signed out/i);
+  view = await browser.reload();
+  assert.match(view.markdown, new RegExp(escapeRegExp(playerHandle)));
+  assert.equal(view.markdown.includes(otherHandle), false, 'logging out one account leaves the other saved session');
+
+  view = await browser.click(accountActionRef(view, playerHandle, 'Select account'));
+  view = await control(browser, view, /refresh activity/i, 'click', 'Activity');
+  assert.match(view.markdown, new RegExp(escapeRegExp(playerActionId)));
 });
 
 test('rendered Explore discovers places, capabilities and blockers, saves a route, and carries it to Logistics & Production', { timeout: 180_000 }, async (t) => {
@@ -290,6 +425,7 @@ test('rendered Explore discovers places, capabilities and blockers, saves a rout
   assert.equal(view.markdown.includes(nativeToken), false);
   const account = (await services.application!.state.read((state) => Object.values(state.accounts))).find((candidate) => candidate.handle === handle);
   assert.ok(account, 'the Explore scenario keeps the signed-in account identity');
+  const clientSession = await loginClientSession(services.clientServer.origin, handle, password, origins.authority);
 
   view = await fill(browser, view, /server origin/i, origins.policy, 'Connections');
   view = await control(browser, view, /add server|discover server|connect server/i, 'submit', 'Connections');
@@ -340,7 +476,7 @@ test('rendered Explore discovers places, capabilities and blockers, saves a rout
   assert.equal(view.markdown.includes(nativeToken), false);
 
   const entryResponse = await fetch(new URL(`/api/logistics/vessels/${encodeURIComponent(vessel)}/entry`, services.clientServer.origin), {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: authorizedHeaders(clientSession, true),
     body: JSON.stringify({ accountId: account.id, territoryId: services.policy.ids.actor, portId: services.policy.ids.ports[0], routeId: services.policy.ids.routes[0] })
   });
   assert.equal(entryResponse.status, 200);
@@ -435,8 +571,9 @@ test('rendered Logistics & Production refreshes scoped cargo and executes typed 
 
   const account = (await services.application.state.read((state) => Object.values(state.accounts))).find((candidate) => candidate.handle === handle);
   assert.ok(account);
+  const clientSession = await loginClientSession(services.clientServer.origin, handle, password, origins.authority);
   const entryResponse = await fetch(new URL(`/api/logistics/vessels/${encodeURIComponent(vessel)}/entry`, services.clientServer.origin), {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: authorizedHeaders(clientSession, true),
     body: JSON.stringify({ accountId: account.id, territoryId: services.policy.ids.actor, portId: services.policy.ids.ports[0], routeId: services.policy.ids.routes[0] })
   });
   assert.equal(entryResponse.status, 200);
@@ -558,8 +695,9 @@ test('rendered Simulation production shows pending job progress and completes on
 
   const account = (await services.application.state.read((state) => Object.values(state.accounts))).find((candidate) => candidate.handle === handle);
   assert.ok(account);
+  const clientSession = await loginClientSession(services.clientServer.origin, handle, password, origins.authority);
   const entryResponse = await fetch(new URL(`/api/logistics/vessels/${encodeURIComponent(vessel)}/entry`, services.clientServer.origin), {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: authorizedHeaders(clientSession, true),
     body: JSON.stringify({ accountId: account.id, territoryId: services.simulation.ids.actor, portId: services.simulation.ids.ports[0], routeId: services.simulation.ids.routes[0] })
   });
   assert.equal(entryResponse.status, 200);
@@ -665,7 +803,8 @@ test('rendered Author & Publish creates, saves, reopens, publishes and reads an 
   view = await control(browser, view, /refresh library/i, 'click', authoring);
   const account = (await services.application.state.read((state) => Object.values(state.accounts))).find((candidate) => candidate.handle === handle);
   assert.ok(account);
-  const libraryResponse = await fetch(new URL(`/api/library?accountId=${encodeURIComponent(account.id)}`, services.clientServer.origin));
+  const clientSession = await loginClientSession(services.clientServer.origin, handle, password, origins.authority);
+  const libraryResponse = await fetch(new URL(`/api/library?accountId=${encodeURIComponent(account.id)}`, services.clientServer.origin), { headers: authorizedHeaders(clientSession) });
   assert.equal(libraryResponse.status, 200);
   const library = await libraryResponse.json() as { data?: { assets?: Array<{ id: string; name?: string }>; varieties?: Array<{ id: string; name?: string }>; grants?: Array<{ id: string; asset?: string; variety?: string; grantee?: string }> } };
   const asset = library.data?.assets?.find((candidate) => candidate.name === 'Harbor Signal');
@@ -727,7 +866,7 @@ test('rendered Author & Publish creates, saves, reopens, publishes and reads an 
   view = await control(browser, view, /technical details/i, 'click', 'Resource reader');
   assert.match(view.markdown, new RegExp(escapeRegExp(asset.id)), 'the exact resource identity is disclosed');
 
-  const refreshedResponse = await fetch(new URL(`/api/library?accountId=${encodeURIComponent(account.id)}`, services.clientServer.origin));
+  const refreshedResponse = await fetch(new URL(`/api/library?accountId=${encodeURIComponent(account.id)}`, services.clientServer.origin), { headers: authorizedHeaders(clientSession) });
   assert.equal(refreshedResponse.status, 200);
   const refreshed = await refreshedResponse.json() as { data?: { varieties?: Array<{ id: string; name?: string; asset?: string; production?: unknown[] }>; grants?: Array<{ asset?: string; variety?: string; grantee?: string }> } };
   const variety = refreshed.data?.varieties?.find((candidate) => candidate.name === 'Signal Alloy');
@@ -798,6 +937,7 @@ test('rendered Author & Publish preserves extension-bearing Production on a no-o
 
   const account = (await services.application.state.read((state) => Object.values(state.accounts))).find((candidate) => candidate.handle === handle);
   assert.ok(account);
+  const clientSession = await loginClientSession(services.clientServer.origin, handle, password, origins.authority);
   const production = [
     {
       type: 'manufacture',
@@ -820,7 +960,7 @@ test('rendered Author & Publish preserves extension-bearing Production on a no-o
   ];
   const createdResponse = await fetch(new URL('/api/drafts', services.clientServer.origin), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authorizedHeaders(clientSession, true),
     body: JSON.stringify({ accountId: account.id, kind: 'variety', fields: { name: 'Extension Alloy', mass: 2.5, version: '1', production } })
   });
   assert.equal(createdResponse.status, 201);
@@ -833,7 +973,7 @@ test('rendered Author & Publish preserves extension-bearing Production on a no-o
   view = await control(browser, view, /open (?:saved )?draft/i, 'click', authoring);
   view = await control(browser, view, /save draft|save variety/i, 'click', authoring);
 
-  const savedResponse = await fetch(new URL(`/api/drafts/${encodeURIComponent(draftId)}?accountId=${encodeURIComponent(account.id)}`, services.clientServer.origin));
+  const savedResponse = await fetch(new URL(`/api/drafts/${encodeURIComponent(draftId)}?accountId=${encodeURIComponent(account.id)}`, services.clientServer.origin), { headers: authorizedHeaders(clientSession) });
   assert.equal(savedResponse.status, 200);
   const saved = await savedResponse.json() as { draft: { fields: { production?: unknown[] } } };
   assert.deepEqual(saved.draft.fields.production, production, 'a no-op save preserves the complete Production entries, ingredients, areas, yields and extension fields');
@@ -847,7 +987,7 @@ test('rendered Author & Publish preserves extension-bearing Production on a no-o
   view = await fill(browser, view, /version/i, '2', authoring);
   view = await control(browser, view, /save draft|save variety/i, 'click', authoring);
 
-  const libraryResponse = await fetch(new URL(`/api/library?accountId=${encodeURIComponent(account.id)}`, services.clientServer.origin));
+  const libraryResponse = await fetch(new URL(`/api/library?accountId=${encodeURIComponent(account.id)}`, services.clientServer.origin), { headers: authorizedHeaders(clientSession) });
   assert.equal(libraryResponse.status, 200);
   const library = await libraryResponse.json() as { data?: { drafts?: Array<{ id: string; fields?: { name?: string; production?: unknown[] } }> } };
   const drafts = library.data?.drafts ?? [];
@@ -927,8 +1067,9 @@ test('rendered Administration applies structured admission, decides a manual ent
 
   const account = (await services.application.state.read((state) => Object.values(state.accounts))).find((candidate) => candidate.handle === playerHandle);
   assert.ok(account);
+  const clientSession = await loginClientSession(services.clientServer.origin, playerHandle, playerPassword, origins.authority);
   const entryResponse = await fetch(new URL(`/api/logistics/vessels/${encodeURIComponent(vessel)}/entry`, services.clientServer.origin), {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: authorizedHeaders(clientSession, true),
     body: JSON.stringify({ accountId: account.id, territoryId: services.policy.ids.actor, portId: services.policy.ids.ports[0], routeId: services.policy.ids.routes[0] })
   });
   assert.equal(entryResponse.status, 200);

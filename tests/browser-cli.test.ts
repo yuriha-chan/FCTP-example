@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import process from 'node:process';
 import test from 'node:test';
@@ -30,18 +30,32 @@ test('spawned API commands use the live application without a browser while DOM 
     clientOrigin: demo.origins.client,
     accounts: [
       { name: 'player', handle: `@player@${host}`, homeOrigin: demo.origins.authority },
+      { name: 'player-2', handle: `@player-2@${host}`, homeOrigin: demo.origins.authority },
       { name: 'governor', handle: `@governor@${host}`, homeOrigin: demo.origins.authority }
     ]
   };
   await writeFile(join(configRoot, 'runtime-config.json'), JSON.stringify(config));
+  const clientSessionPathFor = (role: string): string => join(configRoot, 'runtime', 'cli-live', role, 'client-session.json');
   try {
     await assert.rejects(cli(configRoot, ['player', 'login', 'demo-player-password']), /operand|login|command/i);
+    await assert.rejects(cli(configRoot, ['player', 'page', '/api/accounts']), /session|sign|credential|401|account/i);
 
-    const login = JSON.parse(await cliWithInput(configRoot, ['player', 'login'], 'demo-player-password\n')) as { status?: string; account?: { handle?: string } };
+    const login = JSON.parse(await cliWithInput(configRoot, ['player', 'login'], 'demo-player-password\n')) as { status?: string; account?: { handle?: string }; clientToken?: string };
     assert.equal(login.status, 'signed-in');
     assert.equal(login.account?.handle, `@player@${host}`);
+    assert.equal(Object.hasOwn(login, 'clientToken'), false, 'login stdout never includes the raw client token');
     assert.equal(JSON.stringify(login).includes('demo-player-password'), false);
     assert.equal((await readFile(join(configRoot, 'runtime-config.json'), 'utf8')).includes('demo-player-password'), false);
+
+    const playerSessionPath = clientSessionPathFor('player');
+    const storedSession = JSON.parse(await readFile(playerSessionPath, 'utf8')) as { origin?: string; handle?: string; accountId?: string; clientToken?: string };
+    assert.equal(storedSession.origin, demo.origins.client);
+    assert.equal(storedSession.handle, `@player@${host}`);
+    assert.equal(typeof storedSession.accountId, 'string');
+    assert.equal(typeof storedSession.clientToken, 'string');
+    assert.equal(JSON.stringify(login).includes(String(storedSession.clientToken)), false, 'login stdout omits the stored client token');
+    assert.equal((await stat(playerSessionPath)).mode & 0o777, 0o600, 'the client session file is private');
+    assert.equal((await stat(join(configRoot, 'runtime', 'cli-live', 'player'))).mode & 0o777, 0o700, 'the account runtime directory is private');
 
     const publicPage = JSON.parse(await cli(configRoot, ['player', 'page', '/api/servers'])) as { servers?: unknown; authorities?: unknown };
     assert.equal(typeof publicPage.servers, 'object');
@@ -59,10 +73,33 @@ test('spawned API commands use the live application without a browser while DOM 
 
     const rendered = await cli(configRoot, ['player', 'open']);
     assert.match(rendered, /FCTP Browser Client/);
-    assert.match(rendered, new RegExp(host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.match(rendered, /No known accounts/, 'the DOM browser does not share the API harness client session');
+    assert.equal(rendered.includes(`@player@${host}`), false, 'the browser has no account before its own login');
     const health = JSON.parse(await cli(configRoot, ['player', 'page', '/api/health'])) as { status?: string };
     assert.equal(health.status, 'ok', 'API stays available while the DOM worker uses the shared application origin');
     await cli(configRoot, ['player', 'close']);
+
+    const governorSessionPath = clientSessionPathFor('governor');
+    await mkdir(dirname(governorSessionPath), { recursive: true, mode: 0o700 });
+    await writeFile(governorSessionPath, await readFile(playerSessionPath, 'utf8'), { mode: 0o600 });
+    await assert.rejects(cli(configRoot, ['governor', 'page', '/api/accounts']), /session|sign|credential|401|account/i, 'a session bound to another handle is not used');
+    await rm(governorSessionPath, { force: true });
+
+    const secondSessionPath = clientSessionPathFor('player-2');
+    await mkdir(dirname(secondSessionPath), { recursive: true, mode: 0o700 });
+    const otherOrigin = { ...storedSession, origin: 'http://127.0.0.1:1' };
+    await writeFile(secondSessionPath, JSON.stringify(otherOrigin), { mode: 0o600 });
+    await assert.rejects(cli(configRoot, ['player-2', 'page', '/api/accounts']), /session|sign|credential|401|account/i, 'a session bound to another origin is not used');
+    await rm(secondSessionPath, { force: true });
+
+    await symlink(playerSessionPath, governorSessionPath);
+    await assert.rejects(cli(configRoot, ['governor', 'page', '/api/accounts']), /regular file|session/i, 'a symlinked session file is rejected rather than followed');
+    await rm(governorSessionPath, { force: true });
+
+    const logout = JSON.parse(await cli(configRoot, ['player', 'logout'])) as { account?: { login?: { status?: string } } };
+    assert.equal(logout.account?.login?.status, 'signed-out');
+    await assert.rejects(lstat(playerSessionPath), /ENOENT|no such file/i, 'a successful logout removes the saved client session');
+    await assert.rejects(cli(configRoot, ['player', 'page', '/api/accounts']), /session|sign|credential|401|account/i, 'a removed session cannot be reused');
   } finally {
     await demo.close();
     await rm(directory, { recursive: true, force: true });

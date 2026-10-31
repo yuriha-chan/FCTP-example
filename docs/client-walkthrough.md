@@ -4,9 +4,15 @@ Start the local demo with `npm run dev` and open <http://127.0.0.1:4103>. The sa
 
 ## Sign in
 
-Use the **Accounts** section's **Handle**, **Password**, and optional **Home origin** fields. Home verifies the password; the client application retains the login credential and presents only public account state. Select a signed-in account to scope Explore, Author & Publish, Logistics & Production, Activity, and Administration.
+Use the **Accounts** section's **Handle**, **Password**, and optional **Home origin** fields. Home verifies the password; the client application retains the Home-issued native token and presents only public account state. A successful login also returns a client session token (`clientToken`). The browser stores per-account `{accountId, handle, clientToken}` sessions in `localStorage` and sends `Authorization: Bearer <clientToken>` on account-scoped application requests for that handle. The native token stays in the client web server and is never sent to the browser. Select a signed-in account to scope Explore, Author & Publish, Logistics & Production, Activity, and Administration.
+
+Sign in separately for each account; sessions for different handles are independent, and multiple sessions for one account may coexist.
 
 The demo fixture provides development accounts described in the [browser harness guide](browser-harness.md#start-the-local-demo). Sign in with the handle and password; the browser does not need a manually copied native token or a role-specific session form.
+
+## Log out
+
+Log out of an account from its **Log out** control. This removes only the current browser session for that account. When no client session remains for the handle, the client login state becomes signed out; discovered servers and public resource identities remain. Logout does not revoke the Home native token. Client sessions do not implicitly expire, and disabling an account at Home does not synchronize to an existing session.
 
 ## Discover and use visible actions
 

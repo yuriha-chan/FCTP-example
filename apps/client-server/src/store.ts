@@ -9,9 +9,11 @@ export interface ClientApplicationState {
 export async function openClientState(storeFile: string): Promise<ClientApplicationState> {
   const store = new JsonSnapshotStore(storeFile);
   await store.open();
-  if (await store.read((snapshot) => snapshot.domain.client === undefined)) {
+  const client = await store.read((snapshot) => snapshot.domain.client as ClientState | undefined);
+  if (client === undefined || client.clientSessions === undefined) {
     await store.transaction((draft) => {
       draft.domain.client ??= emptyClientState();
+      (draft.domain.client as ClientState).clientSessions ??= {};
     });
   }
   return {

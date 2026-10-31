@@ -108,6 +108,7 @@ export function setupApplicationControls(options: ApplicationControlsOptions = {
   let selectedAccountId: string | undefined;
   let servers: ServerRecord[] = [];
   let authorities: AuthorityRecord[] = [];
+  let accountRevision = 0;
 
   const notifyAccountSelected = (): void => {
     options.onAccountSelected?.(accounts.find((account) => account.id === selectedAccountId));
@@ -124,23 +125,33 @@ export function setupApplicationControls(options: ApplicationControlsOptions = {
   };
 
   const refreshAccounts = async (): Promise<void> => {
+    const revision = accountRevision;
+    const hadAccounts = accounts.length > 0;
     try {
-      accounts = (await readAccounts()).accounts;
+      const result = (await readAccounts()).accounts;
+      if (revision !== accountRevision) return;
+      accounts = result;
       const selected = accounts.find((account) => account.id === selectedAccountId);
-      accountStatus.textContent = selected ? `${statusLabel(selected)} · ${selected.handle}` : 'No account selected.';
+      if (!selected) selectedAccountId = undefined;
+      accountStatus.textContent = selected
+        ? `${statusLabel(selected)} · ${selected.handle}`
+        : accounts.length === 0 && hadAccounts ? 'Signed out.' : 'No account selected.';
       notifyAccountSelected();
     } catch {
+      if (revision !== accountRevision) return;
       accountStatus.textContent = 'Application account API unavailable.';
     }
     renderAccountList();
   };
 
   const performLogout = async (accountId: string): Promise<void> => {
+    accountRevision += 1;
     document.documentElement.dataset.clientBusy = 'true';
     try {
       const result = await logoutAccount(accountId);
-      accounts = accounts.map((account) => account.id === result.account.id ? result.account : account);
-      accountStatus.textContent = `${statusLabel(result.account)} · ${result.account.handle}`;
+      accounts = accounts.filter((account) => account.id !== result.account.id);
+      if (selectedAccountId === result.account.id) selectedAccountId = undefined;
+      accountStatus.textContent = `Signed out · ${result.account.handle}`;
       notifyAccountSelected();
     } catch (error) {
       accountStatus.textContent = `Log out failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -168,6 +179,7 @@ export function setupApplicationControls(options: ApplicationControlsOptions = {
     const homeOrigin = field(loginForm, 'homeOrigin');
     if (!handle || !password) return;
     const value = password.value;
+    accountRevision += 1;
     document.documentElement.dataset.clientBusy = 'true';
     void (async () => {
       try {
@@ -222,6 +234,7 @@ export function setupApplicationControls(options: ApplicationControlsOptions = {
     })();
   });
 
+  globalThis.addEventListener('fctp-client-sessions-changed', () => { void refreshAccounts(); });
   void refreshAccounts();
   void refreshServers();
 }

@@ -2,10 +2,10 @@
 
 `scripts/browser.mjs` is the role harness for a local FCTP run. It has two independent paths:
 
-- **Application commands** (`login`, `page`, `action`, `result`) call the client application API directly, return the same JSON page models and action records the browser client consumes, and do not start a browser or worker.
+- **Application commands** (`login`, `logout`, `page`, `action`, `result`) call the client application API directly, return the same JSON page models and action records the browser client consumes, and do not start a browser or worker.
 - **DOM commands** (`open`, `view`, `fill`, `select`, `click`, `submit`, `batch`, `back`, `reload`, `close`) open the configured client origin in Chromium and operate visible controls. They are rendering and interaction checks, not a gameplay API.
 
-`scripts/browser-api.mjs` exports `createApplicationTransport({ origin, account, fetch? })`. The transport posts login requests to the configured client application, resolves the configured account's retained ID from `GET /api/accounts`, injects that scope into page and action requests, and never retains credentials or native tokens.
+`scripts/browser-api.mjs` exports `createApplicationTransport({ origin, account, fetch?, clientSession?, onSessionChanged? })`. A successful login returns the application account and a client session token. The transport keeps `{accountId, handle, clientToken}` in memory, validates the configured handle and the returned account binding, resolves the account through authenticated `GET /api/accounts`, and attaches only that session as `Authorization: Bearer` to account requests. The optional `clientSession` resumes a caller-owned session without logging in again, and the optional `onSessionChanged(session | null)` callback lets the caller persist or clear it. The transport never retains passwords or native tokens. Public reads work before login; account-scoped reads and actions fail without a matching session.
 
 ## Install and build
 
@@ -70,18 +70,19 @@ The harness reads `runtime-config.json` from `run/` by default. Set `FCTP_BROWSE
 }
 ```
 
-Account names are unique public CLI names using lowercase letters and digits, with optional hyphen-separated segments. `handle` identifies the Home account. `homeOrigin` is optional when the handle's server host is sufficient. The configuration contains no passwords. Sockets, audit records, and startup diagnostics live under `<config-root>/runtime/<runId>/<account>/`.
+Account names are unique public CLI names using lowercase letters and digits, with optional hyphen-separated segments. `handle` identifies the Home account. `homeOrigin` is optional when the handle's server host is sufficient. The configuration contains no passwords. Sockets, audit records, startup diagnostics, and the saved client session live under `<config-root>/runtime/<runId>/<account>/`. The `client-session.json` file is a private regular file (`0600`) in a private directory (`0700`). It stores the origin, handle, account ID, and client session token, is replaced atomically, and is rejected rather than followed when the path is a symlink or another non-regular file. A saved session is used only when its origin and handle match the runtime configuration.
 
 ## Application commands
 
 ```text
 node scripts/browser.mjs <account> login
+node scripts/browser.mjs <account> logout
 node scripts/browser.mjs <account> page <path>
 node scripts/browser.mjs <account> action '<descriptor JSON>' '<inputs JSON>'
 node scripts/browser.mjs <account> result <actionId>
 ```
 
-`login` reads the password from standard input and strips one trailing newline. Passwords are never accepted as command operands, placed in the runtime configuration, or printed. For example:
+`login` reads the password from standard input and strips one trailing newline. Passwords are never accepted as command operands, placed in the runtime configuration, or printed. The login command saves the returned client session to the account's private runtime directory but omits the raw `clientToken` from standard output. Later commands in other processes reuse the saved session. `logout` revokes the saved session and removes the file only after the application accepts the logout. For example:
 
 ```sh
 read -r -s PASSWORD
@@ -93,9 +94,9 @@ node scripts/browser.mjs player page /api/accounts
 node scripts/browser.mjs player page /api/servers
 ```
 
-`page` reads an application path and prints the parsed JSON returned by the client application. A signed-in account's scope is appended from the configured handle; a caller-supplied `accountId` is replaced, not trusted. Public reads such as `/api/servers` and `/api/explore/places` work before login.
+`page` reads an application path and prints the parsed JSON returned by the client application. A signed-in account's scope is appended from the configured handle and the request carries that account's client session; a caller-supplied `accountId` is replaced, not trusted. Public reads such as `/api/servers` and unscoped `/api/explore/places` work before login.
 
-`action` sends an `ActionDescriptor` and an inputs object. The descriptor must have no blockers, use `POST`, and target a same-origin `/api` path with no query, fragment, userinfo, or world proxy. Redirects are refused. The configured account scope is injected. A conflicting `accountId` or another account's logout path is rejected; password login uses the dedicated `login` command. Example:
+`action` sends an `ActionDescriptor` and an inputs object. The descriptor must have no blockers, use `POST`, and target a same-origin `/api` path with no query, fragment, userinfo, or world proxy. Redirects are refused. The configured account scope and client session are attached. A conflicting `accountId` or another account's logout path is rejected; password login uses the dedicated `login` command. A successful logout action clears the saved session. Example:
 
 ```sh
 node scripts/browser.mjs player action \
@@ -109,7 +110,7 @@ node scripts/browser.mjs player result 'action:<id>'
 
 `result` reads one retained action record for the configured account scope. It does not refresh or contact a world service.
 
-Application command failures are bounded and readable. They include the HTTP status or a short reason, but never a password or native token.
+Application command failures are bounded and readable. They include the HTTP status or a short reason, but never a password, client session token, or native token.
 
 ### Transport use in scripts
 
@@ -118,7 +119,10 @@ import { createApplicationTransport } from './scripts/browser-api.mjs';
 
 const transport = createApplicationTransport({
   origin: 'http://127.0.0.1:4103',
-  account: { name: 'player', handle: '@player@127.0.0.1:4100', homeOrigin: 'http://127.0.0.1:4100' }
+  account: { name: 'player', handle: '@player@127.0.0.1:4100', homeOrigin: 'http://127.0.0.1:4100' },
+  onSessionChanged: async (session) => {
+    // Persist or clear the caller-owned {accountId, handle, clientToken} session.
+  }
 });
 
 await transport.login('demo-player-password');
@@ -129,7 +133,7 @@ const places = await transport.action({
 console.log(places.data);
 ```
 
-The optional `fetch` argument injects a compatible fetch implementation for tests or bounded clients.
+The optional `fetch` argument injects a compatible fetch implementation for tests or bounded clients. The optional `clientSession` argument resumes a saved session. Concurrent transports with different accounts keep independent sessions and never share tokens.
 
 ## DOM rendering commands
 
@@ -173,6 +177,6 @@ Visible input/select values appear in snapshots. Password inputs and controls wh
 
 ## Boundaries
 
-The application commands exercise the same account login, page reads, action submission, and retained action records as the client application. Gameplay assertions through the harness use `createApplicationTransport`, not direct world POSTs, manual native-token injection, or private service mutation. DOM checks verify rendering and visible controls separately.
+The application commands exercise the same account login, client session, page reads, action submission, and retained action records as the client application. Gameplay assertions through the harness use `createApplicationTransport`, not direct world POSTs, manual native-token injection, or private service mutation. The browser client keeps its own per-account client sessions in `localStorage`, retaining sign-in after closing and reopening the browser. Explicit logout revokes the requesting token and removes that account's local session. DOM checks verify rendering and visible controls separately.
 
 The older `run/game.mjs` and `run/manuals/player.md` are historical API provenance for supervisor/archive tooling, not an active browser gameplay path. Board and observer archive commands are separate tools.

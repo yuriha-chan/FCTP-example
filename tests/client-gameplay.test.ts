@@ -20,10 +20,18 @@ interface ApplicationTransport {
   result(actionId: string): Promise<PageResponse<{ action: ActionRecord }>>;
 }
 
+interface ClientSession {
+  accountId: string;
+  handle: string;
+  clientToken: string;
+}
+
 type ApplicationTransportFactory = (options: {
   origin: string;
   account: ApplicationAccount;
   fetch?: typeof fetch;
+  clientSession?: ClientSession;
+  onSessionChanged?: (session: ClientSession | null) => void;
 }) => ApplicationTransport;
 
 async function loadTransport(): Promise<ApplicationTransportFactory> {
@@ -209,7 +217,16 @@ test('a complete game runs through the application transport, survives restart, 
       second: { name: 'player-2', handle: `@player-2@${host}`, homeOrigin: demo.origins.authority },
       governor: { name: 'governor', handle: `@governor@${host}`, homeOrigin: demo.origins.authority }
     } satisfies Record<string, ApplicationAccount>;
-    const make = (account: ApplicationAccount): ApplicationTransport => createTransport({ origin: demo.origins.client, account });
+    const sessions = new Map<string, ClientSession>();
+    const make = (account: ApplicationAccount): ApplicationTransport => createTransport({
+      origin: demo.origins.client,
+      account,
+      ...(sessions.has(account.handle) ? { clientSession: sessions.get(account.handle)! } : {}),
+      onSessionChanged: (session) => {
+        if (session) sessions.set(account.handle, session);
+        else sessions.delete(account.handle);
+      }
+    });
     let first = make(accounts.first);
     let second = make(accounts.second);
     let governor = make(accounts.governor);
@@ -419,7 +436,9 @@ test('a complete game runs through the application transport, survives restart, 
 
     const recoveredAccounts = records(record(await first.page('/api/accounts')).accounts);
     assert.ok(recoveredAccounts.some((account) => account.id === firstId && record(account.login).status === 'signed-in'));
-    assert.ok(recoveredAccounts.some((account) => account.id === secondId && record(account.login).status === 'signed-in'));
+    assert.equal(recoveredAccounts.length, 1, 'a session lists only its own account');
+    const recoveredSecondAccounts = records(record(await second.page('/api/accounts')).accounts);
+    assert.ok(recoveredSecondAccounts.some((account) => account.id === secondId && record(account.login).status === 'signed-in'));
     const recoveredDraft = record(record(await first.page(`/api/drafts/${encodeURIComponent(assetDraftId)}`)).draft);
     assert.equal(recoveredDraft.id, assetDraftId, 'drafts recover from the same client store');
     const recoveredPlan = record(pageData(await first.page(`/api/explore/routes/${encodeURIComponent(planId)}`)).plan);

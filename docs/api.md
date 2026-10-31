@@ -65,3 +65,11 @@ Cargo entries preserve Item (`{ id, variety, data }`) versus Stack (`{ variety, 
 ## Browser and service setup
 
 The launcher serves the client at `http://127.0.0.1:4103`; default services are loopback HTTP on ports 4100–4102. Admin service secrets default to `demo-authority-admin`, `demo-policy-admin`, and `demo-sim-admin`; environment overrides are `DEMO_AUTHORITY_ADMIN_SECRET`, `DEMO_POLICY_ADMIN_SECRET`, and `DEMO_SIM_ADMIN_SECRET`. `FCTP_DATA_DIR` changes the default persistent `.fctp-data` directory, including `client.store.json` and the world stores. The demo provisions two Players and a governor account with development passwords documented in the [browser harness guide](browser-harness.md#start-the-local-demo); passwords are entered through the client application or harness login and are not part of public configuration.
+
+## Client application sessions
+
+The client server also serves application routes under `/api/` at the client origin. These are separate from the `/local/` world APIs above; the world APIs keep their native, diplomatic, and administrator authentication.
+
+`POST /api/accounts/login` accepts `{ handle, password, homeOrigin? }` and returns the public account/login state plus a client session token (`clientToken`, S). The Home-issued native token (T) stays in client web server account state and is never returned to the browser or harness. Account-scoped application requests use `Authorization: Bearer S` for the handle bound to that session. Multiple S sessions may coexist for one account and across accounts.
+
+`GET /api/accounts` requires Bearer S and returns only the authenticated session's own account, never another account or a credential projection. Logout deletes only the current S and, when no S remains for the handle, clears the client login state; it does not revoke T at Home. Client sessions have no implicit expiry, and Home availability changes do not synchronize to existing sessions.

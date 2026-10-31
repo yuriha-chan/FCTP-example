@@ -8,6 +8,7 @@ export interface AccountLoginResponse {
   account?: PublicAccountRecord;
   status: string;
   reason?: string;
+  clientToken?: string;
 }
 
 export interface AccountLogoutResponse {
@@ -19,6 +20,97 @@ export interface ServerListResponse {
   authorities: AuthorityRecord[];
 }
 
+export interface ClientSession {
+  accountId: string;
+  handle: string;
+  clientToken: string;
+}
+
+const CLIENT_SESSIONS_KEY = 'fctp.client-sessions';
+const CLIENT_SESSIONS_EVENT = 'fctp-client-sessions-changed';
+
+class ApplicationRequestError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
+function isClientSession(value: unknown): value is ClientSession {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.accountId === 'string' && Boolean(record.accountId)
+    && typeof record.handle === 'string' && Boolean(record.handle)
+    && typeof record.clientToken === 'string' && Boolean(record.clientToken);
+}
+
+function readSessions(): ClientSession[] {
+  const raw = globalThis.localStorage.getItem(CLIENT_SESSIONS_KEY);
+  if (!raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch (error) {
+    if (error instanceof SyntaxError) return [];
+    throw error;
+  }
+  return Array.isArray(parsed) ? parsed.filter(isClientSession) : [];
+}
+
+function writeSessions(sessions: readonly ClientSession[]): void {
+  globalThis.localStorage.setItem(CLIENT_SESSIONS_KEY, JSON.stringify(sessions));
+}
+
+function sessionFor(accountId: string): ClientSession | undefined {
+  return readSessions().find((session) => session.accountId === accountId);
+}
+
+function saveSession(session: ClientSession): void {
+  writeSessions([...readSessions().filter((candidate) => candidate.accountId !== session.accountId), session]);
+}
+
+function removeSession(accountId: string, clientToken: string): void {
+  writeSessions(readSessions().filter((session) => !(session.accountId === accountId && session.clientToken === clientToken)));
+}
+
+function notifySessionExpired(): void {
+  globalThis.dispatchEvent(new Event(CLIENT_SESSIONS_EVENT));
+}
+
+function decodedPathAccountId(pathname: string): string | undefined {
+  const match = /^\/api\/accounts\/([^/]+)\/logout$/.exec(pathname);
+  if (!match) return undefined;
+  try {
+    return decodeURIComponent(match[1]!);
+  } catch (error) {
+    if (error instanceof URIError) return undefined;
+    throw error;
+  }
+}
+
+function bodyAccountId(init?: RequestInit): string | undefined {
+  if (typeof init?.body !== 'string') return undefined;
+  let body: unknown;
+  try {
+    body = JSON.parse(init.body) as unknown;
+  } catch (error) {
+    if (error instanceof SyntaxError) return undefined;
+    throw error;
+  }
+  if (typeof body !== 'object' || body === null) return undefined;
+  const accountId = (body as Record<string, unknown>).accountId;
+  return typeof accountId === 'string' && accountId ? accountId : undefined;
+}
+
+function requestAccountId(path: string, init?: RequestInit): string | undefined {
+  const url = new URL(path, 'http://client.invalid');
+  const queryAccountId = url.searchParams.get('accountId');
+  if (queryAccountId) return queryAccountId;
+  return bodyAccountId(init) ?? decodedPathAccountId(url.pathname);
+}
+
 function errorMessage(body: unknown, status: number): string {
   if (typeof body === 'object' && body !== null) {
     const record = body as Record<string, unknown>;
@@ -28,34 +120,82 @@ function errorMessage(body: unknown, status: number): string {
   return `Application request failed: HTTP ${status}`;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+function redact(message: string, secrets: readonly (string | undefined)[]): string {
+  let redacted = message;
+  for (const secret of secrets) {
+    if (secret) redacted = redacted.replaceAll(secret, '[REDACTED]');
+  }
+  return redacted;
+}
+
+interface RequestOptions {
+  session?: ClientSession;
+  accountId?: string;
+  clearOnUnauthorized?: boolean;
+  secrets?: readonly (string | undefined)[];
+}
+
+async function request<T>(path: string, init?: RequestInit, options: RequestOptions = {}): Promise<T> {
+  const accountId = options.accountId ?? requestAccountId(path, init);
+  const session = options.session ?? (accountId === undefined ? undefined : sessionFor(accountId));
   const response = await fetch(path, {
     cache: 'no-store',
     ...init,
     headers: {
       ...(init?.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      ...(session === undefined ? {} : { Authorization: `Bearer ${session.clientToken}` }),
       ...(init?.headers ?? {})
     }
   });
   const text = await response.text();
   const body: unknown = text ? JSON.parse(text) as unknown : undefined;
-  if (!response.ok) throw new Error(errorMessage(body, response.status));
+  if (!response.ok) {
+    if (response.status === 401 && session !== undefined && options.clearOnUnauthorized !== false) {
+      removeSession(session.accountId, session.clientToken);
+      notifySessionExpired();
+    }
+    throw new ApplicationRequestError(redact(errorMessage(body, response.status), [session?.clientToken, ...(options.secrets ?? [])]), response.status);
+  }
   return body as T;
 }
 
-export function readAccounts(): Promise<AccountListResponse> {
-  return request('/api/accounts');
+export async function readAccounts(): Promise<AccountListResponse> {
+  const sessions = readSessions();
+  const accounts: PublicAccountRecord[] = [];
+  for (const session of sessions) {
+    try {
+      const page = await request<AccountListResponse>('/api/accounts', undefined, { session });
+      const account = page.accounts.find((candidate) => candidate.id === session.accountId && candidate.handle === session.handle);
+      if (account) accounts.push(account);
+      else removeSession(session.accountId, session.clientToken);
+    } catch (error) {
+      if (error instanceof ApplicationRequestError && error.status === 401) continue;
+      throw error;
+    }
+  }
+  return { accounts };
 }
 
-export function loginAccount(input: { handle: string; password: string; homeOrigin?: string }): Promise<AccountLoginResponse> {
-  return request('/api/accounts/login', {
+export async function loginAccount(input: { handle: string; password: string; homeOrigin?: string }): Promise<AccountLoginResponse> {
+  const result = await request<AccountLoginResponse>('/api/accounts/login', {
     method: 'POST',
     body: JSON.stringify({ handle: input.handle, password: input.password, ...(input.homeOrigin ? { homeOrigin: input.homeOrigin } : {}) })
-  });
+  }, { secrets: [input.password] });
+  if (result.status === 'signed-in') {
+    if (!result.account || !result.account.id || !result.clientToken) throw new Error('Application login did not return a client session');
+    saveSession({ accountId: result.account.id, handle: result.account.handle, clientToken: result.clientToken });
+  }
+  return result;
 }
 
-export function logoutAccount(accountId: string): Promise<AccountLogoutResponse> {
-  return request(`/api/accounts/${encodeURIComponent(accountId)}/logout`, { method: 'POST' });
+export async function logoutAccount(accountId: string): Promise<AccountLogoutResponse> {
+  const session = sessionFor(accountId);
+  const result = await request<AccountLogoutResponse>(`/api/accounts/${encodeURIComponent(accountId)}/logout`, { method: 'POST' }, {
+    ...(session === undefined ? { accountId } : { session }),
+    clearOnUnauthorized: false
+  });
+  if (session !== undefined) removeSession(accountId, session.clientToken);
+  return result;
 }
 
 export function readServers(): Promise<ServerListResponse> {
