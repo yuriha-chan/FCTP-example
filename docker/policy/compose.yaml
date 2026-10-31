@@ -1,0 +1,23 @@
+name: fctp-policy
+services:
+  policy:
+    build:
+      context: ../..
+      dockerfile: docker/policy/Dockerfile
+    image: fctp-policy:local
+    init: true
+    stop_grace_period: 30s
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:4101:8080"
+    volumes:
+      - policy-data:/data
+      - ./config.json:/config/config.json:ro
+      - ./secrets:/run/secrets:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/local/info').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+volumes:
+  policy-data:

@@ -1,0 +1,11 @@
+{
+  "listenHost": "0.0.0.0",
+  "port": 8080,
+  "dataDir": "/data",
+  "origin": "https://simulation.example.org",
+  "workerIntervalMs": 1000,
+  "adminSecretFile": "/run/secrets/admin-secret",
+  "authorityOrigin": "https://authority.example.org",
+  "peerOrigin": "https://west.example.org",
+  "playerNames": ["player", "player-2"]
+}

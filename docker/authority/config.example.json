@@ -1,0 +1,15 @@
+{
+  "listenHost": "0.0.0.0",
+  "port": 8080,
+  "dataDir": "/data",
+  "origin": "https://authority.example.org",
+  "workerIntervalMs": 1000,
+  "adminSecretFile": "/run/secrets/admin-secret",
+  "playerNames": ["player", "player-2"],
+  "administratorNames": ["governor"],
+  "vesselNames": {
+    "player": "player-vessel",
+    "player-2": "player-2-vessel"
+  },
+  "accountPasswordsFile": "/run/secrets/account-passwords.json"
+}

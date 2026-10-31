@@ -1,0 +1,34 @@
+{
+  "listenHost": "0.0.0.0",
+  "port": 8080,
+  "dataDir": "/data",
+  "origin": "https://client.example.org",
+  "workerIntervalMs": 1000,
+  "seedServers": [
+    "https://authority.example.org",
+    "https://west.example.org",
+    "https://simulation.example.org"
+  ],
+  "administratorBindings": [
+    {
+      "accountId": "@governor@authority.example.org",
+      "authorityActorIds": ["https://authority.example.org/actors/registry"],
+      "credentialSource": "authority-administrator"
+    },
+    {
+      "accountId": "@governor@authority.example.org",
+      "authorityActorIds": ["https://west.example.org/actors/territory"],
+      "credentialSource": "policy-administrator"
+    },
+    {
+      "accountId": "@governor@authority.example.org",
+      "authorityActorIds": ["https://simulation.example.org/actors/territory"],
+      "credentialSource": "simulation-administrator"
+    }
+  ],
+  "administratorCredentialFiles": {
+    "authority-administrator": "/run/secrets/authority-admin-secret",
+    "policy-administrator": "/run/secrets/policy-admin-secret",
+    "simulation-administrator": "/run/secrets/simulation-admin-secret"
+  }
+}

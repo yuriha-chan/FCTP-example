@@ -18,6 +18,8 @@ Start at <http://127.0.0.1:4103> and follow [the client walkthrough](docs/client
 
 Player sessions also have a **Player creations** area for authoring text Assets and Variety definitions. The local native-auth API and public discovery/resource boundary are documented in [the local API reference](docs/api.md); the visible workflow is in [the client walkthrough](docs/client-walkthrough.md).
 
+For independently operated Authority, Policy Territory, Simulation Territory, and Client containers, see the [separate Docker deployment guide](docs/deployment.md).
+
 Another Player can read published Asset text through a Player's public `creations` collection. Text media controls attempt the public unauthenticated GET first; only a 401 or 403 with a native token falls back to the Actor-scoped read, and 404 or other failures remain visible. Territory A records Player-initiated mine, manufacture, transfer, load, and unload audit entries with the authenticated Player URI; entry prepare-vessel and departure exit-vessel record the verified Registry sender. A also accepts an optional local `varietyPortPolicy` map keyed by canonical Variety URI: a missing key allows load/unload, and `deny` rejects before mutation. This is local A policy, not an FCTP field, with no B equivalent. Authored Variety Production remains descriptive and is not executed or made portable.
 
 A pre-game package under `run/harbor/` contains the advertisement, Arrivals guidance, out-of-character developer desk, participant reflection guidance, and observer reporting guidance. No world was launched and no ticks advanced; `run/` is excluded from Git, so the package is preparation only.

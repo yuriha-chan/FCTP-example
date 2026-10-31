@@ -1,0 +1,23 @@
+name: fctp-client
+services:
+  client:
+    build:
+      context: ../..
+      dockerfile: docker/client/Dockerfile
+    image: fctp-client:local
+    init: true
+    stop_grace_period: 30s
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:4103:8080"
+    volumes:
+      - client-data:/data
+      - ./config.json:/config/config.json:ro
+      - ./secrets:/run/secrets:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+volumes:
+  client-data:
