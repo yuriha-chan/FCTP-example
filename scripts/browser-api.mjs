@@ -58,7 +58,7 @@ export function createApplicationTransport({ origin, account, fetch: injectedFet
   if (!isRecord(account) || typeof account.name !== 'string' || !account.name || typeof account.handle !== 'string' || !account.handle) {
     throw new TypeError('A configured account with a name and handle is required');
   }
-  const homeOrigin = account.homeOrigin === undefined ? undefined : normalizeOrigin(account.homeOrigin, 'account home origin');
+  if (Object.hasOwn(account, 'homeOrigin')) throw new TypeError('Account homeOrigin is not supported; login origin is derived from the handle');
   const fetcher = injectedFetch ?? globalThis.fetch;
   if (typeof fetcher !== 'function') throw new TypeError('A fetch implementation is required');
   if (onSessionChanged !== undefined && typeof onSessionChanged !== 'function') throw new TypeError('A session callback must be a function');
@@ -135,8 +135,7 @@ export function createApplicationTransport({ origin, account, fetch: injectedFet
       if (typeof password !== 'string' || !password) throw new TypeError('A password is required');
       const body = {
         handle: account.handle,
-        password,
-        ...(homeOrigin === undefined ? {} : { homeOrigin })
+        password
       };
       const result = await request('POST', new URL('/api/accounts/login', transportOrigin), body, { session: undefined });
       if (!isRecord(result) || result.status !== 'signed-in') {

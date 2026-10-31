@@ -131,9 +131,8 @@ export function createDiscoveryService(state: ClientApplicationState, fetcher: t
 
   const discoverHandle = async (value: string): Promise<DiscoveryResult> => {
     const parsed = parseHandle(value);
-    const origin = await retainedOrigin(parsed.server);
     if (parsed.kind === 'account') {
-      const resolution = await sdk.resolveAccount(value, origin === undefined ? {} : { homeOrigin: origin });
+      const resolution = await sdk.resolveAccount(value);
       const home = await sdk.resolveActor(resolution.homeAuthority);
       const role = roleOf(home.actor as unknown as Record<string, unknown>);
       const handle = actorHandle(home.actor as unknown as Record<string, unknown>);
@@ -150,6 +149,7 @@ export function createDiscoveryService(state: ClientApplicationState, fetcher: t
       };
       return retain(server, authorities);
     }
+    const origin = await retainedOrigin(parsed.server);
     const resolution = await sdk.resolveAuthority(value, origin === undefined ? {} : { origin });
     const role = roleOf(resolution.actor as unknown as Record<string, unknown>);
     const roles = role === undefined ? resolution.roles.filter((entry): entry is AuthorityRole => authorityRoles.has(entry as AuthorityRole)) : [role];

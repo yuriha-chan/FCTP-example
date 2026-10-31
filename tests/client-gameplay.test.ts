@@ -10,7 +10,6 @@ import { startDemo } from '../apps/demo/src/launcher.js';
 interface ApplicationAccount {
   name: string;
   handle: string;
-  homeOrigin?: string;
 }
 
 interface ApplicationTransport {
@@ -213,9 +212,9 @@ test('a complete game runs through the application transport, survives restart, 
     const createTransport = await loadTransport();
     const host = new URL(demo.origins.authority).host;
     const accounts = {
-      first: { name: 'player', handle: `@player@${host}`, homeOrigin: demo.origins.authority },
-      second: { name: 'player-2', handle: `@player-2@${host}`, homeOrigin: demo.origins.authority },
-      governor: { name: 'governor', handle: `@governor@${host}`, homeOrigin: demo.origins.authority }
+      first: { name: 'player', handle: `@player@${host}` },
+      second: { name: 'player-2', handle: `@player-2@${host}` },
+      governor: { name: 'governor', handle: `@governor@${host}` }
     } satisfies Record<string, ApplicationAccount>;
     const sessions = new Map<string, ClientSession>();
     const make = (account: ApplicationAccount): ApplicationTransport => createTransport({

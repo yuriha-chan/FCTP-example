@@ -340,13 +340,13 @@ const secondLoginAccount: FixtureHomeAccount = {
 };
 
 const firstHome: FixtureHome = {
-  origin: 'http://first.test:4200',
+  origin: 'https://first.test:4200',
   homeActorId: firstAccount.homeAuthority!,
   accounts: [firstLoginAccount]
 };
 
 const secondHome: FixtureHome = {
-  origin: 'http://second.test:4200',
+  origin: 'https://second.test:4200',
   homeActorId: secondAccount.homeAuthority!,
   accounts: [secondLoginAccount]
 };
@@ -552,8 +552,8 @@ test('logs in distinct accounts concurrently and retains them across restart whi
   let opened = await openFixtureApplication(storeFile, fixture.fetch);
   try {
     const [firstResponse, secondResponse] = await Promise.all([
-      fetch(new URL('/api/accounts/login', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: firstLoginAccount.handle, password: firstLoginAccount.password, homeOrigin: firstHome.origin }) }),
-      fetch(new URL('/api/accounts/login', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: secondLoginAccount.handle, password: secondLoginAccount.password, homeOrigin: secondHome.origin }) })
+      fetch(new URL('/api/accounts/login', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: firstLoginAccount.handle, password: firstLoginAccount.password }) }),
+      fetch(new URL('/api/accounts/login', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: secondLoginAccount.handle, password: secondLoginAccount.password }) })
     ]);
     assert.equal(firstResponse.status, 200);
     assert.equal(secondResponse.status, 200);
@@ -621,12 +621,16 @@ test('logs in distinct accounts concurrently and retains them across restart whi
 test('rejected and unavailable logins return client errors without retaining signed-in tokens', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-client-login-errors-'));
   const storeFile = join(directory, 'client.store.json');
-  const blocked: FixtureHomeAccount = { handle: '@blocked@blocked.test', actorId: 'http://blocked.test/actors/blocked', password: 'blocked-password', nativeToken: 'blocked-native-token', unavailable: true };
+  const blocked: FixtureHomeAccount = { handle: '@blocked@blocked.test', actorId: 'https://blocked.test/actors/blocked', password: 'blocked-password', nativeToken: 'blocked-native-token', unavailable: true };
   const home = fixtureHomes()[0]!;
-  const fixture = createFixtureFetch([home, { origin: 'http://blocked.test', homeActorId: 'http://blocked.test/actors/home', accounts: [blocked] }], []);
+  const fixture = createFixtureFetch([home, { origin: 'https://blocked.test', homeActorId: 'https://blocked.test/actors/home', accounts: [blocked] }], []);
   const opened = await openFixtureApplication(storeFile, fixture.fetch);
   try {
-    const rejectedResponse = await fetch(new URL('/api/accounts/login', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: firstLoginAccount.handle, password: 'wrong-password', homeOrigin: home.origin }) });
+    const obsoleteResponse = await fetch(new URL('/api/accounts/login', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: firstLoginAccount.handle, password: firstLoginAccount.password, homeOrigin: home.origin }) });
+    assert.equal(obsoleteResponse.status, 400);
+    assert.ok((await obsoleteResponse.text()).length > 0);
+
+    const rejectedResponse = await fetch(new URL('/api/accounts/login', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: firstLoginAccount.handle, password: 'wrong-password' }) });
     assert.ok(rejectedResponse.status >= 400 && rejectedResponse.status < 500);
     const rejectedBody = await rejectedResponse.json() as { account?: PublicAccountRecord; status?: string };
     assert.equal(rejectedBody.status, 'rejected');
@@ -634,7 +638,7 @@ test('rejected and unavailable logins return client errors without retaining sig
     assert.equal(JSON.stringify(rejectedBody).includes(firstLoginAccount.nativeToken), false);
     assert.equal(JSON.stringify(rejectedBody).includes('wrong-password'), false);
 
-    const unavailableResponse = await fetch(new URL('/api/accounts/login', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: blocked.handle, password: blocked.password, homeOrigin: 'http://blocked.test' }) });
+    const unavailableResponse = await fetch(new URL('/api/accounts/login', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: blocked.handle, password: blocked.password }) });
     assert.ok(unavailableResponse.status >= 400 && unavailableResponse.status < 500);
     const unavailableBody = await unavailableResponse.json() as { account?: PublicAccountRecord; status?: string };
     assert.equal(unavailableBody.status, 'unavailable');
@@ -660,8 +664,8 @@ test('failed server discovery leaves every retained account signed in', async ()
   const opened = await openFixtureApplication(storeFile, fixture.fetch);
   try {
     const logins = await Promise.all([
-      fetch(new URL('/api/accounts/login', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: firstLoginAccount.handle, password: firstLoginAccount.password, homeOrigin: firstHome.origin }) }),
-      fetch(new URL('/api/accounts/login', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: secondLoginAccount.handle, password: secondLoginAccount.password, homeOrigin: secondHome.origin }) })
+      fetch(new URL('/api/accounts/login', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: firstLoginAccount.handle, password: firstLoginAccount.password }) }),
+      fetch(new URL('/api/accounts/login', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: secondLoginAccount.handle, password: secondLoginAccount.password }) })
     ]);
     const bodies = await Promise.all(logins.map(async (response) => { assert.equal(response.status, 200); return await response.json() as { account: PublicAccountRecord; clientToken: string } }));
     const ids = bodies.map((body) => body.account.id).sort();
@@ -788,7 +792,7 @@ test('resolves administrator credentials only for signed-in explicitly bound acc
   const missingSourceActor = 'http://harbor.test:4200/actors/policy';
   let opened = await openFixtureApplication(storeFile, fixture.fetch);
   try {
-    const login = await fetch(new URL('/api/accounts/login', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: firstLoginAccount.handle, password: firstLoginAccount.password, homeOrigin: firstHome.origin }) });
+    const login = await fetch(new URL('/api/accounts/login', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: firstLoginAccount.handle, password: firstLoginAccount.password }) });
     assert.equal(login.status, 200);
     const loginBody = await login.json() as { account: PublicAccountRecord; clientToken: string };
     const accountId = loginBody.account.id;
@@ -3780,11 +3784,11 @@ interface ClientLoginBody {
   clientToken: string;
 }
 
-async function loginClient(origin: string, account: FixtureHomeAccount, homeOrigin: string): Promise<ClientLoginBody> {
+async function loginClient(origin: string, account: FixtureHomeAccount): Promise<ClientLoginBody> {
   const response = await fetch(new URL('/api/accounts/login', origin), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ handle: account.handle, password: account.password, homeOrigin })
+    body: JSON.stringify({ handle: account.handle, password: account.password })
   });
   assert.equal(response.status, 200);
   const body = await response.json() as ClientLoginBody;
@@ -3819,8 +3823,8 @@ test('login issues independent client tokens and persists only their digests acr
   const fixture = createFixtureFetch(fixtureHomes(), []);
   let opened = await openFixtureApplication(storeFile, fixture.fetch);
   try {
-    const first = await loginClient(opened.client.origin, firstLoginAccount, firstHome.origin);
-    const second = await loginClient(opened.client.origin, firstLoginAccount, firstHome.origin);
+    const first = await loginClient(opened.client.origin, firstLoginAccount);
+    const second = await loginClient(opened.client.origin, firstLoginAccount);
     assert.notEqual(first.clientToken, second.clientToken);
     assert.equal(first.account.id, second.account.id);
     for (const body of [first, second]) {
@@ -3848,7 +3852,7 @@ test('login issues independent client tokens and persists only their digests acr
       assert.deepEqual(body.accounts.map((account) => account.id), [first.account.id]);
     }
 
-    const third = await loginClient(opened.client.origin, firstLoginAccount, firstHome.origin);
+    const third = await loginClient(opened.client.origin, firstLoginAccount);
     assert.notEqual(third.clientToken, first.clientToken);
     assert.notEqual(third.clientToken, second.clientToken);
     const earlier = await fetch(new URL('/api/accounts', opened.client.origin), { headers: authorization(first.clientToken) });
@@ -3866,8 +3870,8 @@ test('logout revokes only the requesting client session and signs out the accoun
   const fixture = createFixtureFetch(fixtureHomes(), []);
   const opened = await openFixtureApplication(storeFile, fixture.fetch);
   try {
-    const first = await loginClient(opened.client.origin, firstLoginAccount, firstHome.origin);
-    const second = await loginClient(opened.client.origin, firstLoginAccount, firstHome.origin);
+    const first = await loginClient(opened.client.origin, firstLoginAccount);
+    const second = await loginClient(opened.client.origin, firstLoginAccount);
     const callsAfterLogin = fixture.calls.length;
     const logoutUrl = new URL(`/api/accounts/${encodeURIComponent(first.account.id)}/logout`, opened.client.origin);
 
@@ -3901,8 +3905,8 @@ test('client authentication rejects missing, native and cross-account credential
   const fixture = createFixtureFetch(fixtureHomes(), []);
   const opened = await openFixtureApplication(storeFile, fixture.fetch);
   try {
-    const first = await loginClient(opened.client.origin, firstLoginAccount, firstHome.origin);
-    const second = await loginClient(opened.client.origin, secondLoginAccount, secondHome.origin);
+    const first = await loginClient(opened.client.origin, firstLoginAccount);
+    const second = await loginClient(opened.client.origin, secondLoginAccount);
     const callsAfterLogin = fixture.calls.length;
     const accountsUrl = new URL('/api/accounts', opened.client.origin);
     const libraryUrl = new URL(`/api/library?accountId=${encodeURIComponent(first.account.id)}`, opened.client.origin);

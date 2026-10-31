@@ -84,7 +84,6 @@ test('browser client retains a client session across profile restart and logs ou
 
   await page.locator('#account-login-form input[name="handle"]').fill(handle);
   await page.locator('#account-login-form input[name="password"]').fill(password);
-  await page.locator('#account-login-form input[name="homeOrigin"]').fill(authorityOrigin);
   await page.locator('#account-login-form button[type="submit"]').click();
   await page.waitForFunction((expected) => (document.getElementById('application-account-status')?.textContent ?? '').includes(`Signed in · ${expected}`), handle);
   await settle(page);
@@ -158,7 +157,7 @@ test('browser client retains a client session across profile restart and logs ou
   const secondLogin = await fetch(new URL('/api/accounts/login', clientServer.origin), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ handle, password, homeOrigin: authorityOrigin })
+    body: JSON.stringify({ handle, password })
   });
   assert.equal(secondLogin.status, 200);
   const secondBody = await secondLogin.json() as { account: { id: string; handle: string }; clientToken: string; status: string };

@@ -6,7 +6,6 @@ import type { ClientApplicationState } from './store.js';
 export interface LoginInput {
   handle: string;
   password: string;
-  homeOrigin?: string;
 }
 
 export type LoginOutcome =
@@ -35,7 +34,7 @@ export function createAccountService(state: ClientApplicationState, fetcher: typ
       if (typeof input.handle !== 'string' || !input.handle.trim() || typeof input.password !== 'string' || !input.password) {
         throw new TypeError('A handle and password are required');
       }
-      const resolution = await sdk.resolveAccount(input.handle, input.homeOrigin ? { homeOrigin: input.homeOrigin } : {});
+      const resolution = await sdk.resolveAccount(input.handle);
       const result = await sdk.login({ handle: input.handle, password: input.password }, resolution.homeOrigin);
       if (result.status !== 'signed-in') {
         return result.reason ? { status: result.status, reason: result.reason } : { status: result.status };

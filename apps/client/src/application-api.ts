@@ -176,10 +176,10 @@ export async function readAccounts(): Promise<AccountListResponse> {
   return { accounts };
 }
 
-export async function loginAccount(input: { handle: string; password: string; homeOrigin?: string }): Promise<AccountLoginResponse> {
+export async function loginAccount(input: { handle: string; password: string }): Promise<AccountLoginResponse> {
   const result = await request<AccountLoginResponse>('/api/accounts/login', {
     method: 'POST',
-    body: JSON.stringify({ handle: input.handle, password: input.password, ...(input.homeOrigin ? { homeOrigin: input.homeOrigin } : {}) })
+    body: JSON.stringify({ handle: input.handle, password: input.password })
   }, { secrets: [input.password] });
   if (result.status === 'signed-in') {
     if (!result.account || !result.account.id || !result.clientToken) throw new Error('Application login did not return a client session');

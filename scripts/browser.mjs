@@ -90,7 +90,7 @@ export function validateRuntimeConfig(value) {
     if (names.has(account.name)) throw new TypeError('Run configuration contains duplicate account names');
     names.add(account.name);
     if (typeof account.handle !== 'string' || !account.handle.trim()) throw new TypeError('Run configuration account requires a handle');
-    if (account.homeOrigin !== undefined) normalizeOrigin(account.homeOrigin, 'account home origin');
+    if (Object.hasOwn(account, 'homeOrigin')) throw new TypeError('Account homeOrigin is not supported; login origin is derived from the handle');
   }
   return { client };
 }

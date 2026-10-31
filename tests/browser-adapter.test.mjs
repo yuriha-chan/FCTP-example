@@ -12,14 +12,13 @@ import { parseCommand, runtimeConfigRoot, socketPathFor, validateRuntimeConfig }
 import { createJsonLineServer, createSerializedDispatcher } from '../scripts/browser-transport.mjs';
 
 function config() {
-  const homeOrigin = 'http://127.0.0.1:4100';
   return {
     runId: 'isolated-run',
     clientOrigin: 'http://127.0.0.1:4103',
     accounts: [
-      { name: 'player', handle: '@player@127.0.0.1:4100', homeOrigin },
-      { name: 'player-2', handle: '@player-2@127.0.0.1:4100', homeOrigin },
-      { name: 'governor', handle: '@governor@127.0.0.1:4100', homeOrigin }
+      { name: 'player', handle: '@player@127.0.0.1:4100' },
+      { name: 'player-2', handle: '@player-2@127.0.0.1:4100' },
+      { name: 'governor', handle: '@governor@127.0.0.1:4100' }
     ]
   };
 }
@@ -42,6 +41,13 @@ test('command parser accepts application commands and exact DOM operation arity'
   assert.throws(() => parseCommand(['player', 'result']), /Invalid operands/);
 });
 
+test('application transport rejects obsolete account homeOrigin configuration', () => {
+  assert.throws(() => createApplicationTransport({
+    origin: 'http://127.0.0.1:4103',
+    account: { name: 'player', handle: '@player@127.0.0.1:4100', homeOrigin: 'http://127.0.0.1:4100' }
+  }), /homeOrigin|not supported/i);
+});
+
 test('runtime config defaults to run and resolves relative overrides from the repository root', () => {
   assert.equal(runtimeConfigRoot({}), join(process.cwd(), 'run'));
   assert.equal(runtimeConfigRoot({ FCTP_BROWSER_CONFIG_ROOT: 'isolated/config' }), join(process.cwd(), 'isolated/config'));
@@ -53,7 +59,7 @@ test('runtime parsing accepts configured application accounts and rejects duplic
   assert.throws(() => socketPathFor(config(), 'observer', '/tmp/root'), /Unknown browser account/);
 
   const duplicate = config();
-  duplicate.accounts.push({ name: 'player', handle: '@other@127.0.0.1:4100', homeOrigin: duplicate.accounts[0].homeOrigin });
+  duplicate.accounts.push({ name: 'player', handle: '@other@127.0.0.1:4100' });
   assert.throws(() => validateRuntimeConfig(duplicate), /duplicate|unique/i);
 
   const empty = config();
@@ -64,9 +70,9 @@ test('runtime parsing accepts configured application accounts and rejects duplic
   missingHandle.accounts[0].handle = '';
   assert.throws(() => validateRuntimeConfig(missingHandle), /handle/i);
 
-  const foreignHome = config();
-  foreignHome.accounts[0].homeOrigin = 'ftp://127.0.0.1:4100';
-  assert.throws(() => validateRuntimeConfig(foreignHome), /origin/i);
+  const obsoleteHome = config();
+  obsoleteHome.accounts[0].homeOrigin = 'http://127.0.0.1:4100';
+  assert.throws(() => validateRuntimeConfig(obsoleteHome), /homeOrigin|not supported/i);
 
   const foreignClient = config();
   foreignClient.clientOrigin = 'ftp://127.0.0.1:4103';
@@ -90,8 +96,8 @@ before(async () => {
   transportOptions = {
     origin: demo.origins.client,
     accounts: {
-      player: { name: 'player', handle: `@player@${host}`, homeOrigin: demo.origins.authority },
-      governor: { name: 'governor', handle: `@governor@${host}`, homeOrigin: demo.origins.authority }
+      player: { name: 'player', handle: `@player@${host}` },
+      governor: { name: 'governor', handle: `@governor@${host}` }
     },
     passwords: { player: 'demo-player-password', governor: 'demo-governor-password' }
   };

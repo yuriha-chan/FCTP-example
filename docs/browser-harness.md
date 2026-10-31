@@ -53,24 +53,21 @@ The harness reads `runtime-config.json` from `run/` by default. Set `FCTP_BROWSE
   "accounts": [
     {
       "name": "player",
-      "handle": "@player@127.0.0.1:4100",
-      "homeOrigin": "http://127.0.0.1:4100"
+      "handle": "@player@127.0.0.1:4100"
     },
     {
       "name": "player-2",
-      "handle": "@player-2@127.0.0.1:4100",
-      "homeOrigin": "http://127.0.0.1:4100"
+      "handle": "@player-2@127.0.0.1:4100"
     },
     {
       "name": "governor",
-      "handle": "@governor@127.0.0.1:4100",
-      "homeOrigin": "http://127.0.0.1:4100"
+      "handle": "@governor@127.0.0.1:4100"
     }
   ]
 }
 ```
 
-Account names are unique public CLI names using lowercase letters and digits, with optional hyphen-separated segments. `handle` identifies the Home account. `homeOrigin` is optional when the handle's server host is sufficient. The configuration contains no passwords. Sockets, audit records, startup diagnostics, and the saved client session live under `<config-root>/runtime/<runId>/<account>/`. The `client-session.json` file is a private regular file (`0600`) in a private directory (`0700`). It stores the origin, handle, account ID, and client session token, is replaced atomically, and is rejected rather than followed when the path is a symlink or another non-regular file. A saved session is used only when its origin and handle match the runtime configuration.
+Account names are unique public CLI names using lowercase letters and digits, with optional hyphen-separated segments. `handle` identifies the Home account and its server host and port select the login destination. Login uses HTTPS except for loopback hosts (`localhost`, IPv4 `127/8`, and IPv6 `::1`), which use HTTP. The configuration contains no passwords. Sockets, audit records, startup diagnostics, and the saved client session live under `<config-root>/runtime/<runId>/<account>/`. The `client-session.json` file is a private regular file (`0600`) in a private directory (`0700`). It stores the origin, handle, account ID, and client session token, is replaced atomically, and is rejected rather than followed when the path is a symlink or another non-regular file. A saved session is used only when its origin and handle match the runtime configuration.
 
 ## Application commands
 
@@ -119,7 +116,7 @@ import { createApplicationTransport } from './scripts/browser-api.mjs';
 
 const transport = createApplicationTransport({
   origin: 'http://127.0.0.1:4103',
-  account: { name: 'player', handle: '@player@127.0.0.1:4100', homeOrigin: 'http://127.0.0.1:4100' },
+  account: { name: 'player', handle: '@player@127.0.0.1:4100' },
   onSessionChanged: async (session) => {
     // Persist or clear the caller-owned {accountId, handle, clientToken} session.
   }

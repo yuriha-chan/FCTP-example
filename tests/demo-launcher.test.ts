@@ -75,7 +75,7 @@ test('provides deterministic player and governor login without exposing bindings
     const response = await fetch(new URL('/api/accounts/login', demo.origins.client), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ handle, password, homeOrigin: demo.origins.authority })
+      body: JSON.stringify({ handle, password })
     });
     assert.equal(response.status, 200);
     return await response.json() as { account: { id: string; handle: string; login: { status: string } }; clientToken: string; status: string };
@@ -117,7 +117,7 @@ test('provisions a second Player account and vessel that both Territories enroll
     const response = await fetch(new URL('/api/accounts/login', demo.origins.client), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ handle, password, homeOrigin: demo.origins.authority })
+      body: JSON.stringify({ handle, password })
     });
     assert.equal(response.status, 200);
     return await response.json() as { account: { id: string; handle: string; login: { status: string } }; clientToken: string; status: string };
@@ -179,7 +179,7 @@ test('demo restart preserves admission changes and disabled accounts without rep
   });
   try {
     const host = new URL(fixture.origins.authority).host;
-    const login = await post('/api/accounts/login', { handle: `@governor@${host}`, password: 'demo-governor-password', homeOrigin: fixture.origins.authority });
+    const login = await post('/api/accounts/login', { handle: `@governor@${host}`, password: 'demo-governor-password' });
     assert.equal(login.status, 200);
     const { account, clientToken } = await login.json() as { account: { id: string }; clientToken: string };
     assert.equal((await post('/api/servers', { origin: fixture.origins.authority }, clientToken)).status, 200);
@@ -191,7 +191,7 @@ test('demo restart preserves admission changes and disabled accounts without rep
       accountId: account.id, authorityId: fixture.authority.ids.actor.home, control: 'availability', inputs: { handle: `@player@${host}`, available: false }
     }, clientToken);
     assert.equal(availability.status, 200);
-    const disabledBefore = await post('/api/accounts/login', { handle: `@player@${host}`, password: 'demo-player-password', homeOrigin: fixture.origins.authority });
+    const disabledBefore = await post('/api/accounts/login', { handle: `@player@${host}`, password: 'demo-player-password' });
     assert.equal((await disabledBefore.json() as { status: string }).status, 'unavailable');
     await fixture.close();
     fixture = await startDemo(options);
@@ -199,7 +199,7 @@ test('demo restart preserves admission changes and disabled accounts without rep
     const persistedAccounts = await get('/api/accounts', clientToken);
     assert.equal(persistedAccounts.status, 200, 'the persisted client session survives restart');
     assert.deepEqual((await persistedAccounts.json() as { accounts: Array<{ id: string }> }).accounts.map((entry) => entry.id), [account.id]);
-    const disabledAfter = await post('/api/accounts/login', { handle: `@player@${host}`, password: 'demo-player-password', homeOrigin: fixture.origins.authority });
+    const disabledAfter = await post('/api/accounts/login', { handle: `@player@${host}`, password: 'demo-player-password' });
     assert.equal(disabledAfter.status, 401);
     assert.equal((await disabledAfter.json() as { status: string }).status, 'unavailable');
   } finally {

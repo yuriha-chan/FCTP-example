@@ -35,10 +35,10 @@ export class FctpClient {
   resolveActor(uri: URI): Promise<ActorResolution> { return resolveActor(uri, this.#fetcher); }
   resolveWebFinger(handle: string, origin?: string): Promise<ActorResolution> { return resolveWebFinger(handle, this.#fetcher, origin); }
 
-  async resolveAccount(handle: string, options: { homeOrigin?: string } = {}): Promise<AccountResolution> {
+  async resolveAccount(handle: string): Promise<AccountResolution> {
     const parsed = parseHandle(handle);
     if (parsed.kind !== 'account') throw new TypeError('Expected an account handle');
-    const origin = new URL(options.homeOrigin ?? `https://${parsed.server}`).origin;
+    const origin = homeOriginFor(parsed.server);
     const resolved = await resolveWebFinger(parsed.handle, this.#fetcher, origin);
     if (resolved.actor.role !== 'player') throw new Error('Account handle did not resolve to a Player Actor');
     const response = await this.#fetcher(new URL('/local/info', origin), { method: 'GET', headers: { Accept: 'application/json' }, cache: 'no-store' });
@@ -167,6 +167,19 @@ export function resourceAudience(uri: string, explicitActor: string, provenance:
   const unique = [...new Set(candidates)];
   if (unique.length === 1) return unique[0]!;
   throw new Error(unique.length > 1 ? 'The serving Actor is ambiguous for this server. Resolve an Actor that links to this resource first.' : 'The serving server could not be identified from known Actor links. Resolve an Actor that links to this resource first.');
+}
+
+function homeOriginFor(server: string): string {
+  const parsed = new URL(`https://${server}`);
+  const protocol = isLoopbackHostname(parsed.hostname) ? 'http:' : 'https:';
+  return new URL(`${protocol}//${server}`).origin;
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  if (hostname === 'localhost' || hostname === '[::1]' || hostname === '::1') return true;
+  const octets = hostname.split('.');
+  if (octets.length !== 4 || !octets.every((part) => /^\d{1,3}$/.test(part))) return false;
+  return octets.every((part) => Number(part) <= 255) && Number(octets[0]) === 127;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

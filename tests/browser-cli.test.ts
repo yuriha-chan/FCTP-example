@@ -29,9 +29,9 @@ test('spawned API commands use the live application without a browser while DOM 
     runId: 'cli-live',
     clientOrigin: demo.origins.client,
     accounts: [
-      { name: 'player', handle: `@player@${host}`, homeOrigin: demo.origins.authority },
-      { name: 'player-2', handle: `@player-2@${host}`, homeOrigin: demo.origins.authority },
-      { name: 'governor', handle: `@governor@${host}`, homeOrigin: demo.origins.authority }
+      { name: 'player', handle: `@player@${host}` },
+      { name: 'player-2', handle: `@player-2@${host}` },
+      { name: 'governor', handle: `@governor@${host}` }
     ]
   };
   await writeFile(join(configRoot, 'runtime-config.json'), JSON.stringify(config));

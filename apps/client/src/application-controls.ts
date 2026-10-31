@@ -176,7 +176,6 @@ export function setupApplicationControls(options: ApplicationControlsOptions = {
     event.preventDefault();
     const handle = field(loginForm, 'handle');
     const password = field(loginForm, 'password');
-    const homeOrigin = field(loginForm, 'homeOrigin');
     if (!handle || !password) return;
     const value = password.value;
     accountRevision += 1;
@@ -185,8 +184,7 @@ export function setupApplicationControls(options: ApplicationControlsOptions = {
       try {
         const result = await loginAccount({
           handle: handle.value.trim(),
-          password: value,
-          ...(homeOrigin?.value.trim() ? { homeOrigin: homeOrigin.value.trim() } : {})
+          password: value
         });
         password.value = '';
         if (result.account) {

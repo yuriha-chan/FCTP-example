@@ -731,7 +731,43 @@ test('resolveAccount verifies the advertised Home Actor without sending credenti
   }
 });
 
-test('resolveAccount uses an explicit matching HTTP origin and keeps equal local names distinct', async () => {
+test('resolveAccount derives HTTPS for public hosts and HTTP only for literal loopback hosts', async () => {
+  const cases = [
+    { handle: '@alice@home.test:4200', origin: 'https://home.test:4200' },
+    { handle: '@alice@localhost:4200', origin: 'http://localhost:4200' },
+    { handle: '@alice@localhost:443', origin: 'http://localhost:443' },
+    { handle: '@alice@localhost:80', origin: 'http://localhost' },
+    { handle: '@alice@127.0.0.1:4200', origin: 'http://127.0.0.1:4200' },
+    { handle: '@alice@127.5.6.7:4200', origin: 'http://127.5.6.7:4200' },
+    { handle: '@alice@[::1]:4200', origin: 'http://[::1]:4200' },
+    { handle: '@alice@localhost.evil.test:4200', origin: 'https://localhost.evil.test:4200' },
+    { handle: '@alice@127.0.0.1.evil.test:4200', origin: 'https://127.0.0.1.evil.test:4200' },
+    { handle: '@alice@128.0.0.1:4200', origin: 'https://128.0.0.1:4200' }
+  ];
+  for (const { handle, origin } of cases) {
+    const accountId = `${origin}/actors/people/alice`;
+    const homeId = `${origin}/actors/community/home`;
+    const calls: string[] = [];
+    const fetcher: typeof fetch = async (input) => {
+      const url = String(input);
+      calls.push(url);
+      const parsed = new URL(url);
+      if (parsed.origin !== origin) return new Response(null, { status: 500 });
+      if (parsed.pathname === '/.well-known/webfinger') return Response.json({ subject: handle, links: [{ rel: 'self', href: accountId }] });
+      if (url === accountId) return Response.json({ id: accountId, type: 'Actor', role: 'player', name: 'Alice' });
+      if (url === homeId) return Response.json({ id: homeId, type: 'Actor', role: 'home' });
+      if (parsed.pathname === '/local/info') return Response.json({ actor: { home: homeId } });
+      return new Response(null, { status: 404 });
+    };
+    const result = await new FctpClient({ fetcher }).resolveAccount(handle);
+    assert.equal(result.homeOrigin, origin, handle);
+    assert.equal(result.homeServer, handle.slice(handle.lastIndexOf('@') + 1), handle);
+    assert.ok(calls.length > 0, handle);
+    for (const call of calls) assert.equal(new URL(call).origin, origin, handle);
+  }
+});
+
+test('resolveAccount uses the handle host and port to keep equal local names distinct', async () => {
   async function resolveAt(port: number, accountPath: string, homePath: string) {
     const origin = `http://127.0.0.1:${port}`;
     const handle = `@sana@127.0.0.1:${port}`;
@@ -747,7 +783,7 @@ test('resolveAccount uses an explicit matching HTTP origin and keeps equal local
       if (parsed.pathname === '/local/info') return Response.json({ actor: { home: homeId } });
       return new Response(null, { status: 404 });
     };
-    const result = await new FctpClient({ fetcher }).resolveAccount(handle, { homeOrigin: origin });
+    const result = await new FctpClient({ fetcher }).resolveAccount(handle);
     return { origin, result };
   }
   const first = await resolveAt(4100, '/actors/people/sana', '/actors/community/home');
@@ -758,13 +794,11 @@ test('resolveAccount uses an explicit matching HTTP origin and keeps equal local
   assert.notEqual(first.result.homeAuthority, second.result.homeAuthority);
 });
 
-test('resolveAccount rejects authority handles and mismatched or non-HTTP origins before fetching', async () => {
+test('resolveAccount rejects authority handles before fetching', async () => {
   let calls = 0;
   const fetcher: typeof fetch = async () => { calls++; return new Response(null, { status: 500 }); };
   const client = new FctpClient({ fetcher });
   await assert.rejects(client.resolveAccount('@alice.home@home.test:4200'), (error: unknown) => error instanceof Error);
-  await assert.rejects(client.resolveAccount('@alice@home.test:4200', { homeOrigin: 'http://other.test:4200' }), (error: unknown) => error instanceof Error);
-  await assert.rejects(client.resolveAccount('@alice@home.test:4200', { homeOrigin: 'ftp://home.test:4200' }), (error: unknown) => error instanceof Error);
   assert.equal(calls, 0);
 });
 

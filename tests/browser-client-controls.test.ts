@@ -93,11 +93,11 @@ interface ClientSessionRecord {
   clientToken: string;
 }
 
-async function loginClientSession(origin: string, handle: string, password: string, homeOrigin?: string): Promise<ClientSessionRecord> {
+async function loginClientSession(origin: string, handle: string, password: string): Promise<ClientSessionRecord> {
   const response = await fetch(new URL('/api/accounts/login', origin), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ handle, password, ...(homeOrigin ? { homeOrigin } : {}) })
+    body: JSON.stringify({ handle, password })
   });
   assert.equal(response.status, 200);
   const body = await response.json() as { account?: { id?: string }; clientToken?: string };
@@ -177,7 +177,6 @@ test('rendered accounts and connections controls log in, log out, and discover a
   const handle = `@player@${new URL(origins.authority).host}`;
   view = await fill(browser, view, /handle/i, handle, 'Accounts');
   view = await fill(browser, view, /password/i, playerPassword, 'Accounts');
-  view = await fill(browser, view, /home origin/i, origins.authority, 'Accounts');
   view = await control(browser, view, /sign in|log in/i, 'submit', 'Accounts');
   assert.match(view.markdown, new RegExp(escapeRegExp(handle)));
   assert.match(view.markdown, /signed[ -]?in/i);
@@ -292,12 +291,10 @@ test('rendered Accounts keeps per-account sessions, scopes activity by the selec
   const otherHandle = `@other@${new URL(origins.authority).host}`;
   view = await fill(browser, view, /handle/i, playerHandle, 'Accounts');
   view = await fill(browser, view, /password/i, playerPassword, 'Accounts');
-  view = await fill(browser, view, /home origin/i, origins.authority, 'Accounts');
   view = await control(browser, view, /sign in|log in/i, 'submit', 'Accounts');
 
   view = await fill(browser, view, /handle/i, otherHandle, 'Accounts');
   view = await fill(browser, view, /password/i, otherPassword, 'Accounts');
-  view = await fill(browser, view, /home origin/i, origins.authority, 'Accounts');
   view = await control(browser, view, /sign in|log in/i, 'submit', 'Accounts');
   assert.match(view.markdown, new RegExp(escapeRegExp(playerHandle)));
   assert.match(view.markdown, new RegExp(escapeRegExp(otherHandle)));
@@ -418,14 +415,13 @@ test('rendered Explore discovers places, capabilities and blockers, saves a rout
   const handle = `@player@${new URL(origins.authority).host}`;
   view = await fill(browser, view, /handle/i, handle, 'Accounts');
   view = await fill(browser, view, /password/i, password, 'Accounts');
-  view = await fill(browser, view, /home origin/i, origins.authority, 'Accounts');
   view = await control(browser, view, /sign in|log in/i, 'submit', 'Accounts');
   assert.match(view.markdown, /signed[ -]?in/i);
   assert.equal(view.markdown.includes(password), false);
   assert.equal(view.markdown.includes(nativeToken), false);
   const account = (await services.application!.state.read((state) => Object.values(state.accounts))).find((candidate) => candidate.handle === handle);
   assert.ok(account, 'the Explore scenario keeps the signed-in account identity');
-  const clientSession = await loginClientSession(services.clientServer.origin, handle, password, origins.authority);
+  const clientSession = await loginClientSession(services.clientServer.origin, handle, password);
 
   view = await fill(browser, view, /server origin/i, origins.policy, 'Connections');
   view = await control(browser, view, /add server|discover server|connect server/i, 'submit', 'Connections');
@@ -565,13 +561,12 @@ test('rendered Logistics & Production refreshes scoped cargo and executes typed 
   const handle = `@player@${new URL(origins.authority).host}`;
   view = await fill(browser, view, /handle/i, handle, 'Accounts');
   view = await fill(browser, view, /password/i, password, 'Accounts');
-  view = await fill(browser, view, /home origin/i, origins.authority, 'Accounts');
   view = await control(browser, view, /sign in|log in/i, 'submit', 'Accounts');
   assert.match(view.markdown, /signed[ -]?in/i);
 
   const account = (await services.application.state.read((state) => Object.values(state.accounts))).find((candidate) => candidate.handle === handle);
   assert.ok(account);
-  const clientSession = await loginClientSession(services.clientServer.origin, handle, password, origins.authority);
+  const clientSession = await loginClientSession(services.clientServer.origin, handle, password);
   const entryResponse = await fetch(new URL(`/api/logistics/vessels/${encodeURIComponent(vessel)}/entry`, services.clientServer.origin), {
     method: 'POST', headers: authorizedHeaders(clientSession, true),
     body: JSON.stringify({ accountId: account.id, territoryId: services.policy.ids.actor, portId: services.policy.ids.ports[0], routeId: services.policy.ids.routes[0] })
@@ -689,13 +684,12 @@ test('rendered Simulation production shows pending job progress and completes on
   const handle = `@player@${new URL(origins.authority).host}`;
   view = await fill(browser, view, /handle/i, handle, 'Accounts');
   view = await fill(browser, view, /password/i, password, 'Accounts');
-  view = await fill(browser, view, /home origin/i, origins.authority, 'Accounts');
   view = await control(browser, view, /sign in|log in/i, 'submit', 'Accounts');
   assert.match(view.markdown, /signed[ -]?in/i);
 
   const account = (await services.application.state.read((state) => Object.values(state.accounts))).find((candidate) => candidate.handle === handle);
   assert.ok(account);
-  const clientSession = await loginClientSession(services.clientServer.origin, handle, password, origins.authority);
+  const clientSession = await loginClientSession(services.clientServer.origin, handle, password);
   const entryResponse = await fetch(new URL(`/api/logistics/vessels/${encodeURIComponent(vessel)}/entry`, services.clientServer.origin), {
     method: 'POST', headers: authorizedHeaders(clientSession, true),
     body: JSON.stringify({ accountId: account.id, territoryId: services.simulation.ids.actor, portId: services.simulation.ids.ports[0], routeId: services.simulation.ids.routes[0] })
@@ -778,7 +772,6 @@ test('rendered Author & Publish creates, saves, reopens, publishes and reads an 
   const handle = `@player@${new URL(origins.authority).host}`;
   view = await fill(browser, view, /handle/i, handle, 'Accounts');
   view = await fill(browser, view, /password/i, password, 'Accounts');
-  view = await fill(browser, view, /home origin/i, origins.authority, 'Accounts');
   view = await control(browser, view, /sign in|log in/i, 'submit', 'Accounts');
   assert.match(view.markdown, /signed[ -]?in/i);
 
@@ -803,7 +796,7 @@ test('rendered Author & Publish creates, saves, reopens, publishes and reads an 
   view = await control(browser, view, /refresh library/i, 'click', authoring);
   const account = (await services.application.state.read((state) => Object.values(state.accounts))).find((candidate) => candidate.handle === handle);
   assert.ok(account);
-  const clientSession = await loginClientSession(services.clientServer.origin, handle, password, origins.authority);
+  const clientSession = await loginClientSession(services.clientServer.origin, handle, password);
   const libraryResponse = await fetch(new URL(`/api/library?accountId=${encodeURIComponent(account.id)}`, services.clientServer.origin), { headers: authorizedHeaders(clientSession) });
   assert.equal(libraryResponse.status, 200);
   const library = await libraryResponse.json() as { data?: { assets?: Array<{ id: string; name?: string }>; varieties?: Array<{ id: string; name?: string }>; grants?: Array<{ id: string; asset?: string; variety?: string; grantee?: string }> } };
@@ -931,13 +924,12 @@ test('rendered Author & Publish preserves extension-bearing Production on a no-o
   const handle = `@player@${new URL(origins.authority).host}`;
   view = await fill(browser, view, /handle/i, handle, 'Accounts');
   view = await fill(browser, view, /password/i, password, 'Accounts');
-  view = await fill(browser, view, /home origin/i, origins.authority, 'Accounts');
   view = await control(browser, view, /sign in|log in/i, 'submit', 'Accounts');
   assert.match(view.markdown, /signed[ -]?in/i);
 
   const account = (await services.application.state.read((state) => Object.values(state.accounts))).find((candidate) => candidate.handle === handle);
   assert.ok(account);
-  const clientSession = await loginClientSession(services.clientServer.origin, handle, password, origins.authority);
+  const clientSession = await loginClientSession(services.clientServer.origin, handle, password);
   const production = [
     {
       type: 'manufacture',
@@ -1048,7 +1040,6 @@ test('rendered Administration applies structured admission, decides a manual ent
 
   view = await fill(browser, view, /handle/i, playerHandle, 'Accounts');
   view = await fill(browser, view, /password/i, playerPassword, 'Accounts');
-  view = await fill(browser, view, /home origin/i, origins.authority, 'Accounts');
   view = await control(browser, view, /sign in|log in/i, 'submit', 'Accounts');
   assert.match(view.markdown, /signed[ -]?in/i);
 
@@ -1067,7 +1058,7 @@ test('rendered Administration applies structured admission, decides a manual ent
 
   const account = (await services.application.state.read((state) => Object.values(state.accounts))).find((candidate) => candidate.handle === playerHandle);
   assert.ok(account);
-  const clientSession = await loginClientSession(services.clientServer.origin, playerHandle, playerPassword, origins.authority);
+  const clientSession = await loginClientSession(services.clientServer.origin, playerHandle, playerPassword);
   const entryResponse = await fetch(new URL(`/api/logistics/vessels/${encodeURIComponent(vessel)}/entry`, services.clientServer.origin), {
     method: 'POST', headers: authorizedHeaders(clientSession, true),
     body: JSON.stringify({ accountId: account.id, territoryId: services.policy.ids.actor, portId: services.policy.ids.ports[0], routeId: services.policy.ids.routes[0] })
@@ -1099,7 +1090,6 @@ test('rendered Administration applies structured admission, decides a manual ent
   view = await control(browser, view, /log ?out/i, 'click', 'Accounts');
   view = await fill(browser, view, /handle/i, otherHandle, 'Accounts');
   view = await fill(browser, view, /password/i, otherPassword, 'Accounts');
-  view = await fill(browser, view, /home origin/i, origins.authority, 'Accounts');
   view = await control(browser, view, /sign in|log in/i, 'submit', 'Accounts');
   assert.match(view.markdown, /signed[ -]?in/i);
   assert.equal(view.markdown.includes(requestId), false, 'changing the selected account resets administration data');

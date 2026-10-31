@@ -74,9 +74,8 @@ function loginInput(body: Record<string, unknown>): LoginInput {
   const handle = typeof body.handle === 'string' ? body.handle.trim() : '';
   const password = typeof body.password === 'string' ? body.password : '';
   if (!handle || !password) throw new ApiError(400, 'handle-and-password-required');
-  const homeOrigin = body.homeOrigin;
-  if (homeOrigin !== undefined && typeof homeOrigin !== 'string') throw new ApiError(400, 'invalid-home-origin');
-  return { handle, password, ...(typeof homeOrigin === 'string' && homeOrigin ? { homeOrigin } : {}) };
+  if (Object.hasOwn(body, 'homeOrigin')) throw new ApiError(400, 'home-origin-not-supported');
+  return { handle, password };
 }
 
 function discoveryInput(body: Record<string, unknown>): DiscoveryInput {

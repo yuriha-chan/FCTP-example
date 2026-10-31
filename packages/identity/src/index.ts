@@ -142,7 +142,7 @@ export type ParsedHandle =
   | { handle: string; localName: string; server: string; kind: 'authority'; role: string };
 
 export function parseHandle(handle: string): ParsedHandle {
-  const match = /^@([a-zA-Z0-9-]+)(?:\.([a-zA-Z0-9-]+))?@([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*)(?::([0-9]+))?$/.exec(handle);
+  const match = /^@([a-zA-Z0-9-]+)(?:\.([a-zA-Z0-9-]+))?@(\[[0-9A-Fa-f:.]+\]|[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*)(?::([0-9]+))?$/.exec(handle);
   if (!match) throw new TypeError('Expected @name@server or @name.role@server');
   const [, localName, role, domain, port] = match;
   if (port !== undefined && (Number(port) < 1 || Number(port) > 65535)) throw new TypeError('Invalid server port');
@@ -172,7 +172,7 @@ export async function resolveWebFinger(handle: string, fetcher: typeof fetch = f
   } else {
     const base = new URL(origin);
     if (base.protocol !== 'http:' && base.protocol !== 'https:') throw new TypeError('WebFinger origin must use HTTP or HTTPS');
-    if (base.host !== new URL(`https://${domain}`).host) throw new TypeError('WebFinger origin does not match handle host');
+    if (base.host !== new URL(`${base.protocol}//${domain}`).host) throw new TypeError('WebFinger origin does not match handle host');
     endpoint = new URL('/.well-known/webfinger', base.origin);
   }
   endpoint.searchParams.set('resource', subject);
