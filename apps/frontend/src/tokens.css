@@ -1,0 +1,9 @@
+:root {
+  --surface: #ffffff;
+  --surface-raised: #f4f5f7;
+  --text: #1a1d21;
+  --text-muted: #5b636e;
+  --border: #c9ced6;
+  --accent: #0b6bcb;
+  --danger: #b3261e;
+}

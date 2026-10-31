@@ -4,9 +4,10 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "noEmit": true,
-    "composite": true
+    "composite": true,
+    "rootDir": ".."
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "../frontend/src/application-api.ts"],
   "references": [
     { "path": "../../packages/protocol" },
     { "path": "../../packages/auth" },

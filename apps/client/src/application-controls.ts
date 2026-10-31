@@ -149,6 +149,7 @@ export function setupApplicationControls(options: ApplicationControlsOptions = {
     document.documentElement.dataset.clientBusy = 'true';
     try {
       const result = await logoutAccount(accountId);
+      accountRevision += 1;
       accounts = accounts.filter((account) => account.id !== result.account.id);
       if (selectedAccountId === result.account.id) selectedAccountId = undefined;
       accountStatus.textContent = `Signed out · ${result.account.handle}`;
@@ -186,6 +187,7 @@ export function setupApplicationControls(options: ApplicationControlsOptions = {
           handle: handle.value.trim(),
           password: value
         });
+        accountRevision += 1;
         password.value = '';
         if (result.account) {
           selectedAccountId = result.account.id;

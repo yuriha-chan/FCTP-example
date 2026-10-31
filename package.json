@@ -6,9 +6,11 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -b && tsc -p apps/client/tsconfig.json --pretty false && node apps/demo/build-client.mjs",
-    "typecheck": "tsc -b --pretty false && tsc -p apps/client/tsconfig.json --pretty false",
-    "typecheck:tests": "tsc -p tests/tsconfig.json --pretty false && tsc -p apps/client/tsconfig.json --pretty false",
+    "build": "tsc -b && tsc -p apps/client/tsconfig.json --pretty false && node apps/demo/build-client.mjs && npm run build:frontend",
+    "build:frontend": "tsc -p apps/frontend/tsconfig.json --pretty false && vite build --config apps/frontend/vite.config.mjs",
+    "typecheck": "tsc -b --pretty false && tsc -p apps/client/tsconfig.json --pretty false && npm run typecheck:frontend",
+    "typecheck:frontend": "tsc -p apps/frontend/tsconfig.json --pretty false",
+    "typecheck:tests": "tsc -p tests/tsconfig.json --pretty false && tsc -p apps/client/tsconfig.json --pretty false && npm run typecheck:frontend",
     "lint": "eslint packages apps scripts tests",
     "test": "npm run build && npm run typecheck:tests && npm run lint && tsx --test tests/**/*.test.ts tests/**/*.test.mjs",
     "dev": "npm run build && tsx apps/demo/src/cli.ts",
@@ -17,11 +19,20 @@
   "devDependencies": {
     "@eslint/js": "9.39.1",
     "@types/node": "24.10.0",
-    "esbuild": "0.25.12",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "esbuild": "0.28.2",
     "eslint": "9.39.1",
     "playwright": "1.64.1",
     "tsx": "4.20.6",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.48.1"
+    "typescript-eslint": "8.48.1",
+    "vite": "8.3.5"
+  },
+  "dependencies": {
+    "binduct": "github:yuriha-chan/binduct#7260123d45ff0b4afd8a1929897f8e5ad2c1b0e0",
+    "react": "19.3.1",
+    "react-aria-components": "1.22.1",
+    "react-dom": "19.3.1"
   }
 }

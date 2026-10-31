@@ -1,0 +1,191 @@
+.shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1.5rem;
+  color: var(--text, #1a1d21);
+  background: var(--surface, #ffffff);
+}
+
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border, #c9ced6);
+}
+
+.title {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.accounts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.accountList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 16rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border, #c9ced6);
+  border-radius: 0.5rem;
+  background: var(--surface-raised, #f4f5f7);
+}
+
+.accountOption {
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.35rem;
+  cursor: pointer;
+  outline: none;
+}
+
+.accountOption[data-selected] {
+  background: var(--accent, #0b6bcb);
+  color: var(--surface, #ffffff);
+}
+
+.accountOption[data-focus-visible] {
+  outline: 2px solid var(--accent, #0b6bcb);
+  outline-offset: 1px;
+}
+
+.accountActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.tabList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border, #c9ced6);
+}
+
+.tab {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 0.5rem 0.5rem 0 0;
+  cursor: pointer;
+  outline: none;
+}
+
+.tab[data-selected] {
+  border-color: var(--border, #c9ced6);
+  background: var(--surface-raised, #f4f5f7);
+  font-weight: 600;
+}
+
+.tab[data-focus-visible] {
+  outline: 2px solid var(--accent, #0b6bcb);
+  outline-offset: -2px;
+}
+
+.panel {
+  outline: none;
+}
+
+.panel[data-inert] {
+  display: none;
+}
+
+.panelContent {
+  min-height: 4rem;
+}
+
+.topicContent h2 {
+  margin-top: 0;
+}
+
+.signIn {
+  max-width: 24rem;
+  padding: 1rem;
+  border: 1px solid var(--border, #c9ced6);
+  border-radius: 0.5rem;
+  background: var(--surface-raised, #f4f5f7);
+}
+
+.signInForm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.primary,
+.secondary {
+  padding: 0.45rem 0.8rem;
+  border-radius: 0.35rem;
+  border: 1px solid var(--border, #c9ced6);
+  cursor: pointer;
+}
+
+.primary {
+  border-color: var(--accent, #0b6bcb);
+  background: var(--accent, #0b6bcb);
+  color: var(--surface, #ffffff);
+}
+
+.secondary {
+  background: var(--surface, #ffffff);
+  color: var(--text, #1a1d21);
+}
+
+.primary[data-disabled],
+.secondary[data-disabled] {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.modal {
+  width: min(28rem, 100%);
+}
+
+.dialog {
+  padding: 1.25rem;
+  border-radius: 0.5rem;
+  background: var(--surface, #ffffff);
+  color: var(--text, #1a1d21);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+}
+
+.dialogContent {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.error {
+  margin: 0;
+  color: var(--danger, #b3261e);
+}
+
+.muted {
+  margin: 0;
+  color: var(--text-muted, #5b636e);
+}
