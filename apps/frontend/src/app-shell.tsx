@@ -16,6 +16,7 @@ import {
   Tabs,
   TextField
 } from 'react-aria-components';
+import { treeState } from 'binduct';
 import {
   loginAccount,
   logoutAccount,
@@ -24,7 +25,7 @@ import {
   type AccountListResponse
 } from './application-api';
 import { createShellState, type TopicId } from './shell-state';
-import { useBoundState, type StateSubscription } from './use-bound-state';
+import { useBoundFields } from './use-bound-state';
 import styles from './shell.module.css';
 
 export type { TopicId } from './shell-state';
@@ -98,12 +99,23 @@ interface SignInFormProps {
   submitLabel?: string;
 }
 
+interface SignInState {
+  handle: string;
+  password: string;
+  error: string | undefined;
+  busy: boolean;
+}
+
 function SignInForm({ onAuthenticated, submitLabel = 'Sign in' }: SignInFormProps): ReactElement {
-  const [handle, setHandle] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | undefined>(undefined);
-  const [busy, setBusy] = useState(false);
+  const [signInState] = useState(() => treeState<SignInState>({
+    handle: '',
+    password: '',
+    error: undefined,
+    busy: false
+  }));
   const mounted = useRef(false);
+
+  const { handle, password, error, busy } = useBoundFields(signInState);
 
   useEffect(() => {
     mounted.current = true;
@@ -112,12 +124,12 @@ function SignInForm({ onAuthenticated, submitLabel = 'Sign in' }: SignInFormProp
 
   const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
-    if (busy) return;
-    setBusy(true);
-    setError(undefined);
+    if (signInState.busy) return;
+    signInState.busy = true;
+    signInState.error = undefined;
     let failure: string | undefined;
     try {
-      const result = await loginAccount({ handle, password });
+      const result = await loginAccount({ handle: signInState.handle, password: signInState.password });
       if (!mounted.current) return;
       if (result.status === 'signed-in' && result.account) {
         onAuthenticated(result.account.id);
@@ -128,20 +140,20 @@ function SignInForm({ onAuthenticated, submitLabel = 'Sign in' }: SignInFormProp
       failure = messageFor(caught);
     } finally {
       if (mounted.current) {
-        setPassword('');
-        setBusy(false);
-        if (failure !== undefined) setError(failure);
+        signInState.password = '';
+        signInState.busy = false;
+        if (failure !== undefined) signInState.error = failure;
       }
     }
   };
 
   return (
     <Form className={style('signInForm')} onSubmit={submit}>
-      <TextField value={handle} onChange={setHandle} isRequired>
+      <TextField value={handle} onChange={(next) => { signInState.handle = next; }} isRequired>
         <Label>Handle</Label>
         <Input autoComplete="username" />
       </TextField>
-      <TextField value={password} onChange={setPassword} isRequired>
+      <TextField value={password} onChange={(next) => { signInState.password = next; }} isRequired>
         <Label>Password</Label>
         <Input type="password" autoComplete="current-password" />
       </TextField>
@@ -165,43 +177,32 @@ function DefaultTopic({ topic }: { topic: TopicDefinition }): ReactElement {
 export function AppShell(props: AppShellProps): ReactElement {
   const { renderTopic } = props;
   const [shellState] = useState(createShellState);
-  const [accounts, setAccounts] = useState<readonly Account[]>([]);
-  const [listError, setListError] = useState<string | undefined>(undefined);
-  const [actionError, setActionError] = useState<string | undefined>(undefined);
-  const [listLoading, setListLoading] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
+
+  const {
+    accountId,
+    topic,
+    accounts,
+    listError,
+    actionError,
+    listLoading,
+    addOpen
+  } = useBoundFields(shellState);
 
   const mountedRef = useRef(true);
   const generationRef = useRef(0);
   const selectionRevisionRef = useRef(0);
 
-  const accountId = useBoundState(
-    () => shellState.read().accountId,
-    useCallback<StateSubscription<string | undefined>>(
-      (setValue) => shellState.subscribeAccountId((value) => setValue(value)),
-      [shellState]
-    )
-  );
-
-  const topic = useBoundState(
-    () => shellState.read().topic,
-    useCallback<StateSubscription<TopicId>>(
-      (setValue) => shellState.subscribeTopic((value) => setValue(value)),
-      [shellState]
-    )
-  );
-
   const setSelection = useCallback((nextAccountId: string | undefined): void => {
     selectionRevisionRef.current += 1;
-    setAddOpen(false);
-    setActionError(undefined);
-    shellState.update({ accountId: nextAccountId });
+    shellState.addOpen = false;
+    shellState.actionError = undefined;
+    shellState.accountId = nextAccountId;
   }, [shellState]);
 
   const applyAccounts = useCallback((next: readonly Account[], options: RefreshOptions, revisionAtStart: number): void => {
-    setAccounts(next);
+    shellState.accounts = treeState([...next]);
     if (revisionAtStart !== selectionRevisionRef.current) return;
-    const current = shellState.read().accountId;
+    const current = shellState.accountId;
     const contains = (candidate: string | undefined): boolean =>
       candidate !== undefined && next.some((account) => account.id === candidate);
     if (contains(options.preferredAccountId)) {
@@ -213,26 +214,26 @@ export function AppShell(props: AppShellProps): ReactElement {
       setSelection(next[0]!.id);
       return;
     }
-    if (current !== undefined) shellState.update({ accountId: undefined });
+    if (current !== undefined) shellState.accountId = undefined;
   }, [shellState, setSelection]);
 
   const refreshAccounts = useCallback(async (options: RefreshOptions = {}): Promise<void> => {
     generationRef.current += 1;
     const generation = generationRef.current;
     const revision = selectionRevisionRef.current;
-    setListLoading(true);
+    shellState.listLoading = true;
     try {
       const response = await readAccounts();
       if (!mountedRef.current || generation !== generationRef.current) return;
       applyAccounts(response.accounts, options, revision);
-      setListError(undefined);
+      shellState.listError = undefined;
     } catch (caught) {
       if (!mountedRef.current || generation !== generationRef.current) return;
-      setListError(messageFor(caught));
+      shellState.listError = messageFor(caught);
     } finally {
-      if (mountedRef.current && generation === generationRef.current) setListLoading(false);
+      if (mountedRef.current && generation === generationRef.current) shellState.listLoading = false;
     }
-  }, [applyAccounts]);
+  }, [applyAccounts, shellState]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -250,14 +251,14 @@ export function AppShell(props: AppShellProps): ReactElement {
   }), [refreshAccounts]);
 
   const handleAuthenticated = useCallback((nextAccountId: string): void => {
-    setActionError(undefined);
+    shellState.actionError = undefined;
     void refreshAccounts({ preferredAccountId: nextAccountId });
-  }, [refreshAccounts]);
+  }, [refreshAccounts, shellState]);
 
   const handleAddAuthenticated = useCallback((nextAccountId: string): void => {
-    setAddOpen(false);
+    shellState.addOpen = false;
     handleAuthenticated(nextAccountId);
-  }, [handleAuthenticated]);
+  }, [handleAuthenticated, shellState]);
 
   const selectedAccount = accountId === undefined
     ? undefined
@@ -266,15 +267,15 @@ export function AppShell(props: AppShellProps): ReactElement {
   const handleLogout = useCallback(async (): Promise<void> => {
     if (selectedAccount === undefined) return;
     const revision = selectionRevisionRef.current;
-    setActionError(undefined);
+    shellState.actionError = undefined;
     try {
       await logoutAccount(selectedAccount.id);
       if (!mountedRef.current) return;
       await refreshAccounts();
     } catch (caught) {
-      if (mountedRef.current && revision === selectionRevisionRef.current) setActionError(messageFor(caught));
+      if (mountedRef.current && revision === selectionRevisionRef.current) shellState.actionError = messageFor(caught);
     }
-  }, [selectedAccount, refreshAccounts]);
+  }, [selectedAccount, refreshAccounts, shellState]);
 
   const topicContext: AccountContext = accountId === undefined ? {} : { accountId };
 
@@ -309,7 +310,7 @@ export function AppShell(props: AppShellProps): ReactElement {
                   Log out
                 </Button>
               )}
-              <DialogTrigger isOpen={addOpen} onOpenChange={setAddOpen}>
+              <DialogTrigger isOpen={addOpen} onOpenChange={(open) => { shellState.addOpen = open; }}>
                 <Button className={style('secondary')}>Add account</Button>
                 <ModalOverlay className={style('overlay')} isDismissable>
                   <Modal className={style('modal')}>
@@ -346,7 +347,7 @@ export function AppShell(props: AppShellProps): ReactElement {
         selectedKey={topic}
         onSelectionChange={(key) => {
           if (typeof key === 'string' && TOPIC_IDS.has(key)) {
-            shellState.update({ topic: key as TopicId });
+            shellState.topic = key as TopicId;
           }
         }}
       >
