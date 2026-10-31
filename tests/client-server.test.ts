@@ -97,14 +97,20 @@ test('serves the browser client and static assets on an isolated port', async ()
   try {
     const html = await fetch(client.origin);
     assert.equal(html.status, 200);
-    assert.match(await html.text(), /href=["']\/styles\.css["']/);
-    const stylesheet = await fetch(new URL('/styles.css', client.origin));
-    assert.equal(stylesheet.status, 200);
-    assert.ok((await stylesheet.text()).length > 0);
-    const bundle = await fetch(new URL('/dist/client/main.js', client.origin));
+    assert.match(html.headers.get('content-type') ?? '', /text\/html/);
+    const markup = await html.text();
+    const scriptPath = /src="([^"]+\.js)"/.exec(markup)?.[1];
+    const stylePath = /href="([^"]+\.css)"/.exec(markup)?.[1];
+    assert.ok(scriptPath, 'the served page must reference its built script');
+    assert.ok(stylePath, 'the served page must reference its built stylesheet');
+    const bundle = await fetch(new URL(scriptPath, client.origin));
     assert.equal(bundle.status, 200);
     assert.match(bundle.headers.get('content-type') ?? '', /javascript/);
     assert.ok((await bundle.text()).length > 0);
+    const stylesheet = await fetch(new URL(stylePath, client.origin));
+    assert.equal(stylesheet.status, 200);
+    assert.match(stylesheet.headers.get('content-type') ?? '', /text\/css/);
+    assert.ok((await stylesheet.text()).length > 0);
     assert.equal((await fetch(new URL('/package.json', client.origin))).status, 404);
     assert.equal((await fetch(new URL('/../../package.json', client.origin))).status, 404);
   } finally {
@@ -278,11 +284,11 @@ test('client server exposes a credential-free health API beside static assets on
 
     const html = await fetch(client.origin);
     assert.equal(html.status, 200);
-    assert.match(await html.text(), /href=["']\/styles\.css["']/);
-    assert.equal((await fetch(new URL('/styles.css', client.origin))).status, 200);
+    assert.match(html.headers.get('content-type') ?? '', /text\/html/);
+    assert.match(await html.text(), /<div id="root">/);
 
     assert.equal((await fetch(new URL('/api/unknown', client.origin))).status, 404);
-    assert.equal((await fetch(new URL('/styles.css', client.origin), { method: 'POST' })).status, 405);
+    assert.equal((await fetch(new URL('/', client.origin), { method: 'POST' })).status, 405);
   } finally {
     await client.close();
     await application.close();

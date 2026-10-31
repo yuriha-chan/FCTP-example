@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Button, Dialog, Heading, Modal, ModalOverlay } from 'react-aria-components';
 import type { SourcedObservation } from '@fctp/client-sdk';
-import { formatResource } from '../../client/src/presentation';
+import { formatResource } from './presentation';
 import {
   readResourceReader,
   refreshResourceReader,

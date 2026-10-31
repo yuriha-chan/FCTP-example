@@ -72,8 +72,8 @@ test('spawned API commands use the live application without a browser while DOM 
     assert.ok(Array.isArray(activity.data?.actions));
 
     const rendered = await cli(configRoot, ['player', 'open']);
-    assert.match(rendered, /FCTP Browser Client/);
-    assert.match(rendered, /No known accounts/, 'the DOM browser does not share the API harness client session');
+    assert.match(rendered, /^# Client/m);
+    assert.match(rendered, /## Sign in/, 'the DOM browser does not share the API harness client session');
     assert.equal(rendered.includes(`@player@${host}`), false, 'the browser has no account before its own login');
     const health = JSON.parse(await cli(configRoot, ['player', 'page', '/api/health'])) as { status?: string };
     assert.equal(health.status, 'ok', 'API stays available while the DOM worker uses the shared application origin');

@@ -6,12 +6,11 @@ COPY apps/test-authority/ ./apps/test-authority/
 COPY apps/territory-policy/ ./apps/territory-policy/
 COPY apps/territory-sim/ ./apps/territory-sim/
 COPY apps/client-server/ ./apps/client-server/
-COPY apps/client/ ./apps/client/
 COPY apps/frontend/ ./apps/frontend/
 COPY apps/demo/ ./apps/demo/
 COPY apps/browser-harness/ ./apps/browser-harness/
 COPY scripts/deployment.mjs scripts/serve.mjs ./scripts/
-RUN npm ci && npm run build && npm prune --omit=dev
+RUN npm ci && npm run build:client && npm prune --omit=dev
 
 FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production
@@ -21,8 +20,7 @@ COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/packages ./packages
 COPY --from=build --chown=node:node /app/apps/client-server/dist ./apps/client-server/dist
 COPY --from=build --chown=node:node /app/dist/apps/demo/client-server.js ./dist/apps/demo/client-server.js
-COPY --from=build --chown=node:node /app/apps/client/index.html /app/apps/client/styles.css ./apps/client/
-COPY --from=build --chown=node:node /app/dist/client ./dist/client
+COPY --from=build --chown=node:node /app/dist/frontend ./dist/frontend
 COPY --from=build --chown=node:node /app/scripts/deployment.mjs /app/scripts/serve.mjs ./scripts/
 RUN mkdir -p /data && chown node:node /data
 VOLUME ["/data"]

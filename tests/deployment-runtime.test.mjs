@@ -84,7 +84,11 @@ test('standalone client advertises its canonical origin, serves health and JavaS
     const health = await globalThis.fetch(`${base}/api/health`, { signal: globalThis.AbortSignal.timeout(timeoutMs) });
     assert.equal(health.status, 200);
     assert.deepEqual(await health.json(), { status: 'ok' });
-    const script = await globalThis.fetch(`${base}/dist/client/main.js`, { signal: globalThis.AbortSignal.timeout(timeoutMs) });
+    const page = await globalThis.fetch(`${base}/`, { signal: globalThis.AbortSignal.timeout(timeoutMs) });
+    assert.equal(page.status, 200);
+    const scriptPath = /src="([^"]+\.js)"/.exec(await page.text())?.[1];
+    assert.ok(scriptPath, 'the served page must reference its built script');
+    const script = await globalThis.fetch(`${base}${scriptPath}`, { signal: globalThis.AbortSignal.timeout(timeoutMs) });
     assert.equal(script.status, 200);
     assert.match(script.headers.get('content-type'), /javascript/);
     assert.ok((await script.text()).length > 0);

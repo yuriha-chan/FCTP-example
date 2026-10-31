@@ -6,7 +6,6 @@ COPY apps/test-authority/ ./apps/test-authority/
 COPY apps/territory-policy/ ./apps/territory-policy/
 COPY apps/territory-sim/ ./apps/territory-sim/
 COPY apps/client-server/ ./apps/client-server/
-COPY apps/client/ ./apps/client/
 COPY apps/demo/ ./apps/demo/
 COPY apps/browser-harness/ ./apps/browser-harness/
 COPY scripts/deployment.mjs scripts/serve.mjs ./scripts/
