@@ -17,6 +17,7 @@ import {
   TextField
 } from 'react-aria-components';
 import { treeState } from 'binduct';
+import type { PublicAccountRecord } from '@fctp/client-sdk';
 import {
   loginAccount,
   logoutAccount,
@@ -32,10 +33,17 @@ export type { TopicId } from './shell-state';
 
 export interface AccountContext {
   accountId?: string;
+  accountHandle?: string;
+  account?: PublicAccountRecord;
+}
+
+export interface TopicContext extends AccountContext {
+  navigateTopic: (topic: TopicId) => void;
 }
 
 export interface AppShellProps {
-  renderTopic?: (topic: TopicId, context: AccountContext) => ReactNode;
+  renderTopic?: (topic: TopicId, context: TopicContext) => ReactNode;
+  onAccountChange?: (accountId: string | undefined) => void;
 }
 
 type Account = AccountListResponse['accounts'][number];
@@ -175,7 +183,7 @@ function DefaultTopic({ topic }: { topic: TopicDefinition }): ReactElement {
 }
 
 export function AppShell(props: AppShellProps): ReactElement {
-  const { renderTopic } = props;
+  const { renderTopic, onAccountChange } = props;
   const [shellState] = useState(createShellState);
 
   const {
@@ -191,6 +199,14 @@ export function AppShell(props: AppShellProps): ReactElement {
   const mountedRef = useRef(true);
   const generationRef = useRef(0);
   const selectionRevisionRef = useRef(0);
+  const topicTabs = useRef<Partial<Record<TopicId, HTMLElement | null>>>({});
+
+  useEffect(() => { onAccountChange?.(accountId); }, [accountId, onAccountChange]);
+
+  const navigateTopic = useCallback((next: TopicId): void => {
+    shellState.topic = next;
+    topicTabs.current[next]?.focus();
+  }, [shellState]);
 
   const setSelection = useCallback((nextAccountId: string | undefined): void => {
     selectionRevisionRef.current += 1;
@@ -277,7 +293,11 @@ export function AppShell(props: AppShellProps): ReactElement {
     }
   }, [selectedAccount, refreshAccounts, shellState]);
 
-  const topicContext: AccountContext = accountId === undefined ? {} : { accountId };
+  const topicContext: TopicContext = {
+    navigateTopic,
+    ...(accountId === undefined ? {} : { accountId }),
+    ...(selectedAccount === undefined ? {} : { accountHandle: selectedAccount.handle, account: selectedAccount })
+  };
 
   return (
     <section aria-label="Client" className={style('shell')}>
@@ -353,7 +373,7 @@ export function AppShell(props: AppShellProps): ReactElement {
       >
         <TabList aria-label="Topics" className={style('tabList')}>
           {TOPICS.map((entry) => (
-            <Tab key={entry.id} id={entry.id} className={style('tab')}>{entry.label}</Tab>
+            <Tab key={entry.id} id={entry.id} ref={(element) => { topicTabs.current[entry.id] = element; }} className={style('tab')}>{entry.label}</Tab>
           ))}
         </TabList>
         {TOPICS.map((entry) => (

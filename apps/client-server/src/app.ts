@@ -567,6 +567,19 @@ export async function createClientApplication(options: CreateClientApplicationOp
             return true;
           }
         }
+        if (request.method === 'GET' && pathname === '/api/logistics/vessels') {
+          const accountId = accountScope(url, undefined, true)!;
+          await requireClient(state, request, accountId);
+          writeJson(response, 200, await logistics.vesselCandidates(accountId));
+          return true;
+        }
+        if (request.method === 'POST' && pathname === '/api/logistics/vessels/refresh') {
+          const body = await readJsonBody(request);
+          const accountId = accountScope(url, body, true)!;
+          await requireClient(state, request, accountId);
+          writeJson(response, 200, await logistics.refreshVesselCandidates(accountId));
+          return true;
+        }
         const logisticsVessel = logisticsVesselPath(pathname);
         if (logisticsVessel) {
           const action = logisticsVessel.action;

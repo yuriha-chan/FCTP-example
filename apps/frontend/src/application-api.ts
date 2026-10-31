@@ -1,4 +1,4 @@
-import type { ActionRecord, AdministrationData, AuthoringDraft, AuthoringKind, AuthorityRecord, ExplorePlaceDetailData, ExplorePlacesData, LibraryData, LogisticsVesselData, PageResponse, ProductionData, ProductionJob, ProductionOperation, PublicAccountRecord, ResourceReaderData, RoutePlanRecord, ServerRecord } from '@fctp/client-sdk';
+import type { ActionRecord, AdministrationData, AuthoringDraft, AuthoringKind, AuthorityRecord, ExplorePlaceDetailData, ExplorePlacesData, LibraryData, LogisticsVesselCandidatesData, LogisticsVesselData, PageResponse, ProductionData, ProductionJob, ProductionOperation, PublicAccountRecord, ResourceReaderData, RoutePlanRecord, ServerRecord } from '@fctp/client-sdk';
 
 export interface AccountListResponse {
   accounts: PublicAccountRecord[];
@@ -351,10 +351,19 @@ export function publishDraft(draftId: string, accountId: string): Promise<DraftP
 
 
 export type LogisticsVesselResponse = PageResponse<LogisticsVesselData>;
+export type LogisticsVesselCandidatesResponse = PageResponse<LogisticsVesselCandidatesData>;
 export type ProductionResponse = PageResponse<ProductionData>;
 export type ProductionOperationResponse = PageResponse<{ operation: ProductionOperation }>;
 export type ProductionJobResponse = PageResponse<{ job: ProductionJob }>;
 export interface ActionResponse { action: ActionRecord }
+
+export function readLogisticsVesselCandidates(accountId: string): Promise<LogisticsVesselCandidatesResponse> {
+  return request(`/api/logistics/vessels?accountId=${encodeURIComponent(accountId)}`);
+}
+
+export function refreshLogisticsVesselCandidates(accountId: string): Promise<LogisticsVesselCandidatesResponse> {
+  return request('/api/logistics/vessels/refresh', { method: 'POST', body: JSON.stringify({ accountId }) });
+}
 
 export function readLogisticsVessel(accountId: string, vesselId: string): Promise<LogisticsVesselResponse> {
   return request(`/api/logistics/vessels/${encodeURIComponent(vesselId)}?accountId=${encodeURIComponent(accountId)}`);

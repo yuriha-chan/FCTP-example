@@ -116,6 +116,18 @@ export interface ExploreBlockerRecord {
   state?: ExplorePlaceState;
 }
 
+export interface ExploreVesselPosition {
+  accountId: string;
+  vesselId: string;
+  authorityId: string;
+  source: string;
+  state: ExplorePlaceState;
+  observedAt?: string;
+  error?: string;
+  status: 'active' | 'departed' | 'absent' | 'unknown';
+  portId?: string;
+}
+
 export interface ExplorePlacesData {
   places: ExplorePlaceRecord[];
   connections: ExploreConnectionRecord[];
@@ -124,6 +136,7 @@ export interface ExplorePlacesData {
   listings: ExploreResourceRecord[];
   capabilities: ExploreCapabilityRecord[];
   blockers: ExploreBlockerRecord[];
+  positions?: ExploreVesselPosition[];
 }
 
 export interface ExplorePlaceDetailData {
@@ -135,6 +148,7 @@ export interface ExplorePlaceDetailData {
   listings: ExploreResourceRecord[];
   capabilities: ExploreCapabilityRecord[];
   blockers: ExploreBlockerRecord[];
+  positions?: ExploreVesselPosition[];
 }
 
 export interface RoutePlanLeg {
@@ -356,6 +370,25 @@ export interface LogisticsVesselIdentity {
   possessor: string;
   capacity?: number;
   name?: string;
+}
+
+export interface LogisticsVesselCandidate {
+  id: string;
+  name?: string;
+  registry?: string;
+  possessor?: string;
+  ownership: 'verified-owned' | 'not-owned' | 'unverified';
+  registrySupported?: boolean;
+  source: string;
+  state: ExplorePlaceState;
+  observedAt?: string;
+  error?: string;
+}
+
+export interface LogisticsVesselCandidatesData {
+  accountId: string;
+  candidates: LogisticsVesselCandidate[];
+  blockers: string[];
 }
 
 export interface LogisticsRegistryObservation {

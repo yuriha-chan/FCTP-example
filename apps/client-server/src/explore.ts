@@ -14,6 +14,7 @@ import type {
   ExplorePlaceState,
   ExplorePlacesData,
   ExploreResourceRecord,
+  ExploreVesselPosition,
   PageResponse,
   ResourceReaderData,
   RoutePlanLeg,
@@ -88,6 +89,27 @@ function observationKind(storedKey: string): string | undefined {
 
 function observationId(storedKey: string): string | undefined {
   return keyParts(storedKey)[2];
+}
+
+function visitPosition(state: unknown, vesselId: string): Pick<ExploreVesselPosition, 'status' | 'portId'> {
+  if (!isRecord(state)) return { status: 'unknown' };
+  if (Array.isArray(state.visits)) {
+    if (state.visits.length === 0) return { status: 'absent' };
+    const matching = state.visits.filter((visit) => isRecord(visit) && visit.vessel === vesselId);
+    if (matching.length !== 1) return { status: 'unknown' };
+    const visit = matching[0] as Record<string, unknown>;
+    if (visit.departed === true) return { status: 'departed' };
+    if (visit.departed !== false || typeof visit.port !== 'string') return { status: 'unknown' };
+    try {
+      const port = new URL(visit.port);
+      if (!['http:', 'https:'].includes(port.protocol) || port.username || port.password) return { status: 'unknown' };
+    } catch (error) {
+      if (error instanceof TypeError) return { status: 'unknown' };
+      throw error;
+    }
+    return { status: 'active', portId: visit.port };
+  }
+  return { status: state.visit === null ? 'absent' : 'unknown' };
 }
 
 export function createExploreService(
@@ -468,6 +490,30 @@ function createScopedExploreService(
     return snapshots;
   };
 
+  const readPositions = async (): Promise<ExploreVesselPosition[]> => {
+    if (scopeAccountId === undefined || scopeVesselId === undefined) return [];
+    const positions: ExploreVesselPosition[] = [];
+    for (const { storedKey, observation } of await exploreEntries()) {
+      if (observationKind(storedKey) !== 'capabilities') continue;
+      const authorityId = keyParts(storedKey)[4];
+      if (authorityId === undefined) continue;
+      const value = retainedValue(observation);
+      if (value !== undefined && (!isRecord(value) || value.accountId !== scopeAccountId
+        || value.vesselId !== scopeVesselId || value.authorityId !== authorityId)) continue;
+      positions.push({
+        accountId: scopeAccountId,
+        vesselId: scopeVesselId,
+        authorityId,
+        source: observation.source,
+        state: observation.state,
+        ...('observedAt' in observation && observation.observedAt !== undefined ? { observedAt: observation.observedAt } : {}),
+        ...('error' in observation && observation.error !== undefined ? { error: observation.error } : {}),
+        ...visitPosition(isRecord(value) ? value.state : undefined, scopeVesselId)
+      });
+    }
+    return positions;
+  };
+
   const blockersFrom = (entries: readonly StoredObservation[]): ExploreBlockerRecord[] => {
     const blockers: ExploreBlockerRecord[] = [];
     for (const { storedKey, observation } of entries) {
@@ -517,7 +563,8 @@ function createScopedExploreService(
       maps: resources.filter((resource) => resource.type === 'MapDescriptor'),
       listings: resources.filter((resource) => resource.type === 'Listing'),
       capabilities: [...snapshots.values()].flatMap((snapshot) => snapshot.actions),
-      blockers: blockersFrom(entries)
+      blockers: blockersFrom(entries),
+      positions: await readPositions()
     };
   };
 
@@ -576,7 +623,8 @@ function createScopedExploreService(
       maps: resources.filter((resource) => resource.type === 'MapDescriptor'),
       listings: resources.filter((resource) => resource.type === 'Listing'),
       capabilities: snapshot?.actions ?? [],
-      blockers: [...blockers, ...blockersFrom(entries.filter(({ storedKey }) => observationKind(storedKey) === 'resource'))]
+      blockers: [...blockers, ...blockersFrom(entries.filter(({ storedKey }) => observationKind(storedKey) === 'resource'))],
+      positions: await readPositions()
     };
   };
 

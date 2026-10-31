@@ -1,0 +1,141 @@
+.activity {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.5rem;
+  color: var(--text, #1a1d21);
+  background: var(--surface, #ffffff);
+}
+
+.heading {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.subheading {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.status {
+  margin: 0;
+  color: var(--text-muted, #5b636e);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid var(--border, #d5d9df);
+  border-radius: 0.5rem;
+}
+
+.detailHeader {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.button {
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border, #d5d9df);
+  border-radius: 0.35rem;
+  color: inherit;
+  background: var(--surface, #ffffff);
+  cursor: pointer;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border, #e3e6ea);
+  border-radius: 0.35rem;
+}
+
+.kind {
+  margin: 0;
+  font-weight: 600;
+}
+
+.target {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  margin: 0;
+  color: var(--text-muted, #5b636e);
+  overflow-wrap: anywhere;
+}
+
+.failure {
+  margin: 0;
+  color: var(--danger, #a3271f);
+}
+
+.inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+}
+
+.input {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.input dt {
+  font-weight: 600;
+}
+
+.input dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.details {
+  margin: 0;
+}
+
+.technical {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.technical dt {
+  font-weight: 600;
+}
+
+.technical dd {
+  margin: 0;
+}

@@ -1,0 +1,121 @@
+.administration {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.5rem;
+  color: var(--text, #1a1d21);
+  background: var(--surface, #ffffff);
+}
+
+.heading {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.subheading {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.status {
+  margin: 0;
+  color: var(--text-muted, #5b636e);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.targetHeader {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  margin: 0;
+  color: var(--text-muted, #5b636e);
+  overflow-wrap: anywhere;
+}
+
+.failure {
+  margin: 0;
+  color: var(--danger, #a3271f);
+}
+
+.warning {
+  margin: 0;
+  color: var(--warning, #8a5a00);
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.controlForm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem;
+  border: 1px solid var(--border, #d5d9df);
+  border-radius: 0.5rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+}
+
+.field input[type='checkbox'] {
+  align-self: flex-start;
+}
+
+.button {
+  align-self: flex-start;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border, #d5d9df);
+  border-radius: 0.35rem;
+  color: inherit;
+  background: var(--surface, #ffffff);
+  cursor: pointer;
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border, #e3e6ea);
+  border-radius: 0.35rem;
+}
+
+.result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border, #d5d9df);
+  border-radius: 0.5rem;
+}
+
+.readControls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}

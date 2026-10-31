@@ -6,6 +6,8 @@ import type {
   JourneyStep,
   LogisticsRegistryObservation,
   LogisticsTerritoryObservation,
+  LogisticsVesselCandidate,
+  LogisticsVesselCandidatesData,
   LogisticsVesselData,
   PageResponse,
   ProductionAuthorityRecord,
@@ -62,6 +64,8 @@ export class LogisticsRequestError extends Error {
 }
 
 export interface LogisticsService {
+  vesselCandidates(accountId: string): Promise<PageResponse<LogisticsVesselCandidatesData>>;
+  refreshVesselCandidates(accountId: string): Promise<PageResponse<LogisticsVesselCandidatesData>>;
   vessel(accountId: string, vesselId: string): Promise<PageResponse<LogisticsVesselData>>;
   refreshVessel(accountId: string, vesselId: string): Promise<PageResponse<LogisticsVesselData>>;
   traverse(input: { accountId: string; vesselId: string; routePlanId: string }): Promise<ActionRecord>;
@@ -104,6 +108,31 @@ function requiredString(inputs: Record<string, unknown>, name: string): string {
 
 function vesselMetadataKey(vesselId: string): string {
   return `logistics-vessel:${vesselId}`;
+}
+
+function publicHttpUrl(value: string): URL | undefined {
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? url : undefined;
+  } catch (error) {
+    if (error instanceof TypeError) return undefined;
+    throw error;
+  }
+}
+
+function candidatePublicationSource(account: AccountRecord): string | undefined {
+  const base = account.homeAuthority ?? account.actorId;
+  const url = base === undefined ? undefined : publicHttpUrl(base);
+  if (!url || account.login.status !== 'signed-in'
+    || url.host !== account.homeServer || url.host !== account.login.homeServer) return undefined;
+  return new URL('/local/info', url).href;
+}
+
+function publishedVesselIds(value: unknown): string[] | undefined {
+  const publication = record(value);
+  const maps = [publication.vessels, record(publication.ids).vessels].filter(isRecord);
+  if (maps.length === 0) return undefined;
+  return [...new Set(maps.flatMap((map) => Object.values(map).filter((id): id is string => typeof id === 'string')))];
 }
 
 function logisticsKey(accountId: string, vesselId: string): string {
@@ -176,6 +205,43 @@ export function createLogisticsService(
   const readVesselObservation = async (vesselId: string): Promise<SourcedObservation<unknown> | undefined> => {
     const found = await observations.read(vesselMetadataKey(vesselId));
     return found[0];
+  };
+
+  const candidatesPage = async (account: AccountRecord): Promise<PageResponse<LogisticsVesselCandidatesData>> => {
+    const source = candidatePublicationSource(account);
+    const blockers: string[] = [];
+    const candidates: LogisticsVesselCandidate[] = [];
+    const sourced: Record<string, SourcedObservation<unknown>> = {};
+    if (source === undefined) {
+      blockers.push('A verified issuing Home publication source is unavailable. Known vessel references remain usable.');
+    } else {
+      const publication = await observations.readOne(`logistics-vessel-candidates:${account.id}`, source);
+      sourced[source] = publication;
+      const ids = publishedVesselIds(observationValue(publication));
+      if (ids === undefined) blockers.push('Published vessel candidates are missing or unavailable; this is not a complete fleet listing.');
+      for (const id of ids ?? []) {
+        const metadata = await observations.readOne(vesselMetadataKey(id), id);
+        sourced[id] = metadata;
+        const vessel = observationValue<VesselContext['vessel']>(metadata);
+        candidates.push({
+          id,
+          source: id,
+          state: metadata.state,
+          ...('observedAt' in metadata && metadata.observedAt !== undefined ? { observedAt: metadata.observedAt } : {}),
+          ...('error' in metadata && metadata.error !== undefined ? { error: metadata.error } : {}),
+          ownership: vessel === undefined || account.actorId === undefined ? 'unverified'
+            : isOwnedVessel(vessel, account.actorId) ? 'verified-owned' : 'not-owned',
+          ...(vessel === undefined ? {} : {
+            ...(vessel.name === undefined ? {} : { name: vessel.name }),
+            registry: vessel.registry,
+            possessor: vessel.possessor,
+            registrySupported: publicHttpUrl(vessel.registry)?.host === (account.login.status === 'signed-in' ? account.login.homeServer : undefined)
+          })
+        });
+      }
+    }
+    if (account.actorId === undefined) blockers.push('Account Actor identity is unavailable; candidate ownership cannot be verified.');
+    return { context: { accountId: account.id }, data: { accountId: account.id, candidates, blockers }, observations: sourced, actions: [] };
   };
 
   const ensureVessel = async (account: AccountRecord, vesselId: string, load: boolean): Promise<VesselContext | undefined> => {
@@ -397,6 +463,36 @@ export function createLogisticsService(
   );
 
   return {
+    async vesselCandidates(accountId) {
+      return candidatesPage(await signedInAccount(accountId));
+    },
+    async refreshVesselCandidates(accountId) {
+      const account = await signedInAccount(accountId);
+      const source = candidatePublicationSource(account);
+      if (source !== undefined) {
+        const publication = await observations.refresh({
+          key: `logistics-vessel-candidates:${account.id}`,
+          source,
+          load: (signal) => call(async () => {
+            const response = await fetcher(source, { method: 'GET', headers: { Accept: 'application/json' }, cache: 'no-store', signal });
+            if (!response.ok) throw new Error(`Vessel publication unavailable: HTTP ${response.status}`);
+            const value: unknown = await response.json();
+            if (!isRecord(value)) throw new Error('Vessel publication is invalid');
+            return value;
+          })
+        });
+        for (const id of publishedVesselIds(observationValue(publication)) ?? []) {
+          await observations.refresh({
+            key: vesselMetadataKey(id), source: id,
+            load: (signal) => call(() => {
+              if (publicHttpUrl(id) === undefined) throw new Error('Published vessel reference must be an HTTP(S) URI without userinfo');
+              return readVesselDocument(fetcher, id, signal);
+            })
+          });
+        }
+      }
+      return candidatesPage(account);
+    },
     async vessel(accountId, vesselId) {
       const account = await signedInAccount(accountId);
       await ensureVessel(account, vesselId, false);
