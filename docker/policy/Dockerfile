@@ -10,7 +10,7 @@ COPY apps/client/ ./apps/client/
 COPY apps/demo/ ./apps/demo/
 COPY apps/browser-harness/ ./apps/browser-harness/
 COPY scripts/deployment.mjs scripts/serve.mjs ./scripts/
-RUN npm ci && npm run build && npm prune --omit=dev
+RUN npm ci && npm run build:policy && npm prune --omit=dev
 
 FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production

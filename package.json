@@ -8,6 +8,9 @@
   "scripts": {
     "build": "tsc -b && tsc -p apps/client/tsconfig.json --pretty false && node apps/demo/build-client.mjs && npm run build:frontend",
     "build:frontend": "tsc -p apps/frontend/tsconfig.json --pretty false && vite build --config apps/frontend/vite.config.mjs",
+    "build:authority": "tsc -b apps/test-authority",
+    "build:policy": "tsc -b apps/territory-policy",
+    "build:simulation": "tsc -b apps/territory-sim",
     "typecheck": "tsc -b --pretty false && tsc -p apps/client/tsconfig.json --pretty false && npm run typecheck:frontend",
     "typecheck:frontend": "tsc -p apps/frontend/tsconfig.json --pretty false",
     "typecheck:tests": "tsc -p tests/tsconfig.json --pretty false && tsc -p apps/client/tsconfig.json --pretty false && npm run typecheck:frontend",
