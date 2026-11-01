@@ -4,6 +4,9 @@ import { Button, Form, Input, Label, TextField } from 'react-aria-components';
 import type { AuthorityRecord, ServerRecord } from '@fctp/client-sdk';
 import { discoverServer, readServers } from './application-api';
 import type { ServerListResponse } from './application-api';
+import { HandleLabel } from './handle-label';
+import { RegistryCard } from './registry-card';
+import { TerritoryCard } from './territory-card';
 import styles from './connections.module.css';
 
 export interface ConnectionsProps {
@@ -20,19 +23,40 @@ function authorityIndex(authorities: readonly AuthorityRecord[]): Map<string, Au
 }
 
 function AuthorityEntry({ authority, onReadResource }: { authority: AuthorityRecord; onReadResource?: ConnectionsProps['onReadResource'] }): ReactElement {
-  const publishedLabel = authority.handle ?? authority.name ?? 'Unpublished authority';
+  const read = onReadResource === undefined ? undefined : () => onReadResource({ id: authority.actorId });
+  const role = authority.roles.includes('registry')
+    ? 'registry'
+    : authority.roles.includes('territory')
+      ? 'territory'
+      : authority.roles.includes('home') ? 'home' : undefined;
   return (
     <li className={styles.authority}>
-      <p className={styles.authorityLabel}>{publishedLabel}</p>
-      {authority.name === undefined ? null : <p className={styles.authorityName}>{authority.name}</p>}
+      {role === 'territory' ? (
+        <TerritoryCard
+          {...(authority.name === undefined ? {} : { name: authority.name })}
+          {...(authority.handle === undefined ? {} : { handle: authority.handle })}
+          {...(read === undefined ? {} : { onPress: read })}
+        />
+      ) : role === 'registry' ? (
+        <RegistryCard
+          {...(authority.name === undefined ? {} : { name: authority.name })}
+          {...(authority.handle === undefined ? {} : { handle: authority.handle })}
+          {...(read === undefined ? {} : { onPress: read })}
+        />
+      ) : (
+        <HandleLabel
+          actorId={authority.actorId}
+          {...(authority.handle === undefined ? {} : { handle: authority.handle })}
+          {...(authority.name === undefined ? {} : { name: authority.name })}
+          {...(role === undefined ? {} : { role })}
+          {...(read === undefined ? {} : { onPress: read })}
+        />
+      )}
       {authority.handle === undefined ? <p className={styles.unpublished}>Unpublished handle</p> : null}
       <p className={styles.roles}>
         Roles: {authority.roles.length === 0 ? 'none listed' : authority.roles.join(', ')}
       </p>
       <p className={styles.hosting}>Hosted by {authority.server}</p>
-      {onReadResource === undefined ? null : (
-        <Button onPress={() => onReadResource({ id: authority.actorId })}>Read authority</Button>
-      )}
       <details className={styles.details}>
         <summary>Authority details</summary>
         <dl className={styles.identity}>

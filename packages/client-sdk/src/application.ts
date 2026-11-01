@@ -253,6 +253,7 @@ export interface PageResponse<T> {
   data: T;
   observations: Record<string, SourcedObservation<unknown>>;
   actions: ActionDescriptor[];
+  identities?: ActorIdentityRecord[];
 }
 
 export interface PublicAccountRecord extends Omit<AccountRecord, 'login'> {
@@ -469,4 +470,18 @@ export interface AdministrationData {
   controls: AdministrationControlRecord[];
   requests: AdministrationRequestRecord[];
   states: Record<string, Record<string, unknown>>;
+}
+
+export type ActorIdentityState = 'available' | 'empty' | 'stale' | 'unavailable';
+
+export interface ActorIdentityRecord {
+  actorId: string;
+  source: string;
+  state: ActorIdentityState;
+  verified: boolean;
+  handle?: string;
+  name?: string;
+  reason?: string;
+  error?: string;
+  observedAt?: string;
 }

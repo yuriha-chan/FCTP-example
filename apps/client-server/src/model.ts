@@ -1,4 +1,4 @@
-import type { AccountRecord, ActionRecord, AuthorityRecord, ServerRecord, SourcedObservation } from '@fctp/client-sdk';
+import type { AccountRecord, ActionRecord, ActorIdentityRecord, AuthorityRecord, ServerRecord, SourcedObservation } from '@fctp/client-sdk';
 import type { ClientSessionRecord } from './sessions.js';
 
 export interface ClientState {
@@ -12,6 +12,7 @@ export interface ClientState {
   actions: Record<string, ActionRecord>;
   followedRequests: Record<string, Record<string, unknown>>;
   followedJobs: Record<string, Record<string, unknown>>;
+  identities: Record<string, ActorIdentityRecord>;
 }
 
 export function emptyClientState(): ClientState {
@@ -25,6 +26,7 @@ export function emptyClientState(): ClientState {
     routePlans: {},
     actions: {},
     followedRequests: {},
-    followedJobs: {}
+    followedJobs: {},
+    identities: {}
   };
 }

@@ -822,7 +822,7 @@ async function discover(page: Page, mock: ApplicationMock, origin: string): Prom
 }
 
 async function waitForReadAuthority(page: Page): Promise<Locator> {
-  const buttons = connectionsRegion(page).getByRole('button', { name: /read authority/i });
+  const buttons = connectionsRegion(page).getByRole('button').filter({ hasNotText: /discover/i });
   await buttons.first().waitFor({ state: 'visible', timeout: settleTimeout });
   return buttons;
 }
@@ -939,7 +939,7 @@ test('signs in, persists the account, discovers an origin, reads and refreshes a
   assert.equal(discovery.authorization, undefined, 'explicit discovery must remain public');
   assert.equal(mock.requests.filter((request) => request.method === 'POST' && request.path === '/api/servers').length, 1);
 
-  await connectionsRegion(page).getByRole('paragraph').filter({ hasText: authority.handle! }).waitFor({ state: 'visible', timeout: settleTimeout });
+  await connectionsRegion(page).getByText(authority.handle!, { exact: true }).first().waitFor({ state: 'visible', timeout: settleTimeout });
 
   const readButtons = await waitForReadAuthority(page);
   assert.equal(await readButtons.count(), 1, 'each known authority must have one contextual reader control');
@@ -989,7 +989,7 @@ test('signs in, persists the account, discovers an origin, reads and refreshes a
   await dialog.waitFor({ state: 'hidden', timeout: settleTimeout });
   await page.waitForFunction(() => {
     const active = document.activeElement as HTMLElement | null;
-    return Boolean(active && active.tagName === 'BUTTON' && /read authority/i.test(active.textContent ?? ''));
+    return Boolean(active && active.tagName === 'BUTTON');
   }, undefined, { timeout: settleTimeout });
   assert.equal(await readButtons.first().evaluate((element) => element === document.activeElement), true, 'closing must return focus to the originating authority control');
 
@@ -1043,7 +1043,7 @@ test('keeps same-name accounts isolated while reopening the same retained author
   assert.deepEqual(parsedBody(discovery), { origin });
   assert.equal(discovery.authorization, undefined);
 
-  await connectionsRegion(page).getByRole('paragraph').filter({ hasText: authority.handle! }).waitFor({ state: 'visible', timeout: settleTimeout });
+  await connectionsRegion(page).getByText(authority.handle!, { exact: true }).first().waitFor({ state: 'visible', timeout: settleTimeout });
   const firstButtons = await waitForReadAuthority(page);
   assert.equal(await firstButtons.count(), 1);
   await firstButtons.first().click();
@@ -1529,7 +1529,7 @@ test('derives Home ownership from the selected full handle and isolates same-nam
   await page.getByRole('tab', { name: 'Activity', exact: true }).click();
   await activity.waitFor({ state: 'visible', timeout: settleTimeout });
   await activity.getByRole('button', { name: 'View details', exact: true }).click();
-  await activity.getByText(`Target: ${secondAuthority}`, { exact: true }).waitFor({ state: 'visible', timeout: settleTimeout });
+  await activity.getByRole('region', { name: 'Action details' }).getByText(`Target: ${secondAuthority}`, { exact: true }).waitFor({ state: 'visible', timeout: settleTimeout });
   await activity.getByRole('button', { name: 'Read resource', exact: true }).click();
 
   dialog = page.getByRole('dialog');

@@ -1,4 +1,5 @@
 import type { ActionRecord, AdministrationData, AuthoringDraft, AuthoringKind, AuthorityRecord, ExplorePlaceDetailData, ExplorePlacesData, LibraryData, LogisticsVesselCandidatesData, LogisticsVesselData, PageResponse, ProductionData, ProductionJob, ProductionOperation, PublicAccountRecord, ResourceReaderData, RoutePlanRecord, ServerRecord } from '@fctp/client-sdk';
+import { identityDisplay } from './identity-display';
 
 export interface AccountListResponse {
   accounts: PublicAccountRecord[];
@@ -187,6 +188,9 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
       removeSession(session.accountId, session.clientToken);
     }
     throw new ApplicationRequestError(redact(errorMessage(body, response.status), [session?.clientToken, ...(options.secrets ?? [])]), response.status);
+  }
+  if (typeof body === 'object' && body !== null) {
+    identityDisplay.registerRecords((body as Record<string, unknown>).identities);
   }
   return body as T;
 }

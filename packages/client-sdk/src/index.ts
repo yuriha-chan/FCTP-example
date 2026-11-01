@@ -1,10 +1,10 @@
 import { deriveDiplomaticToken, type HomeLoginRequest, type HomeLoginResult } from '@fctp/auth';
-import { parseHandle, resolveActor, resolveWebFinger, type ActorResolution } from '@fctp/identity';
+import { isLoopbackHostname, parseHandle, resolveActor, resolveWebFinger, type ActorResolution } from '@fctp/identity';
 import { ResourceClient, resourceError, type ResourceRequestOptions } from '@fctp/resources';
 import { compareCargo, type CargoManifest, type FCTPActor, type URI } from '@fctp/protocol';
 export { actionIsComplete, observationIsCurrent, toPublicAccount } from './application.js';
 export type { ExploreVesselPosition, LogisticsVesselCandidate, LogisticsVesselCandidatesData } from './application.js';
-export type { AccountRecord, AccountScopedRequest, ActionDescriptor, ActionEvidence, ActionRecord, AuthoringDraft, AuthoringDraftPublication, AuthoringKind, AuthorityRecord, AuthorityRole, ExploreBlockerRecord, ExploreCapabilityRecord, ExploreCapabilitySnapshot, ExploreConnectionRecord, ExploreEndpointRecord, ExplorePlaceDetailData, ExplorePlaceRecord, ExplorePlaceState, ExplorePlacesData, ExploreResourceRecord, JourneyProgress, JourneyStatus, JourneyStep, JourneyStepKind, JourneyStepStatus, LibraryData, LibraryEntry, LoginState, LogisticsRegistryObservation, LogisticsTerritoryObservation, LogisticsVesselData, LogisticsVesselIdentity, PageContext, PageResponse, ProductionAuthorityRecord, ProductionData, ProductionJob, ProductionJobProgress, ProductionOperation, ProductionOperationInput, ProductionOperationKind, PublicAccountRecord, AdministrationControlInput, AdministrationControlName, AdministrationControlRecord, AdministrationData, AdministrationRequestRecord, AdministrationTargetRecord, ResourceReaderData, RoutePlanLeg, RoutePlanRecord, ServerRecord, SourcedObservation } from './application.js';
+export type { AccountRecord, AccountScopedRequest, ActionDescriptor, ActionEvidence, ActionRecord, ActorIdentityRecord, ActorIdentityState, AuthoringDraft, AuthoringDraftPublication, AuthoringKind, AuthorityRecord, AuthorityRole, ExploreBlockerRecord, ExploreCapabilityRecord, ExploreCapabilitySnapshot, ExploreConnectionRecord, ExploreEndpointRecord, ExplorePlaceDetailData, ExplorePlaceRecord, ExplorePlaceState, ExplorePlacesData, ExploreResourceRecord, JourneyProgress, JourneyStatus, JourneyStep, JourneyStepKind, JourneyStepStatus, LibraryData, LibraryEntry, LoginState, LogisticsRegistryObservation, LogisticsTerritoryObservation, LogisticsVesselData, LogisticsVesselIdentity, PageContext, PageResponse, ProductionAuthorityRecord, ProductionData, ProductionJob, ProductionJobProgress, ProductionOperation, ProductionOperationInput, ProductionOperationKind, PublicAccountRecord, AdministrationControlInput, AdministrationControlName, AdministrationControlRecord, AdministrationData, AdministrationRequestRecord, AdministrationTargetRecord, ResourceReaderData, RoutePlanLeg, RoutePlanRecord, ServerRecord, SourcedObservation } from './application.js';
 
 export interface ClientSdkOptions { fetcher?: typeof fetch; resources?: ResourceClient }
 
@@ -174,13 +174,6 @@ function homeOriginFor(server: string): string {
   const parsed = new URL(`https://${server}`);
   const protocol = isLoopbackHostname(parsed.hostname) ? 'http:' : 'https:';
   return new URL(`${protocol}//${server}`).origin;
-}
-
-function isLoopbackHostname(hostname: string): boolean {
-  if (hostname === 'localhost' || hostname === '[::1]' || hostname === '::1') return true;
-  const octets = hostname.split('.');
-  if (octets.length !== 4 || !octets.every((part) => /^\d{1,3}$/.test(part))) return false;
-  return octets.every((part) => Number(part) <= 255) && Number(octets[0]) === 127;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

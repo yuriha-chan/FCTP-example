@@ -1,0 +1,42 @@
+.identifier {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.1rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: inherit;
+  text-align: left;
+}
+
+.interactive {
+  cursor: pointer;
+}
+
+.interactive:hover {
+  text-decoration: underline;
+}
+
+.interactive:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.handle {
+  font-weight: 600;
+}
+
+.unknown {
+  color: var(--muted, #5b6470);
+}
+
+.segment {
+  color: var(--segment-color, inherit);
+}
+
+.separator {
+  color: var(--muted, #8a94a3);
+}

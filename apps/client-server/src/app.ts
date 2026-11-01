@@ -7,6 +7,8 @@ import { createAuthoringPublicationHandler, createAuthoringService, AuthoringReq
 import { createDiscoveryService, type DiscoveryInput } from './discovery.js';
 import { UpstreamError } from './errors.js';
 import { createExploreService, ExploreRequestError } from './explore.js';
+import { embedIdentities } from './identity-embedding.js';
+import { createIdentityService, type IdentityService } from './identities.js';
 import { createLogisticsService, createWorkflowActionHandlers, LogisticsRequestError } from './logistics.js';
 import { createObservationService, type ObservationService } from './observations.js';
 import { digestClientToken } from './sessions.js';
@@ -23,6 +25,7 @@ export interface ClientApplication {
   readonly seedServers: readonly string[];
   readonly fetch: typeof fetch;
   readonly observations: ObservationService;
+  readonly identities: IdentityService;
   readonly actions: ActionService;
   readonly authoring: ReturnType<typeof createAuthoringService>;
   readonly administration: AdministrationService;
@@ -361,6 +364,9 @@ export async function createClientApplication(options: CreateClientApplicationOp
   const observations = createObservationService(state, {
     ...(options.observationTimeoutMs === undefined ? {} : { timeoutMs: options.observationTimeoutMs })
   });
+  const identities = createIdentityService(state, fetcher, {
+    ...(options.observationTimeoutMs === undefined ? {} : { timeoutMs: options.observationTimeoutMs })
+  });
   const bindings = [...(options.administratorBindings ?? [])];
   const credentials = { ...(options.administratorCredentials ?? {}) };
   const resolveAdministratorCredential = async (accountId: string, targetActorId: string): Promise<string> => {
@@ -407,6 +413,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
     seedServers,
     fetch: fetcher,
     observations,
+    identities,
     actions,
     authoring,
     administration,
@@ -415,15 +422,20 @@ export async function createClientApplication(options: CreateClientApplicationOp
       const url = new URL(request.url ?? '/', 'http://127.0.0.1');
       const pathname = url.pathname;
       if (!isApiPath(pathname)) return false;
+      const resolveIdentities = request.method !== 'GET' && request.method !== 'HEAD'
+        && !pathname.endsWith('/login') && !pathname.includes('/logout');
+      const send = async (status: number, body: unknown): Promise<void> => {
+        writeJson(response, status, await embedIdentities(body, identities, { resolve: resolveIdentities }));
+      };
       try {
         if (request.method === 'GET' && pathname === '/api/health') {
-          writeJson(response, 200, { status: 'ok' });
+          await send(200, { status: 'ok' });
           return true;
         }
         if (request.method === 'GET' && pathname === '/api/accounts') {
           const authenticated = await requireClient(state, request, undefined);
           const account = await accounts.get(authenticated.accountId);
-          writeJson(response, 200, { accounts: account ? [account] : [] });
+          await send(200, { accounts: account ? [account] : [] });
           return true;
         }
         if (request.method === 'POST' && pathname === '/api/accounts/login') {
@@ -437,37 +449,37 @@ export async function createClientApplication(options: CreateClientApplicationOp
           const authenticated = await requireClient(state, request, logoutAccountId);
           const account = await accounts.logout(logoutAccountId, authenticated.digest);
           if (!account) throw new ApiError(404, 'account-not-found');
-          writeJson(response, 200, { account });
+          await send(200, { account });
           return true;
         }
         if (request.method === 'GET' && pathname === '/api/servers') {
           await authorize(state, request, undefined, false);
-          writeJson(response, 200, await discovery.list());
+          await send(200, await discovery.list());
           return true;
         }
         if (request.method === 'POST' && pathname === '/api/servers') {
           await authorize(state, request, undefined, false);
-          writeJson(response, 200, await discovery.discover(discoveryInput(await readJsonBody(request))));
+          await send(200, await discovery.discover(discoveryInput(await readJsonBody(request))));
           return true;
         }
         if (request.method === 'GET' && pathname === '/api/library') {
           const accountId = accountScope(url, undefined, true)!;
           await requireClient(state, request, accountId);
-          writeJson(response, 200, await authoring.library(accountId));
+          await send(200, await authoring.library(accountId));
           return true;
         }
         if (request.method === 'POST' && pathname === '/api/library/refresh') {
           const body = await readJsonBody(request);
           const accountId = accountScope(url, body, true)!;
           await requireClient(state, request, accountId);
-          writeJson(response, 200, await authoring.refreshLibrary(accountId));
+          await send(200, await authoring.refreshLibrary(accountId));
           return true;
         }
         if (request.method === 'POST' && pathname === '/api/drafts') {
           const body = await readJsonBody(request);
           const accountId = accountScope(url, body, true)!;
           await requireClient(state, request, accountId);
-          writeJson(response, 201, await authoring.createDraft({ accountId, kind: bodyKind(body), fields: body.fields }));
+          await send(201, await authoring.createDraft({ accountId, kind: bodyKind(body), fields: body.fields }));
           return true;
         }
         const draft = draftPath(pathname);
@@ -476,34 +488,34 @@ export async function createClientApplication(options: CreateClientApplicationOp
             const body = await readJsonBody(request);
             const accountId = accountScope(url, body, true)!;
             await requireClient(state, request, accountId);
-            writeJson(response, 200, await authoring.publishDraft(draft.draftId, accountId));
+            await send(200, await authoring.publishDraft(draft.draftId, accountId));
             return true;
           }
           if (!draft.publish && request.method === 'GET') {
             const accountId = accountScope(url, undefined, true)!;
             await requireClient(state, request, accountId);
-            writeJson(response, 200, await authoring.getDraft(draft.draftId, accountId));
+            await send(200, await authoring.getDraft(draft.draftId, accountId));
             return true;
           }
           if (!draft.publish && request.method === 'POST') {
             const body = await readJsonBody(request);
             const accountId = accountScope(url, body, true)!;
             await requireClient(state, request, accountId);
-            writeJson(response, 200, await authoring.saveDraft(draft.draftId, { accountId, fields: body.fields }));
+            await send(200, await authoring.saveDraft(draft.draftId, { accountId, fields: body.fields }));
             return true;
           }
         }
         if (request.method === 'GET' && pathname === '/api/explore/places') {
           const accountId = accountScope(url, undefined, false);
           await authorize(state, request, accountId, false);
-          writeJson(response, 200, await explore.listPlaces(accountId, optionalQuery(url, 'vesselId')));
+          await send(200, await explore.listPlaces(accountId, optionalQuery(url, 'vesselId')));
           return true;
         }
         if (request.method === 'POST' && pathname === '/api/explore/refresh') {
           const body = await readJsonBody(request);
           const accountId = accountScope(url, body, false);
           await authorize(state, request, accountId, false);
-          writeJson(response, 200, await explore.refresh({
+          await send(200, await explore.refresh({
             ...(accountId === undefined ? {} : { accountId }),
             ...(optionalBody(body, 'vesselId') === undefined ? {} : { vesselId: optionalBody(body, 'vesselId')! })
           }));
@@ -515,7 +527,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
             const body = await readJsonBody(request);
             const accountId = accountScope(url, body, false);
             await authorize(state, request, accountId, false);
-            writeJson(response, 200, await explore.refreshPlace(placePath.placeId, {
+            await send(200, await explore.refreshPlace(placePath.placeId, {
               ...(accountId === undefined ? {} : { accountId }),
               ...(optionalBody(body, 'vesselId') === undefined ? {} : { vesselId: optionalBody(body, 'vesselId')! })
             }));
@@ -524,7 +536,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
           if (!placePath.refresh && request.method === 'GET') {
             const accountId = accountScope(url, undefined, false);
             await authorize(state, request, accountId, false);
-            writeJson(response, 200, await explore.placeDetail(placePath.placeId, accountId, optionalQuery(url, 'vesselId')));
+            await send(200, await explore.placeDetail(placePath.placeId, accountId, optionalQuery(url, 'vesselId')));
             return true;
           }
         }
@@ -535,14 +547,14 @@ export async function createClientApplication(options: CreateClientApplicationOp
           const from = optionalBody(body, 'from');
           const to = optionalBody(body, 'to');
           if (from === undefined || to === undefined) throw new ApiError(400, 'route-endpoints-required');
-          writeJson(response, 200, await explore.createRoute({ accountId, from, to }));
+          await send(200, await explore.createRoute({ accountId, from, to }));
           return true;
         }
         const routeId = exploreRoutePath(pathname);
         if (routeId !== undefined && request.method === 'GET') {
           const accountId = accountScope(url, undefined, false);
           await authorize(state, request, accountId, false);
-          writeJson(response, 200, await explore.routeDetail(routeId, accountId));
+          await send(200, await explore.routeDetail(routeId, accountId));
           return true;
         }
         const resource = resourcePath(pathname);
@@ -551,7 +563,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
             const body = await readJsonBody(request);
             const accountId = accountScope(url, body, false);
             await authorize(state, request, accountId, false);
-            writeJson(response, 200, await explore.refreshResource(resource.resourceId, {
+            await send(200, await explore.refreshResource(resource.resourceId, {
               ...(accountId === undefined ? {} : { accountId }),
               ...(optionalBody(body, 'authorityId') === undefined ? {} : { authorityId: optionalBody(body, 'authorityId')! })
             }));
@@ -560,7 +572,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
           if (!resource.refresh && request.method === 'GET') {
             const accountId = accountScope(url, undefined, false);
             await authorize(state, request, accountId, false);
-            writeJson(response, 200, await explore.readResource(resource.resourceId, {
+            await send(200, await explore.readResource(resource.resourceId, {
               ...(accountId === undefined ? {} : { accountId }),
               ...(optionalQuery(url, 'authorityId') === undefined ? {} : { authorityId: optionalQuery(url, 'authorityId')! })
             }));
@@ -570,14 +582,14 @@ export async function createClientApplication(options: CreateClientApplicationOp
         if (request.method === 'GET' && pathname === '/api/logistics/vessels') {
           const accountId = accountScope(url, undefined, true)!;
           await requireClient(state, request, accountId);
-          writeJson(response, 200, await logistics.vesselCandidates(accountId));
+          await send(200, await logistics.vesselCandidates(accountId));
           return true;
         }
         if (request.method === 'POST' && pathname === '/api/logistics/vessels/refresh') {
           const body = await readJsonBody(request);
           const accountId = accountScope(url, body, true)!;
           await requireClient(state, request, accountId);
-          writeJson(response, 200, await logistics.refreshVesselCandidates(accountId));
+          await send(200, await logistics.refreshVesselCandidates(accountId));
           return true;
         }
         const logisticsVessel = logisticsVesselPath(pathname);
@@ -587,7 +599,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
             const accountId = accountScope(url, undefined, true)!;
             await requireClient(state, request, accountId);
             await requireAccount(state, accountId);
-            writeJson(response, 200, await logistics.vessel(accountId, logisticsVessel.vesselId));
+            await send(200, await logistics.vessel(accountId, logisticsVessel.vesselId));
             return true;
           }
           if (action === 'refresh' && request.method === 'POST') {
@@ -595,7 +607,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
             const accountId = accountScope(url, body, true)!;
             await requireClient(state, request, accountId);
             await requireAccount(state, accountId);
-            writeJson(response, 200, await logistics.refreshVessel(accountId, logisticsVessel.vesselId));
+            await send(200, await logistics.refreshVessel(accountId, logisticsVessel.vesselId));
             return true;
           }
           if ((action === 'entry' || action === 'departure') && request.method === 'POST') {
@@ -609,7 +621,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
             if (territoryId === undefined || portId === undefined || routeId === undefined) throw new ApiError(400, 'destination-required');
             const input = { accountId, vesselId: logisticsVessel.vesselId, territoryId, portId, routeId };
             const record = action === 'entry' ? await logistics.entry(input) : await logistics.departure(input);
-            writeJson(response, 200, { action: record });
+            await send(200, { action: record });
             return true;
           }
           if (action === 'adoption' && request.method === 'POST') {
@@ -618,7 +630,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
             await requireClient(state, request, accountId);
             await requireAccount(state, accountId);
             if (typeof body.adoption !== 'boolean') throw new ApiError(400, 'adoption-required');
-            writeJson(response, 200, { action: await logistics.adoption({ accountId, vesselId: logisticsVessel.vesselId, adoption: body.adoption }) });
+            await send(200, { action: await logistics.adoption({ accountId, vesselId: logisticsVessel.vesselId, adoption: body.adoption }) });
             return true;
           }
           if (action === 'traverse' && request.method === 'POST') {
@@ -628,7 +640,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
             await requireAccount(state, accountId);
             const routePlanId = optionalBody(body, 'routePlanId');
             if (routePlanId === undefined) throw new ApiError(400, 'route-plan-id-required');
-            writeJson(response, 200, { action: await logistics.traverse({ accountId, vesselId: logisticsVessel.vesselId, routePlanId }) });
+            await send(200, { action: await logistics.traverse({ accountId, vesselId: logisticsVessel.vesselId, routePlanId }) });
             return true;
           }
         }
@@ -636,7 +648,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
           const accountId = accountScope(url, undefined, true)!;
           await requireClient(state, request, accountId);
           await requireAccount(state, accountId);
-          writeJson(response, 200, await logistics.production(accountId, queryVesselId(url)));
+          await send(200, await logistics.production(accountId, queryVesselId(url)));
           return true;
         }
         if (request.method === 'POST' && pathname === '/api/production/refresh') {
@@ -644,7 +656,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
           const accountId = accountScope(url, body, true)!;
           await requireClient(state, request, accountId);
           await requireAccount(state, accountId);
-          writeJson(response, 200, await logistics.refreshProduction(accountId, bodyVesselId(body)));
+          await send(200, await logistics.refreshProduction(accountId, bodyVesselId(body)));
           return true;
         }
         const productionOperation = productionOperationPath(pathname);
@@ -656,14 +668,14 @@ export async function createClientApplication(options: CreateClientApplicationOp
             await requireAccount(state, accountId);
             const inputs = typeof body.inputs === 'object' && body.inputs !== null && !Array.isArray(body.inputs) ? body.inputs as Record<string, unknown> : {};
             const record = await logistics.executeOperation(productionOperation.operationId, accountId, bodyVesselId(body), inputs);
-            writeJson(response, 200, { action: record });
+            await send(200, { action: record });
             return true;
           }
           if (!productionOperation.execute && request.method === 'GET') {
             const accountId = accountScope(url, undefined, true)!;
             await requireClient(state, request, accountId);
             await requireAccount(state, accountId);
-            writeJson(response, 200, await logistics.operation(productionOperation.operationId, accountId, queryVesselId(url)));
+            await send(200, await logistics.operation(productionOperation.operationId, accountId, queryVesselId(url)));
             return true;
           }
         }
@@ -674,21 +686,21 @@ export async function createClientApplication(options: CreateClientApplicationOp
             const accountId = accountScope(url, body, true)!;
             await requireClient(state, request, accountId);
             await requireAccount(state, accountId);
-            writeJson(response, 200, await logistics.refreshJob(productionJob.jobId, accountId, bodyVesselId(body)));
+            await send(200, await logistics.refreshJob(productionJob.jobId, accountId, bodyVesselId(body)));
             return true;
           }
           if (!productionJob.refresh && request.method === 'GET') {
             const accountId = accountScope(url, undefined, true)!;
             await requireClient(state, request, accountId);
             await requireAccount(state, accountId);
-            writeJson(response, 200, await logistics.job(productionJob.jobId, accountId, queryVesselId(url)));
+            await send(200, await logistics.job(productionJob.jobId, accountId, queryVesselId(url)));
             return true;
           }
         }
         if (request.method === 'GET' && pathname === '/api/administration') {
           const accountId = accountScope(url, undefined, true)!;
           await requireClient(state, request, accountId);
-          writeJson(response, 200, await administration.page(accountId));
+          await send(200, await administration.page(accountId));
           return true;
         }
         if (request.method === 'POST' && pathname === '/api/administration/refresh') {
@@ -697,7 +709,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
           await requireClient(state, request, accountId);
           const authorityId = optionalBody(body, 'authorityId');
           if (authorityId === undefined) throw new ApiError(400, 'authority-id-required');
-          writeJson(response, 200, await administration.refresh({ accountId, authorityId }));
+          await send(200, await administration.refresh({ accountId, authorityId }));
           return true;
         }
         if (request.method === 'POST' && pathname === '/api/administration/controls') {
@@ -709,7 +721,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
           if (authorityId === undefined) throw new ApiError(400, 'authority-id-required');
           if (control === undefined) throw new ApiError(400, 'control-required');
           const inputs = typeof body.inputs === 'object' && body.inputs !== null && !Array.isArray(body.inputs) ? body.inputs as Record<string, unknown> : {};
-          writeJson(response, 200, await administration.control({ accountId, authorityId, control, inputs }));
+          await send(200, await administration.control({ accountId, authorityId, control, inputs }));
           return true;
         }
         const administrationDecision = administrationDecisionPath(pathname);
@@ -720,7 +732,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
           const authorityId = optionalBody(body, 'authorityId');
           if (authorityId === undefined) throw new ApiError(400, 'authority-id-required');
           const reason = optionalBody(body, 'reason');
-          writeJson(response, 200, await administration.decide({
+          await send(200, await administration.decide({
             accountId, authorityId, requestId: administrationDecision.requestId,
             decision: administrationDecision.decision, ...(reason === undefined ? {} : { reason })
           }));
@@ -730,7 +742,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
           const accountId = accountScope(url, undefined, true)!;
           await requireClient(state, request, accountId);
           await requireAccount(state, accountId);
-          writeJson(response, 200, await activityPage(state, { accountId }, { actions: await actions.list(accountId) }, []));
+          await send(200, await activityPage(state, { accountId }, { actions: await actions.list(accountId) }, []));
           return true;
         }
         const activityPath = activityActionPath(pathname);
@@ -743,7 +755,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
             const existing = await actions.get(activityPath.actionId, accountId);
             if (!existing) throw new ApiError(404, 'action-not-found');
             const record = await actions.reconcile(activityPath.actionId, accountId);
-            writeJson(response, 200, await activityPage(state, { accountId, targetId: record.targetId }, { action: record }, [{
+            await send(200, await activityPage(state, { accountId, targetId: record.targetId }, { action: record }, [{
               id: `refresh:${record.id}`,
               label: `Refresh ${record.intent.kind} action`,
               endpoint: `/api/activity/${encodeURIComponent(record.id)}/refresh`,
@@ -761,7 +773,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
             await requireAccount(state, accountId);
             const record = await actions.get(activityPath.actionId, accountId);
             if (!record) throw new ApiError(404, 'action-not-found');
-            writeJson(response, 200, await activityPage(state, { accountId, targetId: record.targetId }, { action: record }, [{
+            await send(200, await activityPage(state, { accountId, targetId: record.targetId }, { action: record }, [{
               id: `refresh:${record.id}`,
               label: `Refresh ${record.intent.kind} action`,
               endpoint: `/api/activity/${encodeURIComponent(record.id)}/refresh`,

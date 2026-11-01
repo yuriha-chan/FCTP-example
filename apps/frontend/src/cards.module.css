@@ -13,3 +13,24 @@
   margin: 0;
   font-weight: 600;
 }
+
+.handle {
+  color: var(--muted, #5b6470);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.9em;
+}
+
+.interactive {
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.interactive:hover {
+  border-color: var(--border-strong, #8a94a3);
+}
+
+.interactive:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}

@@ -14,6 +14,7 @@ export const AS_CONTEXT = 'https://www.w3.org/ns/activitystreams';
 export const DI_CONTEXT = 'https://w3id.org/security/data-integrity/v2';
 export const MULTIKEY_CONTEXT = 'https://w3id.org/security/multikey/v1';
 export const DID_CONTEXT = 'https://www.w3.org/ns/did/v1';
+export const WEBFINGER_CONTEXT = 'https://purl.archive.org/socialweb/webfinger';
 
 const fctpTerms = {
   '@vocab': 'https://fctp.example/ns#',
@@ -50,7 +51,12 @@ const builtins = new Map<string, JsonDocument>([
   } }],
   [DI_CONTEXT, integrityContexts.contexts.get(DI_CONTEXT)!],
   [MULTIKEY_CONTEXT, multikeyContexts.contexts.get(MULTIKEY_CONTEXT)!],
-  [DID_CONTEXT, { '@context': { id: '@id', type: '@type', assertionMethod: { '@id': 'https://w3id.org/security#assertionMethod', '@type': '@id', '@container': '@set' } } }]
+  [DID_CONTEXT, { '@context': { id: '@id', type: '@type', assertionMethod: { '@id': 'https://w3id.org/security#assertionMethod', '@type': '@id', '@container': '@set' } } }],
+  [WEBFINGER_CONTEXT, { '@context': {
+    wf: 'https://purl.archive.org/socialweb/webfinger#',
+    xsd: 'http://www.w3.org/2001/XMLSchema#',
+    webfinger: { '@id': 'wf:webfinger', '@type': 'xsd:string' }
+  } }]
 ]);
 
 export function createLocalDocumentLoader(documents: ReadonlyMap<string, JsonDocument> = new Map()): DocumentLoader {
@@ -150,6 +156,91 @@ export function parseHandle(handle: string): ParsedHandle {
   return role === undefined
     ? { handle, localName: localName!, server, kind: 'account' }
     : { handle, localName: localName!, server, kind: 'authority', role };
+}
+
+export interface ParsedWebFingerAddress {
+  address: string;
+  handle: string;
+  subject: string;
+}
+
+export function parseWebFingerAddress(value: string): ParsedWebFingerAddress {
+  if (typeof value !== 'string' || value.length === 0 || /\s/.test(value)) throw new TypeError('Expected a WebFinger address');
+  let address = value;
+  if (/^acct:/i.test(address)) address = address.slice(5);
+  if (address.startsWith('@')) address = address.slice(1);
+  const parsed = parseHandle(`@${address}`);
+  const plain = parsed.handle.slice(1);
+  return { address: plain, handle: parsed.handle, subject: `acct:${plain}` };
+}
+
+export type ReverseDiscoveryError =
+  | 'webfinger-not-published'
+  | 'webfinger-invalid'
+  | 'webfinger-unverified';
+
+export type ReverseDiscoveryResult =
+  | { verified: true; actor: FCTPActor; address: string; handle: string }
+  | { verified: false; actor: FCTPActor; error: ReverseDiscoveryError; detail?: string };
+
+export async function reverseDiscoverWebFinger(actorId: URI, fetcher: typeof fetch = fetch): Promise<ReverseDiscoveryResult> {
+  const { actor } = await resolveActor(actorId, fetcher);
+  const published = actor.webfinger;
+  if (typeof published !== 'string' || published.length === 0) return { verified: false, actor, error: 'webfinger-not-published' };
+  let address: ParsedWebFingerAddress;
+  try {
+    address = parseWebFingerAddress(published);
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    return { verified: false, actor, error: 'webfinger-invalid', detail: 'published webfinger is not an address' };
+  }
+  const { server } = parseHandle(address.handle);
+  const protocol = isLoopbackServer(server) ? 'http:' : 'https:';
+  const endpoint = new URL('/.well-known/webfinger', `${protocol}//${server}`);
+  endpoint.searchParams.set('resource', address.subject);
+  const response = await fetcher(endpoint, { headers: { Accept: 'application/jrd+json' } });
+  if (response.status !== 200) return { verified: false, actor, error: 'webfinger-unverified', detail: `WebFinger HTTP ${response.status}` };
+  let jrd: unknown;
+  try {
+    jrd = await response.json();
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    return { verified: false, actor, error: 'webfinger-unverified', detail: 'invalid JRD' };
+  }
+  if (!isRecord(jrd) || normalizeWebFingerAddress(jrd.subject) !== address.address) {
+    return { verified: false, actor, error: 'webfinger-unverified', detail: 'subject mismatch' };
+  }
+  const links = Array.isArray(jrd.links) ? jrd.links : [];
+  if (!links.some((link) => isRecord(link) && link.rel === 'self' && link.href === actorId)) {
+    return { verified: false, actor, error: 'webfinger-unverified', detail: 'self link does not match Actor' };
+  }
+  return { verified: true, actor, address: address.address, handle: address.handle };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeWebFingerAddress(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  try {
+    return parseWebFingerAddress(value).address;
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    return undefined;
+  }
+}
+
+export function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  if (normalized === 'localhost' || normalized === '[::1]' || normalized === '::1') return true;
+  const octets = normalized.split('.');
+  if (octets.length !== 4 || !octets.every((part) => /^\d{1,3}$/.test(part))) return false;
+  return octets.every((part) => Number(part) <= 255) && Number(octets[0]) === 127;
+}
+
+function isLoopbackServer(server: string): boolean {
+  return isLoopbackHostname(new URL(`http://${server}`).hostname);
 }
 
 export async function resolveActor(uri: URI, fetcher: typeof fetch = fetch): Promise<ActorResolution> {

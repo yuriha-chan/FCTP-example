@@ -20,6 +20,7 @@ import {
   type LibraryResponse,
   type ProductionResponse
 } from './application-api';
+import { HandleLabel } from './handle-label';
 import { ReferencePicker } from './reference-picker';
 import type { ReferencePickerSelection, ReferencePickerSource } from './reference-picker';
 import { ResourceReader } from './resource-reader';
@@ -227,7 +228,11 @@ function JobSummary({ job }: { job: ProductionJob }): ReactElement {
   return (
     <>
       <p className={styles.label}>Job {job.jobId}</p>
-      <p className={styles.meta}>Authority {job.authorityId}</p>
+      <p className={styles.meta}>Authority <HandleLabel actorId={job.authorityId} /></p>
+      <details open>
+        <summary>Authority identity</summary>
+        <p className={styles.meta}>Authority {job.authorityId}</p>
+      </details>
       <p className={styles.meta}>Operation {job.operation}</p>
       {job.progress?.remainingTicks === undefined ? null : (
         <p className={styles.meta}>Remaining ticks: {job.progress.remainingTicks}</p>
@@ -818,8 +823,14 @@ export function Production(props: ProductionProps): ReactElement {
               <ul className={styles.list}>
                 {data.authorities.map((authority) => (
                   <li key={authority.authorityId} className={styles.authority}>
-                    <p className={styles.label}>{authority.name ?? authority.authorityId}</p>
-                    <p className={styles.meta}>Authority {authority.authorityId}</p>
+                    <p className={styles.label}>
+                      {authority.name ?? <HandleLabel actorId={authority.authorityId} />}
+                    </p>
+                    <p className={styles.meta}>Authority <HandleLabel actorId={authority.authorityId} /></p>
+                    <details open>
+                      <summary>Authority identity</summary>
+                      <p className={styles.meta}>{authority.authorityId}</p>
+                    </details>
                     <p className={styles.meta}>Source {authority.source}</p>
                     <p className={styles.meta}>
                       State {stateLabel(authority.state)}
@@ -834,7 +845,7 @@ export function Production(props: ProductionProps): ReactElement {
                         onPress={() => chooseAuthority(authority.authorityId)}
                         isDisabled={selectedAuthority === authority.authorityId}
                       >
-                        {authority.name ?? authority.authorityId}
+                        {authority.name ?? 'Select authority'}
                       </Button>
                     </div>
                   </li>

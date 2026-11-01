@@ -12,6 +12,8 @@ import type {
 } from '@fctp/client-sdk';
 import type { VesselWorkflowContext } from './workflow-context';
 import type { ResourceReference } from './resource-reader';
+import { HandleLabel } from './handle-label';
+import { ObjectIdentifier } from './object-identifier';
 import { ReferencePicker, type ReferencePickerPosition } from './reference-picker';
 import {
   createRoutePlan,
@@ -188,7 +190,8 @@ function ResourceList({
             <p className={styles.name}>{recordName(record)}</p>
             <p className={styles.meta}>
               {record.type} · {stateLabel(record.state)}
-              {record.territoryId === undefined ? '' : ` · Territory ${record.territoryId}`}
+              {record.territoryId === undefined ? '' : ' · Territory '}
+              {record.territoryId === undefined ? null : <HandleLabel actorId={record.territoryId} />}
             </p>
             {record.error === undefined ? null : <p className={styles.failure}>{record.error}</p>}
             {onReadResource === undefined ? null : (
@@ -591,7 +594,8 @@ export function Explore(props: ExploreProps): ReactElement {
                       <p className={styles.name}>{recordName(place)}</p>
                       <p className={styles.meta}>
                         {place.type} · {stateLabel(place.state)}
-                        {place.territoryId === undefined ? '' : ` · Territory ${place.territoryId}`}
+                        {place.territoryId === undefined ? '' : ' · Territory '}
+                        {place.territoryId === undefined ? null : <HandleLabel actorId={place.territoryId} />}
                       </p>
                       {place.error === undefined ? null : <p className={styles.failure}>{place.error}</p>}
                       <div className={styles.controls}>
@@ -645,10 +649,15 @@ export function Explore(props: ExploreProps): ReactElement {
             {positions.map((entry, index) => (
               <li key={`${entry.authorityId}\u0000${entry.source}\u0000${index}`} className={styles.item}>
                 <p className={styles.meta}>{stateLabel(entry.state)} · {entry.status}{entry.observedAt === undefined ? '' : ` · ${entry.observedAt}`}</p>
-                <p className={styles.meta}>Authority: {entry.authorityId}</p>
+                <p className={styles.meta}>Authority <HandleLabel actorId={entry.authorityId} /></p>
                 <p className={styles.source}>{entry.source}</p>
-                {entry.portId === undefined ? null : <p className={styles.meta}>Port: {entry.portId}</p>}
+                {entry.portId === undefined ? null : <p className={styles.meta}>Port <ObjectIdentifier uri={entry.portId} owner={entry.authorityId} /></p>}
                 {entry.error === undefined ? null : <p className={styles.failure}>{entry.error}</p>}
+                <details className={styles.details}>
+                  <summary>Position identity</summary>
+                  <p className={styles.meta}>Exact port: {entry.portId ?? 'None'}</p>
+                  <p className={styles.meta}>Authority: {entry.authorityId}</p>
+                </details>
               </li>
             ))}
           </ul>

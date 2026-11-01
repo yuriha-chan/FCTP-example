@@ -1291,6 +1291,14 @@ test('activity HTTP reads retained state only and explicit refresh reconciles wi
       state.actions[actionRecord.id] = { ...actionRecord, outcome: { ...actionRecord.outcome, evidence: [{ source: observationRecord.source, observedAt: '2026-10-29T12:00:00Z' }] } };
       state.observations['observation:registry'] = observationRecord;
       state.observations['unrelated:other-account'] = { state: 'available', source: 'https://other.test/private', observedAt: '2026-10-29T12:00:00Z', value: { privateNote: 'unrelated-account-observation' } };
+      state.identities[authorityRecord.actorId] = {
+        actorId: authorityRecord.actorId,
+        source: authorityRecord.actorId,
+        state: 'available',
+        verified: true,
+        ...(authorityRecord.handle === undefined ? {} : { handle: authorityRecord.handle }),
+        observedAt: '2026-10-29T12:00:00Z'
+      };
     });
     const activityUrl = (query = '') => new URL(`/api/activity${query}`, opened.client.origin);
     const detailUrl = new URL(`/api/activity/${encodeURIComponent(actionRecord.id)}?accountId=${encodeURIComponent(firstAccount.id)}`, opened.client.origin);
@@ -1640,6 +1648,14 @@ test('shared reader authenticates only after challenge and retains private conte
     await opened.application.state.transaction((state) => {
       state.accounts[firstAccount.id] = { ...firstAccount, login: { status: 'signed-in', homeServer: firstAccount.homeServer, nativeToken } };
       state.accounts[secondAccount.id] = secondAccount;
+      state.identities[authority] = {
+        actorId: authority,
+        source: authority,
+        state: 'available',
+        verified: true,
+        handle: '@keeper@resources.test',
+        observedAt: new Date().toISOString()
+      };
     });
     const path = `/api/resources/${encodeURIComponent(resource)}`;
     const response = await fetch(new URL(`${path}/refresh`, opened.client.origin), {

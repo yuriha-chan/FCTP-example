@@ -10,10 +10,11 @@ export async function openClientState(storeFile: string): Promise<ClientApplicat
   const store = new JsonSnapshotStore(storeFile);
   await store.open();
   const client = await store.read((snapshot) => snapshot.domain.client as ClientState | undefined);
-  if (client === undefined || client.clientSessions === undefined) {
+  if (client === undefined || client.clientSessions === undefined || client.identities === undefined) {
     await store.transaction((draft) => {
       draft.domain.client ??= emptyClientState();
       (draft.domain.client as ClientState).clientSessions ??= {};
+      (draft.domain.client as ClientState).identities ??= {};
     });
   }
   return {

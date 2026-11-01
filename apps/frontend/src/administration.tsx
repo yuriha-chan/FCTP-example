@@ -9,6 +9,7 @@ import type {
   AdministrationRequestRecord,
   AdministrationTargetRecord
 } from '@fctp/client-sdk';
+import { HandleLabel } from './handle-label';
 import type { ResourceReference } from './resource-reader';
 import {
   applyAdministrationControl,
@@ -639,7 +640,15 @@ function HomeRow({ account, own, onSend }: HomeRowProps): ReactElement {
         {account.handle}
         {own ? <span className={styles.warning}> · Your account</span> : null}
       </p>
-      {account.actorId === undefined ? null : <p className={styles.meta}>Actor: {account.actorId}</p>}
+      {account.actorId === undefined ? null : (
+        <>
+          <p className={styles.meta}>Actor: <HandleLabel actorId={account.actorId} handle={account.handle} /></p>
+          <details open>
+            <summary>Account identity</summary>
+            <p className={styles.meta}>{account.actorId}</p>
+          </details>
+        </>
+      )}
       <label className={styles.field}>
         <input
           type="checkbox"
@@ -738,7 +747,7 @@ function EntryRequestCard({ request, onReadResource, onDecide }: EntryRequestCar
     <article className={styles.row}>
       <p className={styles.targetHeader}>{`Entry request · ${request.status}`}</p>
       {vesselId === undefined ? null : <p className={styles.meta}>Vessel: {vesselId}</p>}
-      {registryId === undefined ? null : <p className={styles.meta}>Registry: {registryId}</p>}
+      {registryId === undefined ? null : <p className={styles.meta}>Registry: <HandleLabel actorId={registryId} /></p>}
       {routeId === undefined ? null : <p className={styles.meta}>Route: {routeId}</p>}
       {portId === undefined ? null : <p className={styles.meta}>Port: {portId}</p>}
       {request.receivedAt === undefined ? null : <p className={styles.meta}>Received: {request.receivedAt}</p>}
@@ -1089,7 +1098,7 @@ export function Administration(props: AdministrationProps): ReactElement {
                   {targets.length === 0
                     ? <option value="">No targets</option>
                     : targets.map((target, index) => (
-                      <option key={target.authorityId} value={target.authorityId}>{targetName(target, index)} · {target.server} · {target.authorityId}</option>
+                      <option key={target.authorityId} value={target.authorityId}>{targetName(target, index)} · {target.server}</option>
                     ))}
                 </select>
               </label>
@@ -1118,7 +1127,11 @@ export function Administration(props: AdministrationProps): ReactElement {
                       {targetName(selectedTarget, targets.findIndex((target) => target.authorityId === selectedTarget.authorityId))}
                     </h3>
                   </header>
-                  <p className={styles.meta}>Actor: {selectedTarget.authorityId}</p>
+                  <p className={styles.meta}>Actor: <HandleLabel actorId={selectedTarget.authorityId} /></p>
+                  <details open>
+                    <summary>Target identity</summary>
+                    <p className={styles.meta}>{selectedTarget.authorityId}</p>
+                  </details>
                   <p className={styles.meta}>Server: {selectedTarget.server}</p>
                   <p className={styles.meta}>Roles: {selectedTarget.roles.length === 0 ? 'none' : selectedTarget.roles.join(', ')}</p>
                   {kind === undefined ? null : <p className={styles.meta}>Kind: {kind}</p>}

@@ -14,6 +14,8 @@ import type {
 } from '@fctp/client-sdk';
 import type { VesselWorkflowContext } from './workflow-context';
 import type { ResourceReference } from './resource-reader';
+import { HandleLabel } from './handle-label';
+import { ObjectIdentifier } from './object-identifier';
 import {
   readExplorePlaces,
   readLogisticsVessel,
@@ -549,8 +551,9 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
             <>
               {vesselData.vessel === undefined ? null : (
                 <p className={styles.name}>
-                  {vesselData.vessel.name ?? vesselData.vessel.id}
-                  <span className={styles.meta}> · exact ID {vesselData.vessel.id}</span>
+                  {vesselData.vessel.name === undefined
+                    ? <ObjectIdentifier uri={vesselData.vessel.id} owner={vesselData.vessel.possessor} />
+                    : <>{vesselData.vessel.name}<span className={styles.meta}> · <ObjectIdentifier uri={vesselData.vessel.id} owner={vesselData.vessel.possessor} /></span></>}
                 </p>
               )}
               {registry === undefined ? null : (
@@ -571,7 +574,7 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
                   <ul className={styles.list}>
                     {territories.map((territory) => (
                       <li key={`${territory.authorityId}\u0000${territory.source}`} className={styles.item}>
-                        <p className={styles.name}>{territory.authorityId}</p>
+                        <p className={styles.name}><HandleLabel actorId={territory.authorityId} /></p>
                         <p className={styles.meta}>Territory visit: {visitText(territory.visit)}</p>
                         <p className={styles.meta}>Territory cargo: {territory.cargo === undefined ? 'unknown' : valueText(territory.cargo)}</p>
                         <p className={styles.meta}>Shared stock: {territory.sharedStock === undefined ? 'unknown' : valueText(territory.sharedStock)}</p>
@@ -835,7 +838,14 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
                 <ul className={styles.list}>
                   {candidates.response.data.candidates.map((candidate) => (
                     <li key={candidate.id} className={styles.item}>
-                      <p className={styles.name}>{candidate.name ?? candidate.id}</p>
+                      <p className={styles.name}>
+                        {candidate.name ?? (
+                          <ObjectIdentifier
+                            uri={candidate.id}
+                            {...(candidate.possessor === undefined ? {} : { owner: candidate.possessor })}
+                          />
+                        )}
+                      </p>
                       <p className={styles.meta}>
                         {ownershipLabel(candidate.ownership)} · {stateLabel(candidate.state)}
                         {candidate.registrySupported === undefined ? '' : ` · Registry ${candidate.registrySupported ? 'supported' : 'unsupported'}`}
@@ -844,7 +854,7 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
                       {candidate.error === undefined ? null : <p className={styles.failure}>{candidate.error}</p>}
                       {candidate.ownership === 'verified-owned' ? (
                         <Button className={styles.button} onPress={() => selectVessel(candidate.id)}>
-                          {`Select ${candidate.name ?? candidate.id}`}
+                          {`Select ${candidate.name ?? 'vessel'}`}
                         </Button>
                       ) : null}
                       <details className={styles.details}>

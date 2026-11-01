@@ -1,0 +1,46 @@
+.handle {
+  font-weight: 600;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.player {
+  color: var(--identity-player, #1d4ed8);
+}
+
+.territory {
+  color: var(--identity-territory, #6d28d9);
+}
+
+.registry {
+  color: var(--identity-registry, #0e7490);
+}
+
+.home {
+  color: var(--identity-home, #b45309);
+}
+
+.handleButton {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.handleButton:hover {
+  text-decoration: underline;
+}
+
+.handleButton:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.name {
+  font-weight: 600;
+}
+
+.unknown {
+  color: var(--muted, #5b6470);
+}

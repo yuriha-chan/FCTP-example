@@ -29,6 +29,8 @@ import type { ReferencePickerKind, ReferencePickerSelection, ReferencePickerSour
 import { ResourceReader } from './resource-reader';
 import type { ResourceReference } from './resource-reader';
 import { AssetEditor } from './asset-editor';
+import { HandleLabel } from './handle-label';
+import { ObjectIdentifier } from './object-identifier';
 import { VarietyEditor } from './variety-editor';
 import type { VarietyAssetPickerTarget } from './variety-editor';
 import type { ProductionPickerTarget } from './descriptive-production-editor';
@@ -288,21 +290,26 @@ function EntryList(props: {
     <section className={styles.section}>
       <h3 className={styles.subheading}>{title}</h3>
       <ul className={styles.list}>
-        {entries.map((entry) => (
-          <li key={entry.id} className={styles.item}>
-            <p className={styles.label}>{entry.name ?? entry.id}</p>
-            <p className={styles.meta}>{entry.type ?? title}</p>
-            <p className={styles.meta}>{entry.id}</p>
-            {entry.holder === undefined ? null : <p className={styles.meta}>Holder {entry.holder}</p>}
-            {entry.grantee === undefined ? null : <p className={styles.meta}>Grantee {entry.grantee}</p>}
-            {entry.asset === undefined ? null : <p className={styles.meta}>Asset {entry.asset}</p>}
-            <div className={styles.controls}>
-              <Button className={styles.button} onPress={() => onOpen({ id: entry.id })}>
-                {`Open resource ${entry.id}`}
-              </Button>
-            </div>
-          </li>
-        ))}
+        {entries.map((entry) => {
+          const owner = entry.holder;
+          return (
+            <li key={entry.id} className={styles.item}>
+              <p className={styles.label}>
+                {entry.name ?? <ObjectIdentifier uri={entry.id} {...(owner === undefined ? {} : { owner })} />}
+              </p>
+              <p className={styles.meta}>{entry.type ?? title}</p>
+              <p className={styles.meta}><ObjectIdentifier uri={entry.id} {...(owner === undefined ? {} : { owner })} /></p>
+              {entry.holder === undefined ? null : <p className={styles.meta}>Holder <HandleLabel actorId={entry.holder} /></p>}
+              {entry.grantee === undefined ? null : <p className={styles.meta}>Grantee <HandleLabel actorId={entry.grantee} /></p>}
+              {entry.asset === undefined ? null : <p className={styles.meta}>Asset <ObjectIdentifier uri={entry.asset} {...(owner === undefined ? {} : { owner })} /></p>}
+              <div className={styles.controls}>
+                <Button className={styles.button} onPress={() => onOpen({ id: entry.id })}>
+                  {`Open resource ${entry.id}`}
+                </Button>
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </section>
   );

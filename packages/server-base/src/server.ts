@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { URL } from 'node:url';
 import { createActivity, parseActivity, type Activity } from '@fctp/federation';
-import { resolveActor } from '@fctp/identity';
+import { parseWebFingerAddress, resolveActor } from '@fctp/identity';
 import { TokenCredentialStore, digestDiplomaticToken, type CredentialState } from '@fctp/auth';
 import { validateModel, type FCTPActor, type TokenDeclaration, type URI } from '@fctp/protocol';
 import { JsonSnapshotStore, type StoreState } from './store.js';
@@ -322,13 +322,17 @@ export class FctpServer {
     const resource = url.searchParams.get('resource');
     if (!resource?.startsWith('acct:')) { json(response, 400, { error: 'invalid-resource' }); return; }
     const subject = resource.slice(5);
+    const requested = normalizeWebFingerAddress(subject);
+    if (requested === undefined) { json(response, 404, { error: 'not-found' }); return; }
     const actors = await this.store.read((state) => Object.entries(state.actors));
     const match = actors.find(([id, actor]) => {
       const role = actor.role;
       const pathPart = new URL(id).pathname.split('/').filter(Boolean).at(-1);
       if (typeof role !== 'string' || !pathPart) return false;
-      const expected = role === 'player' ? `@${pathPart}@${new URL(id).host}` : `@${pathPart}.${role}@${new URL(id).host}`;
-      return subject === expected;
+      const host = new URL(id).host;
+      const derived = role === 'player' ? `${pathPart}@${host}` : `${pathPart}.${role}@${host}`;
+      const advertised = typeof actor.webfinger === 'string' ? normalizeWebFingerAddress(actor.webfinger) : undefined;
+      return requested === derived || (advertised !== undefined && requested === advertised);
     });
     if (!match) { json(response, 404, { error: 'not-found' }); return; }
     json(response, 200, { subject, links: [{ rel: 'self', type: 'application/activity+json', href: match[0] }] }, 'application/jrd+json');
@@ -388,6 +392,14 @@ export function createCredentialStoreFromSnapshot(snapshot: Record<string, Crede
   const store = new TokenCredentialStore(); store.restore(snapshot); return store;
 }
 
+function normalizeWebFingerAddress(value: string): string | undefined {
+  try {
+    return parseWebFingerAddress(value).address;
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    return undefined;
+  }
+}
 function hash(value: unknown): string { return createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('base64url'); }
 function enqueue(state: StoreState, entry: { actorId: URI; inbox: URI; activityId: URI; object: Record<string, unknown>; activity: Activity; payload: string }): void {
   if (!archivePublication(state, entry)) return;

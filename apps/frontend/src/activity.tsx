@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 import { Button } from 'react-aria-components';
 import { actionIsComplete } from '@fctp/client-sdk';
 import type { ActionRecord, SourcedObservation } from '@fctp/client-sdk';
+import { HandleLabel } from './handle-label';
 import type { ResourceReference } from './resource-reader';
 import {
   readAction,
@@ -344,7 +345,11 @@ export function Activity(props: ActivityProps): ReactElement {
               {list.actions.map((entry) => (
                 <li key={entry.id} className={styles.item}>
                   <p className={styles.kind}>{entry.intent.kind}</p>
-                  <p className={styles.target}>{entry.targetId}</p>
+                  <p className={styles.target}><HandleLabel actorId={entry.targetId} /></p>
+                  <details className={styles.details} open>
+                    <summary>Target identity</summary>
+                    <p className={styles.meta}>Target: {entry.targetId}</p>
+                  </details>
                   <p className={styles.meta}>Submitted {entry.submittedAt}</p>
                   <p className={styles.meta}>Submission: {entry.submission.status}</p>
                   <p className={styles.meta}>Outcome: {outcomeLabel(entry)}</p>
@@ -381,7 +386,11 @@ export function Activity(props: ActivityProps): ReactElement {
 
           {record === undefined ? null : (
             <>
-              <p className={styles.target}>Target: {record.targetId}</p>
+              <p className={styles.target}>Target: <HandleLabel actorId={record.targetId} /></p>
+              <details className={styles.details} open>
+                <summary>Target identity</summary>
+                <p className={styles.meta}>Target: {record.targetId}</p>
+              </details>
               <p className={styles.meta}>Submitted {record.submittedAt}</p>
               <p className={styles.meta}>Submission: {record.submission.status}</p>
               <p className={styles.meta}>Outcome: {outcomeLabel(record)}</p>
@@ -484,6 +493,8 @@ export function Activity(props: ActivityProps): ReactElement {
                 <dl className={styles.technical}>
                   <dt>Action ID</dt>
                   <dd>{record.id}</dd>
+                  <dt>Target</dt>
+                  <dd>{record.targetId}</dd>
                   <dt>Status URL</dt>
                   <dd>{record.statusUrl}</dd>
                   <dt>Result references</dt>

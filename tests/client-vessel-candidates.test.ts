@@ -267,7 +267,11 @@ test('explicit candidate refresh reads exact published string URI maps and valid
       const pathname = new URL(call.url).pathname;
       return /\/local\/registry\/(?:state|actions)/.test(pathname) || /tick|reconcile/i.test(pathname);
     }), false, 'candidate refresh must not read Registry state, tick, or reconcile');
-    assert.equal(harness.calls.some((call) => call.url.startsWith(FOREIGN_REGISTRY)), false, 'no foreign Registry credential request');
+    assert.equal(harness.calls.some((call) => {
+      if (!call.url.startsWith(FOREIGN_REGISTRY)) return false;
+      if (call.authorization !== '') return true;
+      return /\/local\/registry\/(?:state|actions)/.test(new URL(call.url).pathname);
+    }), false, 'no foreign Registry credential request');
   } finally {
     await harness.close();
     await rm(directory, { recursive: true, force: true });

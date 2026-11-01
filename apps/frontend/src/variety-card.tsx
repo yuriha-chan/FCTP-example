@@ -3,13 +3,13 @@ import styles from './cards.module.css';
 
 export interface VarietyCardProps {
   name?: string;
+  onPress?: () => void;
 }
 
 export function VarietyCard(props: VarietyCardProps): ReactElement {
   const name = props.name?.trim();
-  return (
-    <article className={styles.card}>
-      <span className={styles.name}>{name || 'Unnamed variety'}</span>
-    </article>
-  );
+  const content = <span className={styles.name}>{name || 'Unnamed variety'}</span>;
+  return props.onPress === undefined
+    ? <article className={styles.card}>{content}</article>
+    : <button type="button" className={`${styles.card} ${styles.interactive}`} onClick={props.onPress}>{content}</button>;
 }

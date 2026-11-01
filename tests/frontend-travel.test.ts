@@ -1640,7 +1640,7 @@ test('shows independent typed vessel position evidence and explains conflicting 
   const positions = page.getByRole('region', { name: 'Vessel position evidence', exact: true });
   await positions.waitFor({ timeout: settleTimeout });
   const text = await positions.innerText();
-  for (const expected of [westId, eastId, policySource, simulationSource, simulation2Source, observedAt, staleAt, 'Position source timed out']) {
+  for (const expected of ['objects/ports/west', 'objects/ports/east', policySource, simulationSource, simulation2Source, observedAt, staleAt, 'Position source timed out']) {
     assert.ok(text.includes(expected), `position evidence must retain ${expected}`);
   }
   assert.match(text, /conflicting current port/i);

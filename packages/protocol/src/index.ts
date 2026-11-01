@@ -23,6 +23,7 @@ export interface FCTPActor extends Identified {
   role: ActorRole;
   publicKeys: URI[];
   capabilities?: string[];
+  webfinger?: string;
 }
 export type ActorRole = 'player' | 'home' | 'registry' | 'territory';
 export interface TerritoryResources extends ExtensionFields { ports: URI; routes: URI; areas: Area[]; map?: URI }
@@ -117,7 +118,7 @@ export function validateModel<T extends ExtensionFields>(value: unknown, model: 
     Named: () => { need('name', string, 'string'); },
     Signed: () => { need('proof', proof, 'eddsa-rdfc-2022 proof'); },
     DataIntegrityProof: () => { need('type', (v) => v === 'DataIntegrityProof', 'DataIntegrityProof'); need('cryptosuite', (v) => v === 'eddsa-rdfc-2022', 'eddsa-rdfc-2022'); needUri('verificationMethod'); need('proofValue', string, 'string'); },
-    Actor: () => { needUri('id'); needUri('inbox'); needUri('outbox'); need('role', (v) => ['player', 'home', 'registry', 'territory'].includes(String(v)), 'Actor role'); need('publicKeys', (v) => Array.isArray(v) && v.every(uri), 'URI array'); if ('capabilities' in value) need('capabilities', (v) => Array.isArray(v) && v.every(string), 'string array'); },
+    Actor: () => { needUri('id'); needUri('inbox'); needUri('outbox'); need('role', (v) => ['player', 'home', 'registry', 'territory'].includes(String(v)), 'Actor role'); need('publicKeys', (v) => Array.isArray(v) && v.every(uri), 'URI array'); if ('capabilities' in value) need('capabilities', (v) => Array.isArray(v) && v.every(string), 'string array'); if ('webfinger' in value) need('webfinger', string, 'string'); },
     Territory: () => { needUri('id'); need('name', string, 'string'); need('role', (v) => v === 'territory', 'territory role'); need('resources', (v) => record(v) && uri(v.ports) && uri(v.routes) && Array.isArray(v.areas) && v.areas.every((area) => record(area) && uri(area.id)), 'TerritoryResources'); },
     TerritoryResources: () => { needUri('ports'); needUri('routes'); need('areas', (v) => Array.isArray(v) && v.every((area) => record(area) && uri(area.id) && string(area.name) && uri(area.territory)), 'Area array'); if ('map' in value) needUri('map'); },
     Port: () => { needUri('id'); need('name', string, 'string'); needUri('territory'); needUri('area'); needUri('listings'); },

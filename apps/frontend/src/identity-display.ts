@@ -1,14 +1,11 @@
-import { webFingerSubject } from '@fctp/identity';
-import type { FCTPActor } from '@fctp/protocol';
-
 export interface DisplayIdentity {
   id: string;
-  name: string;
+  verified: boolean;
+  name?: string;
   handle?: string;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
-const actorRoles = new Set(['player', 'home', 'registry', 'territory']);
 
 const uriLabel = (uri: string): string => {
   const part = uri.split(/[/#]/).filter(Boolean).at(-1);
@@ -19,18 +16,21 @@ const uriLabel = (uri: string): string => {
 export class IdentityDisplayRegistry {
   readonly #identities = new Map<string, DisplayIdentity>();
 
-  register(value: unknown): void {
-    if (!isRecord(value) || typeof value.id !== 'string') return;
-    const name = typeof value.name === 'string' && value.name.trim() ? value.name.trim() : undefined;
-    const identity: DisplayIdentity = { id: value.id, name: name ?? '' };
-    if (typeof value.role === 'string' && actorRoles.has(value.role)) {
-      let actorUrl: URL | undefined;
-      try { actorUrl = new URL(value.id); } catch (error) { if (!(error instanceof TypeError)) throw error; }
-      const localName = actorUrl?.pathname.split('/').filter(Boolean).at(-1);
-      if (localName && !localName.includes('.')) identity.handle = webFingerSubject(value as unknown as FCTPActor);
+  registerRecords(records: unknown): void {
+    if (!Array.isArray(records)) return;
+    for (const record of records) {
+      if (!isRecord(record) || typeof record.actorId !== 'string') continue;
+      const name = typeof record.name === 'string' && record.name.trim() ? record.name.trim() : undefined;
+      const handle = record.verified === true && typeof record.handle === 'string' && record.handle.trim()
+        ? record.handle.trim()
+        : undefined;
+      this.#identities.set(record.actorId, {
+        id: record.actorId,
+        verified: record.verified === true,
+        ...(name === undefined ? {} : { name }),
+        ...(handle === undefined ? {} : { handle })
+      });
     }
-    if (!identity.name && !identity.handle) return;
-    this.#identities.set(identity.id, identity);
   }
 
   get(id: string): DisplayIdentity | undefined {
@@ -38,9 +38,17 @@ export class IdentityDisplayRegistry {
     return identity ? { ...identity } : undefined;
   }
 
+  handle(id: string): string | undefined {
+    return this.#identities.get(id)?.handle;
+  }
+
   label(id: string): string {
     const identity = this.#identities.get(id);
-    return identity ? identity.name ? `${identity.name}${identity.handle ? ` (${identity.handle})` : ''}` : identity.handle! : uriLabel(id);
+    if (identity) {
+      if (identity.handle) return identity.name ? `${identity.name} (${identity.handle})` : identity.handle;
+      return identity.name ?? 'Unknown Actor';
+    }
+    return uriLabel(id);
   }
 
   clear(): void {

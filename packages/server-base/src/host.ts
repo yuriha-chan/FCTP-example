@@ -1,6 +1,6 @@
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { createLocalDocumentLoader, generateActorKey, importActorKey, signJsonLd, type DocumentLoader, type GeneratedActorKey, type JsonDocument } from '@fctp/identity';
+import { WEBFINGER_CONTEXT, createLocalDocumentLoader, generateActorKey, importActorKey, signJsonLd, type DocumentLoader, type GeneratedActorKey, type JsonDocument } from '@fctp/identity';
 import type { FCTPActor } from '@fctp/protocol';
 import type { Activity } from '@fctp/federation';
 import { FctpServer, type ActivityHandler, type FctpServerOptions } from './server.js';
@@ -61,10 +61,14 @@ export async function createHost(options: CreateHostOptions): Promise<Host> {
   const keys = Object.fromEntries(descriptors.map(({ name }) => [name, { keyPair: persisted[name]!.keyPair, publicKey: structuredClone(persisted[name]!.publicDocument) }])) as Record<string, GeneratedActorKey>;
   const actors = Object.fromEntries(descriptors.map(({ name, role, document }) => {
     const id = `${base}/actors/${name}`;
-    return [name, document ? structuredClone(document) : {
+    const webfinger = role === 'player' ? `${name}@${origin.host}` : `${name}.${role}@${origin.host}`;
+    const actor: Record<string, unknown> = document ? structuredClone(document) : {
       '@context': ['https://www.w3.org/ns/activitystreams', 'https://fctp.example/context'], id, type: 'Service', role,
       inbox: `${id}/inbox`, outbox: `${id}/outbox`, publicKeys: [keys[name]!.keyPair.id]
-    }];
+    };
+    if (!('webfinger' in actor)) actor.webfinger = webfinger;
+    actor['@context'] = withWebFingerContext(actor['@context']);
+    return [name, actor];
   })) as Record<string, FCTPActor & Record<string, unknown>>;
   for (const { name } of descriptors) {
     if (actors[name]!.id !== keys[name]!.keyPair.controller || !Array.isArray(actors[name]!.publicKeys) || !actors[name]!.publicKeys.includes(keys[name]!.keyPair.id)) throw new TypeError(`Actor ${name} must identify and publish its persisted key`);
@@ -141,6 +145,13 @@ export async function createHost(options: CreateHostOptions): Promise<Host> {
     stopWorkers: async () => { if (workerTimer) clearInterval(workerTimer); workerTimer = undefined; await workerRun; },
     close: async () => { await (async () => { if (workerTimer) clearInterval(workerTimer); workerTimer = undefined; await workerRun; if (listening) await listening.close(); listening = undefined; })(); }
   };
+}
+
+function withWebFingerContext(context: unknown): unknown {
+  if (context === undefined) return [WEBFINGER_CONTEXT];
+  const contexts = Array.isArray(context) ? [...context] : [context];
+  if (!contexts.includes(WEBFINGER_CONTEXT)) contexts.push(WEBFINGER_CONTEXT);
+  return contexts;
 }
 
 async function loadOrCreateKeys(keyFile: string, origin: string, actors: HostActorDescriptor[]): Promise<Record<string, { keyPair: GeneratedActorKey['keyPair']; publicDocument: JsonDocument }>> {
