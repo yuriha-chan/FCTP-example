@@ -4037,7 +4037,17 @@ test('published and library resource documents are packed for the reader without
     assert.ok(seededId, 'the seeded Asset has an exact identity');
     const refreshed = await postJson(new URL('/api/library/refresh', opened.client.origin), { accountId: first.id });
     assert.equal(refreshed.status, 200);
-    assert.ok(libraryRecords(refreshed.body, 'assets').some((entry) => entry.id === seededId), 'the Library retains the seeded Asset');
+    const libraryAsset = libraryRecords(refreshed.body, 'assets').find((entry) => entry.id === seededId);
+    assert.ok(libraryAsset, 'the Library retains the seeded Asset');
+    const seededCreators = Array.isArray(seeded.creator) ? seeded.creator : [];
+    assert.ok(seededCreators.length > 0, 'the seeded Asset declares its creator');
+    assert.deepEqual(libraryAsset.creator, seededCreators, 'the Library entry preserves the exact seeded Asset creator');
+    const libraryEntryMedia = (Array.isArray(libraryAsset.media) ? libraryAsset.media : []).filter(isRecord)[0];
+    assert.ok(libraryEntryMedia, 'the Library entry exposes its media descriptor');
+    assert.equal(typeof libraryEntryMedia.url, 'string');
+    assert.equal(libraryEntryMedia.mediaType, 'text/plain');
+    assert.equal(libraryEntryMedia.state, 'available');
+    assert.equal(libraryEntryMedia.value, 'Library asset text');
 
     const libraryRead = await getJson(resourceUrl(first.id, seededId));
     assert.equal(libraryRead.status, 200);
@@ -4074,6 +4084,15 @@ test('published and library resource documents are packed for the reader without
     const immediateMediaObservation = mediaObservation(immediateRead.body, immediateMedia.url);
     assert.equal(immediateMediaObservation?.state, 'available', 'publication packs the Asset media before any readback');
     assert.equal(immediateMediaObservation?.value, 'Published asset text');
+
+    const publishedLibrary = await postJson(new URL('/api/library/refresh', opened.client.origin), { accountId: first.id });
+    assert.equal(publishedLibrary.status, 200);
+    const publishedAsset = libraryRecords(publishedLibrary.body, 'assets').find((entry) => entry.id === reference.id);
+    assert.ok(publishedAsset, 'the refreshed Library retains the published Asset');
+    const publishedMedia = (Array.isArray(publishedAsset.media) ? publishedAsset.media : []).filter(isRecord)[0];
+    assert.ok(publishedMedia, 'the refreshed Library exposes the published Asset media');
+    assert.equal(publishedMedia.state, 'available');
+    assert.equal(publishedMedia.value, 'Published asset text');
 
     const otherAccountRead = await getJson(resourceUrl(second.id, reference.id));
     assert.equal(otherAccountRead.status, 200);

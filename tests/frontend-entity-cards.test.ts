@@ -16,8 +16,10 @@ import { PlayerCard } from './apps/frontend/src/player-card.tsx';
 import { VesselCard } from './apps/frontend/src/vessel-card.tsx';
 import { TerritoryCard } from './apps/frontend/src/territory-card.tsx';
 import { PortCard } from './apps/frontend/src/port-card.tsx';
+import { AssetCard } from './apps/frontend/src/asset-card.tsx';
+import { identityDisplay } from './apps/frontend/src/identity-display.ts';
 
-const fixture = { controls: null };
+const fixture = { controls: null, presses: [] };
 window.__entityCardsFixture = fixture;
 
 function renderEntry(entry, index) {
@@ -33,6 +35,12 @@ function renderEntry(entry, index) {
       return React.createElement(TerritoryCard, { key: index, ...props });
     case 'port':
       return React.createElement(PortCard, { key: index, ...props });
+    case 'asset':
+      return React.createElement(AssetCard, {
+        key: index,
+        ...props,
+        ...(entry.press === undefined ? {} : { onPress: () => { fixture.presses.push(entry.press); } })
+      });
     default:
       throw new Error('unknown card ' + entry.component);
   }
@@ -42,14 +50,15 @@ function View({ view }) {
   if (view.kind === 'many') {
     return React.createElement(React.Fragment, null, view.entries.map(renderEntry));
   }
-  return renderEntry({ component: view.component, props: view.props }, 0);
+  return renderEntry({ component: view.component, props: view.props, press: view.press }, 0);
 }
 
 function App() {
   const [view, setView] = React.useState({ kind: 'many', entries: [] });
   React.useEffect(() => {
     fixture.controls = {
-      render(next) { setView(next); }
+      render(next) { setView(next); },
+      registerIdentities(records) { identityDisplay.registerRecords(records); }
     };
   }, []);
   return React.createElement(View, { view });
@@ -58,16 +67,17 @@ function App() {
 createRoot(document.getElementById('root')).render(React.createElement(App));
 `;
 
-type CardComponent = 'variety' | 'player' | 'vessel' | 'territory' | 'port';
+type CardComponent = 'variety' | 'player' | 'vessel' | 'territory' | 'port' | 'asset';
 
 interface CardEntry {
   component: CardComponent;
-  props: Record<string, string>;
+  props: Record<string, unknown>;
+  press?: string;
 }
 
 type CardView =
   | { kind: 'many'; entries: CardEntry[] }
-  | { kind: 'one'; component: CardComponent; props: Record<string, string> };
+  | { kind: 'one'; component: CardComponent; props: Record<string, unknown>; press?: string };
 
 interface OpenedFixture {
   page: Page;
@@ -156,6 +166,22 @@ async function visibleText(page: Page): Promise<string> {
   return page.locator('#root').innerText();
 }
 
+async function registerIdentities(page: Page, records: unknown[]): Promise<void> {
+  await page.evaluate((next) => {
+    const fixture = (window as unknown as {
+      __entityCardsFixture: { controls: { registerIdentities(value: unknown): void } };
+    }).__entityCardsFixture;
+    fixture.controls.registerIdentities(next);
+  }, records);
+}
+
+async function recordedPresses(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const fixture = (window as unknown as { __entityCardsFixture: { presses: string[] } }).__entityCardsFixture;
+    return fixture.presses.slice();
+  });
+}
+
 test('renders the supplied distinct published name on each of the five cards', async (t) => {
   const { page, errors } = await openFixture(t);
   const entries: CardEntry[] = [
@@ -169,7 +195,9 @@ test('renders the supplied distinct published name on each of the five cards', a
   await render(page, { kind: 'many', entries });
   const text = await visibleText(page);
   for (const entry of entries) {
-    const expected = entry.props.name ?? entry.props.handle;
+    const expected = typeof entry.props.name === 'string'
+      ? entry.props.name
+      : typeof entry.props.handle === 'string' ? entry.props.handle : undefined;
     assert.ok(expected, 'fixture entry needs a published name or handle');
     assert.ok(text.includes(expected), `expected the published identity ${JSON.stringify(expected)} in ${JSON.stringify(text)}`);
   }
@@ -209,5 +237,72 @@ test('treats a whitespace-only name as missing', async (t) => {
   assert.ok(text.length > 0, 'expected visible placeholder text for a whitespace-only name');
   assert.equal(text.includes('undefined'), false);
   assert.equal(text.includes('null'), false);
+  assert.deepEqual(errors, []);
+});
+
+test('renders an Asset card with title, creator and holder handles, and retained text media without exposing addresses', async (t) => {
+  const { page, errors } = await openFixture(t);
+  const creatorOne = 'https://actors.invalid/crystal-smith';
+  const creatorTwo = 'https://actors.invalid/glass-cutter';
+  const holder = 'https://actors.invalid/throne-keeper';
+  const mediaUrl = 'https://media.invalid/assets/throne.txt';
+  const creatorOneHandle = '@crystal.smith@alpha.test:4200';
+  const creatorTwoHandle = '@glass.cutter@alpha.test:4200';
+  const holderHandle = '@throne.keeper@alpha.test:4200';
+  const mediaText = 'The throne is cold.';
+
+  await registerIdentities(page, [
+    { actorId: creatorOne, verified: true, handle: creatorOneHandle },
+    { actorId: creatorTwo, verified: true, handle: creatorTwoHandle },
+    { actorId: holder, verified: true, handle: holderHandle }
+  ]);
+  await render(page, {
+    kind: 'one',
+    component: 'asset',
+    props: {
+      name: 'Throne of Crystal',
+      creator: [creatorOne, creatorTwo],
+      holder,
+      media: [{ url: mediaUrl, mediaType: 'text/plain', state: 'available', value: mediaText }]
+    }
+  });
+
+  const text = await visibleText(page);
+  for (const expected of ['Throne of Crystal', creatorOneHandle, creatorTwoHandle, holderHandle, mediaText]) {
+    assert.ok(text.includes(expected), `expected ${JSON.stringify(expected)} in ${JSON.stringify(text)}`);
+  }
+  for (const hidden of [mediaUrl, creatorOne, creatorTwo, holder]) {
+    assert.equal(text.includes(hidden), false, `the Asset card must not expose ${JSON.stringify(hidden)} in its normal text`);
+  }
+  assert.equal(await page.getByRole('button', { name: /^Open resource/i }).count(), 0, 'the Asset card must not require an adjacent Open resource control');
+  assert.deepEqual(errors, []);
+});
+
+test('renders image media directly on the Asset card', async (t) => {
+  const { page, errors } = await openFixture(t);
+  const mediaUrl = 'https://media.invalid/assets/throne.png';
+
+  await render(page, {
+    kind: 'one',
+    component: 'asset',
+    props: {
+      name: 'Throne of Crystal',
+      media: [{ url: mediaUrl, mediaType: 'image/png', state: 'unavailable' }]
+    }
+  });
+
+  assert.equal(await page.locator(`img[src="${mediaUrl}"]`).count(), 1, 'expected the image media to render directly');
+  assert.equal((await visibleText(page)).includes(mediaUrl), false, 'the image URL must not be rendered as text');
+  assert.deepEqual(errors, []);
+});
+
+test('uses the Asset card itself as the press target when onPress is supplied', async (t) => {
+  const { page, errors } = await openFixture(t);
+
+  await render(page, { kind: 'one', component: 'asset', press: 'throne-card', props: { name: 'Throne of Crystal' } });
+  const card = page.getByRole('button', { name: /Throne of Crystal/ }).first();
+  await card.waitFor({ state: 'visible', timeout: 3_000 });
+  await card.click();
+  assert.deepEqual(await recordedPresses(page), ['throne-card']);
   assert.deepEqual(errors, []);
 });

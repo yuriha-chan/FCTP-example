@@ -1,0 +1,31 @@
+.meta {
+  display: block;
+  color: var(--muted, #5b6470);
+  font-size: 0.9em;
+}
+
+.media {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.text {
+  display: block;
+  white-space: pre-wrap;
+  font-size: 0.95em;
+}
+
+.image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.25rem;
+}
+
+.state {
+  display: block;
+  color: var(--muted, #5b6470);
+  font-size: 0.9em;
+}

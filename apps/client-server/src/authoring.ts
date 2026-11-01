@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { FctpClient } from '@fctp/client-sdk';
-import type { AccountRecord, ActionEvidence, ActionRecord, AuthoringDraft, AuthoringKind, LibraryData, PageResponse, SourcedObservation } from '@fctp/client-sdk';
+import type { AccountRecord, ActionEvidence, ActionRecord, AuthoringDraft, AuthoringKind, LibraryData, LibraryEntry, PageResponse, SourcedObservation } from '@fctp/client-sdk';
 import type { URI } from '@fctp/protocol';
 import { catalogData, catalogEntries, publicationBody, publicationEndpoint, publicationObjects, publicationReferences, sanitizeDraftFields } from './adapters/authoring.js';
 import type { ActionHandler, ActionService } from './actions.js';
 import type { ObservationService } from './observations.js';
-import { packResourceMedia, packResourceObjects, resourceObjectDocuments } from './resource-observations.js';
+import { packResourceMedia, packResourceObjects, resourceObjectDocuments, resourceObservationKey } from './resource-observations.js';
 import type { ClientApplicationState } from './store.js';
 
 export class AuthoringRequestError extends Error {
@@ -184,6 +184,23 @@ export function createAuthoringService(
     await packResourceObjects(observations, accountId, resourceObjectDocuments(value), observedAt);
   };
 
+  const enrichEntryMedia = async (accountId: string, entry: LibraryEntry): Promise<LibraryEntry> => {
+    if (!Array.isArray(entry.media) || entry.media.length === 0) return entry;
+    const media = await Promise.all(entry.media.map(async (descriptor) => {
+      if (!isRecord(descriptor) || typeof descriptor.url !== 'string') return descriptor;
+      const { key, source } = resourceObservationKey(accountId, descriptor.url);
+      const observation = await observations.readOne(key, source);
+      return {
+        ...descriptor,
+        state: observation.state,
+        ...('value' in observation ? { value: observation.value } : {}),
+        ...('observedAt' in observation && typeof observation.observedAt === 'string' ? { observedAt: observation.observedAt } : {}),
+        ...('error' in observation && typeof observation.error === 'string' ? { error: observation.error } : {})
+      };
+    }));
+    return { ...entry, media };
+  };
+
   const page = async (accountId: string, observeMedia = false): Promise<PageResponse<LibraryData>> => {
     const { catalog, creations } = await readObservations(accountId);
     const base = catalogData(catalog === undefined ? undefined : retainedValue(catalog));
@@ -206,11 +223,13 @@ export function createAuthoringService(
       pageObservations[`authoring:${accountId}:advertisement`] = advertisement;
     }
     const byType = (type: string): typeof base.assets => extra.filter((entry) => entry.type === type);
+    const assets = mergeEntries(base.assets, byType('Asset')) as LibraryData['assets'];
+    const varieties = mergeEntries(base.varieties, byType('Variety')) as LibraryData['varieties'];
     return {
       context: { accountId },
       data: {
-        assets: mergeEntries(base.assets, byType('Asset')) as LibraryData['assets'],
-        varieties: mergeEntries(base.varieties, byType('Variety')) as LibraryData['varieties'],
+        assets: await Promise.all(assets.map((entry) => enrichEntryMedia(accountId, entry))),
+        varieties: await Promise.all(varieties.map((entry) => enrichEntryMedia(accountId, entry))),
         grants: mergeEntries(base.grants, byType('AssetGrant')) as LibraryData['grants'],
         drafts: await readDrafts(accountId)
       },

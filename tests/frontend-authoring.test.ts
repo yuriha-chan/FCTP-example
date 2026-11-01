@@ -177,6 +177,7 @@ interface LibraryOptions {
   grants?: unknown[];
   drafts?: unknown[];
   observations?: Record<string, Observation>;
+  identities?: unknown[];
 }
 
 function libraryPage(accountId: string, options: LibraryOptions = {}): ServerResponse {
@@ -190,6 +191,7 @@ function libraryPage(accountId: string, options: LibraryOptions = {}): ServerRes
         drafts: options.drafts ?? []
       },
       observations: options.observations ?? {},
+      identities: options.identities ?? [],
       actions: []
     }
   };
@@ -1633,6 +1635,62 @@ test('discards a late save after unmount and shows only fresh server fields afte
   assert.deepEqual(errors, []);
 });
 
+test('renders a retained Library Asset card with title, identities, and media before opening the contextual reader', async (t) => {
+  const creatorId = 'https://actors.invalid/rope-maker';
+  const holderId = 'https://actors.invalid/rope-keeper';
+  const mediaUrl = 'https://media.invalid/assets/rope.txt';
+  const creatorHandle = '@rope.maker@alpha.test:4200';
+  const holderHandle = '@rope.keeper@alpha.test:4200';
+  const mediaText = 'A sturdy rope.';
+  const { page, requests, errors } = await openFixture(t, (request) => {
+    if (request.pathname === '/api/library' && request.method === 'GET') {
+      return libraryPage(accountA, {
+        assets: [{
+          id: assetId,
+          type: 'Asset',
+          name: 'Rope',
+          creator: [creatorId],
+          holder: holderId,
+          media: [{ url: mediaUrl, mediaType: 'text/plain', state: 'available', value: mediaText }]
+        }],
+        identities: [
+          { actorId: creatorId, verified: true, handle: creatorHandle },
+          { actorId: holderId, verified: true, handle: holderHandle }
+        ]
+      });
+    }
+    if (request.pathname === `/api/resources/${encodeURIComponent(assetId)}` && request.method === 'GET') {
+      return {
+        body: {
+          context: { resourceId: assetId, accountId: accountA },
+          data: { resourceId: assetId, value: { id: assetId, type: 'Asset', name: 'Rope Details' } },
+          observations: { direct: available(assetId, { id: assetId, type: 'Asset', name: 'Rope Details' }) },
+          actions: []
+        }
+      };
+    }
+    return { status: 404, body: { error: 'unexpected request' } };
+  }, { callbacks: false });
+
+  const region = await waitForRegion(page);
+  const text = await waitForText(region, mediaText, 'expected the retained Library Asset media on the card');
+  for (const expected of ['Rope', creatorHandle, holderHandle, mediaText]) {
+    assert.ok(text.includes(expected), `expected ${JSON.stringify(expected)} on the Library Asset card`);
+  }
+  assert.equal(text.includes(mediaUrl), false, 'the Asset card must not expose the media URL');
+  assert.equal(requests.filter((request) => request.pathname.startsWith('/api/resources/')).length, 0, 'retained Library Asset media must render without opening the reader');
+  assert.equal(await page.getByRole('dialog').count(), 0, 'no reader dialog opens before the Asset card is pressed');
+
+  await region.getByRole('button', { name: /Rope/ }).first().click();
+  await waitFor(() => requestsFor(requests, `/api/resources/${encodeURIComponent(assetId)}`, 'GET').length === 1, 'expected the Asset card to open the exact Asset');
+  const read = requestsFor(requests, `/api/resources/${encodeURIComponent(assetId)}`, 'GET')[0]!;
+  assert.equal(read.params.accountId, accountA);
+  assert.equal(read.headers.authorization, 'Bearer token-a');
+  const reader = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Rope Details' }) });
+  await reader.waitFor({ state: 'visible', timeout: settleTimeout });
+  assert.deepEqual(errors, []);
+});
+
 test('uses the workspace-owned contextual ResourceReader when the caller does not provide a read callback', async (t) => {
   const { page, requests, errors } = await openFixture(t, (request) => {
     if (request.pathname === '/api/library' && request.method === 'GET') {
@@ -1655,7 +1713,7 @@ test('uses the workspace-owned contextual ResourceReader when the caller does no
 
   const region = await waitForRegion(page);
   await waitForText(region, 'Rope', 'expected the retained asset');
-  await resourceButton(page, assetId).click();
+  await region.getByRole('button', { name: /Rope/ }).first().click();
   const reader = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Rope Details' }) });
   await reader.waitFor({ state: 'visible', timeout: settleTimeout });
   const read = requestsFor(requests, `/api/resources/${encodeURIComponent(assetId)}`, 'GET')[0];

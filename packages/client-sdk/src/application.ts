@@ -218,16 +218,27 @@ export interface AuthoringDraft {
   publication?: AuthoringDraftPublication;
 }
 
+export interface LibraryMedia {
+  url?: string;
+  mediaType?: string;
+  digest?: string;
+  value?: unknown;
+  state?: 'available' | 'empty' | 'stale' | 'not-retrieved' | 'unavailable';
+  observedAt?: string;
+  error?: string;
+}
+
 export interface LibraryEntry {
   id: string;
   type?: string;
   name?: string;
+  creator?: string[];
   holder?: string;
   asset?: string;
   variety?: string;
   grantee?: string;
   production?: unknown[];
-  media?: unknown[];
+  media?: LibraryMedia[];
 }
 
 export interface LibraryData {
