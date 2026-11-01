@@ -59,7 +59,7 @@ export function publicationObjects(payload: unknown): Record<string, unknown>[] 
   return [payload.asset, payload.variety, payload.grant].filter(isRecord);
 }
 
-export function catalogEntries(value: unknown): Pick<LibraryEntry, 'id' | 'type' | 'name' | 'creator' | 'holder' | 'asset' | 'variety' | 'grantee' | 'production' | 'media'>[] {
+export function catalogEntries(value: unknown): Pick<LibraryEntry, 'id' | 'type' | 'name' | 'creator' | 'holder' | 'mass' | 'version' | 'asset' | 'variety' | 'grantee' | 'production' | 'media'>[] {
   const items = Array.isArray(value)
     ? value
     : isRecord(value) && Array.isArray(value.orderedItems)
@@ -75,6 +75,8 @@ export function catalogEntries(value: unknown): Pick<LibraryEntry, 'id' | 'type'
       ...(typeof entry.name === 'string' ? { name: entry.name } : {}),
       ...(Array.isArray(entry.creator) && entry.creator.every((item) => typeof item === 'string') ? { creator: entry.creator } : {}),
       ...(typeof entry.holder === 'string' ? { holder: entry.holder } : {}),
+      ...(typeof entry.mass === 'number' ? { mass: entry.mass } : {}),
+      ...(typeof entry.version === 'string' ? { version: entry.version } : {}),
       ...(typeof entry.asset === 'string' ? { asset: entry.asset } : {}),
       ...(typeof entry.variety === 'string' ? { variety: entry.variety } : {}),
       ...(typeof entry.grantee === 'string' ? { grantee: entry.grantee } : {}),

@@ -30,6 +30,7 @@ import { ResourceReader } from './resource-reader';
 import type { ResourceReference } from './resource-reader';
 import { AssetEditor } from './asset-editor';
 import { AssetCard } from './asset-card';
+import { VarietyCard } from './variety-card';
 import { HandleLabel } from './handle-label';
 import { ObjectIdentifier } from './object-identifier';
 import { VarietyEditor } from './variety-editor';
@@ -311,6 +312,35 @@ function EntryList(props: {
             </li>
           );
         })}
+      </ul>
+    </section>
+  );
+}
+
+function VarietyList(props: {
+  title: string;
+  entries: readonly LibraryEntry[];
+  onOpen: (reference: ResourceReference) => void;
+}): ReactElement | null {
+  const { title, entries, onOpen } = props;
+  if (entries.length === 0) return null;
+  return (
+    <section className={styles.section}>
+      <h3 className={styles.subheading}>{title}</h3>
+      <ul className={styles.list}>
+        {entries.map((entry) => (
+          <li key={entry.id}>
+            <VarietyCard
+              {...(entry.name === undefined ? {} : { name: entry.name })}
+              {...(entry.creator === undefined ? {} : { creator: entry.creator })}
+              {...(entry.holder === undefined ? {} : { holder: entry.holder })}
+              {...(entry.mass === undefined ? {} : { mass: entry.mass })}
+              {...(entry.version === undefined ? {} : { version: entry.version })}
+              {...(entry.media === undefined ? {} : { media: entry.media })}
+              onPress={() => onOpen({ id: entry.id })}
+            />
+          </li>
+        ))}
       </ul>
     </section>
   );
@@ -967,7 +997,7 @@ export function Authoring(props: AuthoringProps): ReactElement {
             <p className={styles.meta}>The Library is empty: no assets, varieties, grants, or drafts are available.</p>
           ) : null}
           <AssetList title="Library assets" entries={library.data.assets} onOpen={openResource} />
-          <EntryList title="Library varieties" entries={library.data.varieties} onOpen={openResource} />
+          <VarietyList title="Library varieties" entries={library.data.varieties} onOpen={openResource} />
           <EntryList title="Library grants" entries={library.data.grants} onOpen={openResource} />
           {library.data.drafts.length === 0 ? null : (
             <section className={styles.section}>

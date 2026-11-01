@@ -234,6 +234,8 @@ export interface LibraryEntry {
   name?: string;
   creator?: string[];
   holder?: string;
+  mass?: number;
+  version?: string;
   asset?: string;
   variety?: string;
   grantee?: string;

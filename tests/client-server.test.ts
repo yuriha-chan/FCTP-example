@@ -2996,6 +2996,12 @@ test('draft publication creates signed Asset and multi-entry Variety evidence, t
     assert.equal(grant.asset, assetRef.id);
     assert.equal(grant.variety, variety.id);
     assert.equal(grant.grantee, first.actorId);
+    const firstLibraryRefresh = await postJson(new URL('/api/library/refresh', origin), { accountId: first.id });
+    assert.equal(firstLibraryRefresh.status, 200);
+    const publishedVariety = libraryRecords(firstLibraryRefresh.body, 'varieties').find((record) => record.id === variety.id);
+    assert.ok(publishedVariety, 'the Library retains the published Variety by its exact ID');
+    assert.equal(publishedVariety.mass, 2.5, 'the Library Variety retains the submitted mass');
+    assert.equal(publishedVariety.version, '1', 'the Library Variety retains the submitted version');
     const key = await fetch(`${world.origins.authority}/keys/player`).then((response) => response.json()) as Record<string, unknown>;
     const loader = createLocalDocumentLoader(new Map([[String(key.id), key]]));
     for (const value of [asset, variety, grant]) assert.equal((await verifyProofCryptography(value, loader)).verified, true, 'published evidence is signed');

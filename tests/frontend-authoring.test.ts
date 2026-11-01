@@ -1722,3 +1722,62 @@ test('uses the workspace-owned contextual ResourceReader when the caller does no
   assert.equal(read.headers.authorization, 'Bearer token-a');
   assert.deepEqual(errors, []);
 });
+
+test('renders a retained Library Variety card with title, identities, mass, version, and media before opening the contextual reader', async (t) => {
+  const creatorId = 'https://actors.invalid/alloy-maker';
+  const holderId = 'https://actors.invalid/alloy-keeper';
+  const mediaUrl = 'https://media.invalid/varieties/alloy.txt';
+  const creatorHandle = '@alloy.maker@alpha.test:4200';
+  const holderHandle = '@alloy.keeper@alpha.test:4200';
+  const mediaText = 'A dense alloy.';
+  const { page, requests, errors } = await openFixture(t, (request) => {
+    if (request.pathname === '/api/library' && request.method === 'GET') {
+      return libraryPage(accountA, {
+        varieties: [{
+          id: varietyId,
+          type: 'Variety',
+          name: 'Alloy',
+          creator: [creatorId],
+          holder: holderId,
+          mass: 2.5,
+          version: '4.2',
+          media: [{ url: mediaUrl, mediaType: 'text/plain', state: 'available', value: mediaText }]
+        }],
+        identities: [
+          { actorId: creatorId, verified: true, handle: creatorHandle },
+          { actorId: holderId, verified: true, handle: holderHandle }
+        ]
+      });
+    }
+    if (request.pathname === `/api/resources/${encodeURIComponent(varietyId)}` && request.method === 'GET') {
+      return {
+        body: {
+          context: { resourceId: varietyId, accountId: accountA },
+          data: { resourceId: varietyId, value: { id: varietyId, type: 'Variety', name: 'Alloy Details' } },
+          observations: { direct: available(varietyId, { id: varietyId, type: 'Variety', name: 'Alloy Details' }) },
+          actions: []
+        }
+      };
+    }
+    return { status: 404, body: { error: 'unexpected request' } };
+  }, { callbacks: false });
+
+  const region = await waitForRegion(page);
+  const text = await waitForText(region, mediaText, 'expected the retained Library Variety media on the card');
+  for (const expected of ['Alloy', creatorHandle, holderHandle, '2.5', '4.2', mediaText]) {
+    assert.ok(text.includes(expected), `expected ${JSON.stringify(expected)} on the Library Variety card`);
+  }
+  assert.equal(text.includes(mediaUrl), false, 'the Variety card must not expose the media URL');
+  assert.equal(await page.getByRole('button', { name: /^Open resource/i }).count(), 0, 'the Variety card must not require a generic Open resource control');
+  assert.equal(requests.filter((request) => request.pathname.startsWith('/api/resources/')).length, 0, 'retained Library Variety media must render without opening the reader');
+  assert.equal(await page.getByRole('dialog').count(), 0, 'no reader dialog opens before the Variety card is pressed');
+
+  await region.getByRole('button', { name: /Alloy/ }).first().click();
+  await waitFor(() => requestsFor(requests, `/api/resources/${encodeURIComponent(varietyId)}`, 'GET').length === 1, 'expected the Variety card to open the exact Variety');
+  const read = requestsFor(requests, `/api/resources/${encodeURIComponent(varietyId)}`, 'GET')[0]!;
+  assert.equal(read.params.accountId, accountA);
+  assert.equal(read.headers.authorization, 'Bearer token-a');
+  const reader = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Alloy Details' }) });
+  await reader.waitFor({ state: 'visible', timeout: settleTimeout });
+  assert.deepEqual(errors, []);
+});

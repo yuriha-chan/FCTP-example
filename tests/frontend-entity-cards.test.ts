@@ -26,7 +26,11 @@ function renderEntry(entry, index) {
   const props = entry.props ?? {};
   switch (entry.component) {
     case 'variety':
-      return React.createElement(VarietyCard, { key: index, ...props });
+      return React.createElement(VarietyCard, {
+        key: index,
+        ...props,
+        ...(entry.press === undefined ? {} : { onPress: () => { fixture.presses.push(entry.press); } })
+      });
     case 'player':
       return React.createElement(PlayerCard, { key: index, ...props });
     case 'vessel':
@@ -304,5 +308,73 @@ test('uses the Asset card itself as the press target when onPress is supplied', 
   await card.waitFor({ state: 'visible', timeout: 3_000 });
   await card.click();
   assert.deepEqual(await recordedPresses(page), ['throne-card']);
+  assert.deepEqual(errors, []);
+});
+
+test('renders a Variety card with title, creator and holder handles, mass, version, and retained text media without exposing addresses', async (t) => {
+  const { page, errors } = await openFixture(t);
+  const creatorOne = 'https://actors.invalid/alloy-smith';
+  const creatorTwo = 'https://actors.invalid/ore-cutter';
+  const holder = 'https://actors.invalid/foundry-keeper';
+  const mediaUrl = 'https://media.invalid/varieties/alloy.txt';
+  const creatorOneHandle = '@alloy.smith@alpha.test:4200';
+  const creatorTwoHandle = '@ore.cutter@alpha.test:4200';
+  const holderHandle = '@foundry.keeper@alpha.test:4200';
+  const mediaText = 'A dense alloy.';
+
+  await registerIdentities(page, [
+    { actorId: creatorOne, verified: true, handle: creatorOneHandle },
+    { actorId: creatorTwo, verified: true, handle: creatorTwoHandle },
+    { actorId: holder, verified: true, handle: holderHandle }
+  ]);
+  await render(page, {
+    kind: 'one',
+    component: 'variety',
+    props: {
+      name: 'Amber Alloy',
+      creator: [creatorOne, creatorTwo],
+      holder,
+      mass: 2.5,
+      version: '3.7.2',
+      media: [{ url: mediaUrl, mediaType: 'text/plain', state: 'available', value: mediaText }]
+    }
+  });
+
+  const text = await visibleText(page);
+  for (const expected of ['Amber Alloy', creatorOneHandle, creatorTwoHandle, holderHandle, '2.5', '3.7.2', mediaText]) {
+    assert.ok(text.includes(expected), `expected ${JSON.stringify(expected)} in ${JSON.stringify(text)}`);
+  }
+  for (const hidden of [mediaUrl, creatorOne, creatorTwo, holder]) {
+    assert.equal(text.includes(hidden), false, `the Variety card must not expose ${JSON.stringify(hidden)} in its normal text`);
+  }
+  assert.deepEqual(errors, []);
+});
+
+test('uses the Variety card itself as the press target when onPress is supplied', async (t) => {
+  const { page, errors } = await openFixture(t);
+
+  await render(page, { kind: 'one', component: 'variety', press: 'alloy-card', props: { name: 'Amber Alloy' } });
+  const card = page.getByRole('button', { name: /Amber Alloy/ }).first();
+  await card.waitFor({ state: 'visible', timeout: 3_000 });
+  await card.click();
+  assert.deepEqual(await recordedPresses(page), ['alloy-card']);
+  assert.deepEqual(errors, []);
+});
+
+test('renders image media directly on the Variety card', async (t) => {
+  const { page, errors } = await openFixture(t);
+  const mediaUrl = 'https://media.invalid/varieties/alloy.png';
+
+  await render(page, {
+    kind: 'one',
+    component: 'variety',
+    props: {
+      name: 'Amber Alloy',
+      media: [{ url: mediaUrl, mediaType: 'image/png', state: 'unavailable' }]
+    }
+  });
+
+  assert.equal(await page.locator(`img[src="${mediaUrl}"]`).count(), 1, 'expected the image media to render directly');
+  assert.equal((await visibleText(page)).includes(mediaUrl), false, 'the image URL must not be rendered as text');
   assert.deepEqual(errors, []);
 });
