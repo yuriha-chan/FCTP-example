@@ -359,8 +359,8 @@ async function activityPage<T extends { actions: ActionRecord[] } | { action: Ac
 export async function createClientApplication(options: CreateClientApplicationOptions): Promise<ClientApplication> {
   const state = await openClientState(options.storeFile);
   const fetcher = options.fetch ?? fetch;
-  const accounts = createAccountService(state, fetcher);
   const discovery = createDiscoveryService(state, fetcher);
+  const accounts = createAccountService(state, fetcher, discovery);
   const observations = createObservationService(state, {
     ...(options.observationTimeoutMs === undefined ? {} : { timeoutMs: options.observationTimeoutMs })
   });

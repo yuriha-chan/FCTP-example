@@ -16,7 +16,7 @@ Log out of an account from its **Log out** control. This removes only the curren
 
 ## Discover and use visible actions
 
-Use **Connections** to discover a public server origin or resolve an authority handle. Discovered server and authority records are retained. Explore and Logistics use those retained records; explicit refresh reads the relevant world services.
+Use **Connections** to discover a public server origin or resolve an authority handle. Discovered server and authority records are retained. A successful login also retains the resolved Home server and Home authority. Explore and Logistics use those retained records; explicit refresh reads the relevant world services.
 
 Accounts, server discovery, action results, geography, authoring, logistics, production, and administration all work through the client application API. Page reads use retained state. A successful request or delivery acknowledgement does not by itself establish a Territory business outcome; refresh the relevant action or observation to see pending, completed, rejected, or unverified state.
 

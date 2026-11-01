@@ -1,4 +1,5 @@
 import { createFctpClient, toPublicAccount, type AccountRecord, type LoginState, type PublicAccountRecord } from '@fctp/client-sdk';
+import type { DiscoveryService } from './discovery.js';
 import { boundedFetcher } from './errors.js';
 import { createClientToken, digestClientToken } from './sessions.js';
 import type { ClientApplicationState } from './store.js';
@@ -19,7 +20,7 @@ export interface AccountService {
   logout(accountId: string, clientTokenDigest: string): Promise<PublicAccountRecord | undefined>;
 }
 
-export function createAccountService(state: ClientApplicationState, fetcher: typeof fetch): AccountService {
+export function createAccountService(state: ClientApplicationState, fetcher: typeof fetch, knownWorld: Pick<DiscoveryService, 'remember'>): AccountService {
   const sdk = createFctpClient({ fetcher: boundedFetcher(fetcher) });
   return {
     async list() {
@@ -39,6 +40,7 @@ export function createAccountService(state: ClientApplicationState, fetcher: typ
       if (result.status !== 'signed-in') {
         return result.reason ? { status: result.status, reason: result.reason } : { status: result.status };
       }
+      await knownWorld.remember(resolution.homeActor, resolution.homeServer, resolution.homeOrigin);
       const id = result.handle;
       const login: LoginState = {
         status: 'signed-in',

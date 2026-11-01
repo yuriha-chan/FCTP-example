@@ -1,5 +1,6 @@
 import { createFctpClient, type AuthorityRecord, type AuthorityRole, type ServerRecord } from '@fctp/client-sdk';
 import { parseHandle } from '@fctp/identity';
+import type { FCTPActor } from '@fctp/protocol';
 import { boundedFetcher } from './errors.js';
 import type { ClientApplicationState } from './store.js';
 
@@ -16,6 +17,7 @@ export interface DiscoveryResult {
 export interface DiscoveryService {
   list(): Promise<DiscoveryResult>;
   discover(input: DiscoveryInput): Promise<DiscoveryResult>;
+  remember(actor: FCTPActor, server: string, origin: string): Promise<void>;
 }
 
 const authorityRoles = new Set<AuthorityRole>(['home', 'territory', 'registry', 'asset-server']);
@@ -133,9 +135,8 @@ export function createDiscoveryService(state: ClientApplicationState, fetcher: t
     const parsed = parseHandle(value);
     if (parsed.kind === 'account') {
       const resolution = await sdk.resolveAccount(value);
-      const home = await sdk.resolveActor(resolution.homeAuthority);
-      const role = roleOf(home.actor as unknown as Record<string, unknown>);
-      const handle = actorHandle(home.actor as unknown as Record<string, unknown>);
+      const role = roleOf(resolution.homeActor);
+      const handle = actorHandle(resolution.homeActor);
       const authorities: AuthorityRecord[] = role === undefined ? [] : [{
         ...(handle ? { handle } : {}),
         actorId: resolution.homeAuthority,
@@ -168,8 +169,26 @@ export function createDiscoveryService(state: ClientApplicationState, fetcher: t
     return retain(server, authorities);
   };
 
+  const remember = async (actor: FCTPActor, server: string, origin: string): Promise<void> => {
+    const role = roleOf(actor);
+    if (role === undefined) return;
+    const normalized = normalizeOrigin(origin);
+    const handle = actorHandle(actor);
+    const name = typeof actor.name === 'string' && actor.name.length > 0 ? actor.name : undefined;
+    const authority: AuthorityRecord = {
+      ...(handle ? { handle } : {}),
+      ...(name ? { name } : {}),
+      actorId: actor.id,
+      server,
+      roles: [role]
+    };
+    const record: ServerRecord = { server, origin: normalized.origin, authorities: [actor.id] };
+    await retain(record, [authority]);
+  };
+
   return {
     list,
+    remember,
     async discover(input) {
       const origin = typeof input.origin === 'string' ? input.origin.trim() : '';
       const handle = typeof input.handle === 'string' ? input.handle.trim() : '';

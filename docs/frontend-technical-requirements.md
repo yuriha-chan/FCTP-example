@@ -51,7 +51,7 @@ Keep the selected account and workspace as interface session context. Include th
 
 ## Servers
 
-Retain known servers independently of login state. Discovery adds servers to the client's known world rather than replacing a single current server.
+Retain known servers independently of login state. Discovery adds servers to the client's known world rather than replacing a single current server. A successful login also adds the resolved Home authority and its server. Successful resolution of a Registry or Territory authority adds that authority and its server. The known list is shared across accounts.
 
 | Field | Meaning |
 | --- | --- |

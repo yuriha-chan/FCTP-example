@@ -624,6 +624,83 @@ test('logs in distinct accounts concurrently and retains them across restart whi
   }
 });
 
+test('successful login retains the Home server and authority across accounts, restart and logout', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-client-known-servers-'));
+  const storeFile = join(directory, 'client.store.json');
+  const fixture = createFixtureFetch(fixtureHomes(), []);
+  let opened = await openFixtureApplication(storeFile, fixture.fetch);
+  try {
+    const emptyResponse = await fetch(new URL('/api/servers', opened.client.origin));
+    assert.equal(emptyResponse.status, 200);
+    assert.deepEqual(await emptyResponse.json(), { servers: [], authorities: [] });
+
+    const first = await loginClient(opened.client.origin, firstLoginAccount);
+    const firstResponse = await fetch(new URL('/api/servers', opened.client.origin));
+    assert.equal(firstResponse.status, 200);
+    const firstKnown = await firstResponse.json() as { servers: ServerRecord[]; authorities: AuthorityRecord[] };
+    const firstServer = firstKnown.servers.find((candidate) => candidate.server === firstAccount.homeServer);
+    assert.ok(firstServer);
+    assert.equal(firstServer.origin, 'https://first.test:4200');
+    assert.ok(firstServer.authorities.includes(firstAccount.homeAuthority!));
+    const firstAuthority = firstKnown.authorities.find((candidate) => candidate.actorId === firstAccount.homeAuthority);
+    assert.ok(firstAuthority);
+    assert.equal(firstAuthority.server, firstAccount.homeServer);
+    assert.ok(firstAuthority.roles.includes('home'));
+
+    await loginClient(opened.client.origin, secondLoginAccount);
+    const bothResponse = await fetch(new URL('/api/servers', opened.client.origin));
+    assert.equal(bothResponse.status, 200);
+    const bothKnown = await bothResponse.json() as { servers: ServerRecord[]; authorities: AuthorityRecord[] };
+    for (const account of [firstAccount, secondAccount]) {
+      const server = bothKnown.servers.find((candidate) => candidate.server === account.homeServer);
+      assert.ok(server);
+      assert.equal(server.origin, new URL(account.homeAuthority!).origin);
+      assert.ok(server.authorities.includes(account.homeAuthority!));
+      const authority = bothKnown.authorities.find((candidate) => candidate.actorId === account.homeAuthority);
+      assert.ok(authority);
+      assert.equal(authority.server, account.homeServer);
+      assert.ok(authority.roles.includes('home'));
+    }
+
+    await opened.client.close();
+    await opened.application.close();
+    opened = await openFixtureApplication(storeFile, fixture.fetch);
+    const reopenedResponse = await fetch(new URL('/api/servers', opened.client.origin));
+    assert.equal(reopenedResponse.status, 200);
+    const reopened = await reopenedResponse.json() as { servers: ServerRecord[]; authorities: AuthorityRecord[] };
+    for (const account of [firstAccount, secondAccount]) {
+      const server = reopened.servers.find((candidate) => candidate.server === account.homeServer);
+      assert.ok(server);
+      assert.equal(server.origin, new URL(account.homeAuthority!).origin);
+      assert.ok(server.authorities.includes(account.homeAuthority!));
+      const authority = reopened.authorities.find((candidate) => candidate.actorId === account.homeAuthority);
+      assert.ok(authority);
+      assert.equal(authority.server, account.homeServer);
+      assert.ok(authority.roles.includes('home'));
+    }
+
+    const logoutResponse = await fetch(new URL(`/api/accounts/${encodeURIComponent(first.account.id)}/logout`, opened.client.origin), { method: 'POST', headers: authorization(first.clientToken) });
+    assert.equal(logoutResponse.status, 200);
+    const afterLogoutResponse = await fetch(new URL('/api/servers', opened.client.origin));
+    assert.equal(afterLogoutResponse.status, 200);
+    const afterLogout = await afterLogoutResponse.json() as { servers: ServerRecord[]; authorities: AuthorityRecord[] };
+    for (const account of [firstAccount, secondAccount]) {
+      const server = afterLogout.servers.find((candidate) => candidate.server === account.homeServer);
+      assert.ok(server);
+      assert.equal(server.origin, new URL(account.homeAuthority!).origin);
+      assert.ok(server.authorities.includes(account.homeAuthority!));
+      const authority = afterLogout.authorities.find((candidate) => candidate.actorId === account.homeAuthority);
+      assert.ok(authority);
+      assert.equal(authority.server, account.homeServer);
+      assert.ok(authority.roles.includes('home'));
+    }
+  } finally {
+    await opened.client.close();
+    await opened.application.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('rejected and unavailable logins return client errors without retaining signed-in tokens', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-client-login-errors-'));
   const storeFile = join(directory, 'client.store.json');
@@ -653,6 +730,10 @@ test('rejected and unavailable logins return client errors without retaining sig
 
     const retainedAccounts = await opened.application.state.read((state) => state.accounts);
     assert.deepEqual(retainedAccounts, {});
+    const retainedServers = await opened.application.state.read((state) => state.servers);
+    const retainedAuthorities = await opened.application.state.read((state) => state.authorities);
+    assert.deepEqual(retainedServers, {});
+    assert.deepEqual(retainedAuthorities, {});
     assert.equal(JSON.stringify(retainedAccounts).includes(firstLoginAccount.nativeToken), false);
     assert.equal(JSON.stringify(retainedAccounts).includes(blocked.nativeToken), false);
     assert.equal((await fetch(new URL('/api/accounts', opened.client.origin))).status, 401);
@@ -705,7 +786,8 @@ test('discovers public server authorities before login and retains them after re
     actors: [
       { handle: '@harbor.registry@harbor.test:4200', actorId: 'http://harbor.test:4200/actors/registry', role: 'registry' },
       { handle: '@harbor.home@harbor.test:4200', actorId: 'http://harbor.test:4200/actors/home', role: 'home' },
-      { handle: '@harbor.player@harbor.test:4200', actorId: 'http://harbor.test:4200/actors/player', role: 'player' }
+      { handle: '@harbor.player@harbor.test:4200', actorId: 'http://harbor.test:4200/actors/player', role: 'player' },
+      { handle: '@harbor.territory@harbor.test:4200', actorId: 'http://harbor.test:4200/actors/territory', role: 'territory' }
     ]
   };
   const fixture = createFixtureFetch([], [authority]);
@@ -720,12 +802,16 @@ test('discovers public server authorities before login and retains them after re
     assert.equal(server.server, authority.server);
     const registry = body.authorities.find((candidate) => candidate.actorId === authority.actors[0]!.actorId);
     const home = body.authorities.find((candidate) => candidate.actorId === authority.actors[1]!.actorId);
+    const territory = body.authorities.find((candidate) => candidate.actorId === authority.actors[3]!.actorId);
     assert.ok(registry);
     assert.ok(home);
+    assert.ok(territory);
     assert.equal(registry.handle, undefined, 'Actor paths do not establish a discoverable handle');
     assert.equal(home.handle, undefined, 'An unadvertised handle remains unknown');
     assert.ok(registry.roles.includes('registry'));
     assert.ok(home.roles.includes('home'));
+    assert.ok(territory.roles.includes('territory'));
+    assert.ok(server.authorities.includes(authority.actors[3]!.actorId));
     assert.equal(body.authorities.some((candidate) => candidate.actorId === authority.actors[2]!.actorId), false);
     assert.ok(fixture.calls.some((call) => call.url === `${authority.origin}/local/info`));
     assert.ok(fixture.calls.some((call) => call.url === authority.actors[0]!.actorId));
