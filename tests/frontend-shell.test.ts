@@ -333,15 +333,39 @@ function shellRoot(page: Page, index = 1): Locator {
   return page.locator(`[data-shell="${index}"]`);
 }
 
-function accountOption(root: Locator, handle: string): Locator {
-  return root.getByRole('option').filter({ hasText: handle });
+function accountMenuButton(root: Locator): Locator {
+  return root.getByRole('button', { name: 'Account menu' });
 }
 
-async function waitForAccount(page: Page, handle: string, index = 1): Promise<Locator> {
-  const option = accountOption(shellRoot(page, index), handle);
-  await option.waitFor({ state: 'visible', timeout: settleTimeout });
-  assert.equal(await option.count(), 1, `expected one account choice for ${handle}`);
-  return option;
+async function openAccountMenu(page: Page, index = 1): Promise<Locator> {
+  const button = accountMenuButton(shellRoot(page, index));
+  await button.waitFor({ state: 'visible', timeout: settleTimeout });
+  await button.click();
+  const menu = page.getByRole('menu');
+  await menu.waitFor({ state: 'visible', timeout: settleTimeout });
+  return menu;
+}
+
+function accountMenuItem(menu: Locator, handle: string): Locator {
+  return menu.getByRole('menuitem').filter({ hasText: handle });
+}
+
+async function waitForAccount(page: Page, handle: string, index = 1): Promise<void> {
+  const menu = await openAccountMenu(page, index);
+  const item = accountMenuItem(menu, handle);
+  await item.waitFor({ state: 'visible', timeout: settleTimeout });
+  assert.equal(await item.count(), 1, `expected one account menu item for ${handle}`);
+  await page.keyboard.press('Escape');
+  await menu.waitFor({ state: 'hidden', timeout: settleTimeout });
+}
+
+async function selectAccount(page: Page, handle: string, index = 1): Promise<void> {
+  const menu = await openAccountMenu(page, index);
+  const item = accountMenuItem(menu, handle);
+  await item.waitFor({ state: 'visible', timeout: settleTimeout });
+  assert.equal(await item.count(), 1, `expected one account menu item for ${handle}`);
+  await item.click();
+  await waitForVisibleAccount(page, handle, index);
 }
 
 async function waitForVisibleAccount(page: Page, accountId: string, index = 1): Promise<void> {
@@ -406,21 +430,26 @@ test('first visit signs in with the keyboard, stores the session, and restores i
   const handle = '@alice@a.example';
   const password = 'first-visit-password';
 
-  await page.getByLabel('Handle').waitFor({ state: 'visible', timeout: settleTimeout });
-  await page.getByLabel('Password').waitFor({ state: 'visible', timeout: settleTimeout });
+  const signIn = page.getByRole('button', { name: 'Sign in', exact: true });
+  await signIn.waitFor({ state: 'visible', timeout: settleTimeout });
+  await signIn.click();
+  const dialog = page.getByRole('dialog', { name: 'Sign in' });
+  await dialog.waitFor({ state: 'visible', timeout: settleTimeout });
+  assert.equal(await page.getByRole('listbox').count(), 0, 'sign-in must not be an inline account list');
 
   mock.onLogin = (body) => {
     assert.deepEqual(body, { handle, password });
     return { json: { status: 'signed-in', account: accountRecord(handle), clientToken: 'token-alice' } };
   };
 
-  await page.getByLabel('Handle').focus();
+  await dialog.getByLabel('Handle').focus();
   await page.keyboard.type(handle);
   await page.keyboard.press('Tab');
   assert.equal(await page.evaluate(() => document.activeElement === document.querySelector('input[type="password"]')), true, 'Tab must move from handle to password');
   await page.keyboard.type(password);
   await page.keyboard.press('Enter');
 
+  await dialog.waitFor({ state: 'hidden', timeout: settleTimeout });
   await waitForAccount(page, handle);
   assert.equal(await shellRoot(page).getByRole('tab', { name: 'Connections', exact: true }).count(), 1);
 
@@ -466,7 +495,6 @@ test('rejected and unavailable sign-in attempts clear the password and retain ex
   assert.match(await alert.innerText(), /invalid handle or password/i);
   assert.equal(await dialog.getByLabel('Password').inputValue(), '');
   assert.equal((await page.locator('body').innerText()).includes(password), false);
-  assert.equal(await accountOption(shellRoot(page), existing).count(), 1);
   assert.deepEqual((await readSessions(page)).map((entry) => entry.accountId), [existing]);
 
   mock.onLogin = () => ({ abort: true });
@@ -480,7 +508,9 @@ test('rejected and unavailable sign-in attempts clear the password and retain ex
     return Boolean(alert && alert.textContent && password && password.value === '' && !alert.textContent.includes(secret));
   }, password, { timeout: settleTimeout });
   assert.equal((await page.locator('body').innerText()).includes(password), false);
-  assert.equal(await accountOption(shellRoot(page), existing).count(), 1);
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await dialog.waitFor({ state: 'hidden', timeout: settleTimeout });
+  await waitForAccount(page, existing);
   assert.deepEqual((await readSessions(page)).map((entry) => entry.accountId), [existing]);
   assert.deepEqual(errors, []);
 });
@@ -504,10 +534,8 @@ test('adds another account without discarding the first and distinguishes full h
   await dialog.getByLabel('Password').fill(password);
   await dialog.getByRole('button', { name: /sign in/i }).click();
 
-  const firstOption = await waitForAccount(page, first);
-  const secondOption = await waitForAccount(page, second);
-  assert.ok((await firstOption.innerText()).includes(first));
-  assert.ok((await secondOption.innerText()).includes(second));
+  await waitForAccount(page, first);
+  await waitForAccount(page, second);
   assert.equal(await page.getByRole('dialog').count(), 0);
 
   const stored = await readSessions(page);
@@ -522,11 +550,11 @@ test('adds another account without discarding the first and distinguishes full h
   assert.equal('origin' in body, false);
   assert.equal('home' in body, false);
 
-  await secondOption.click();
-  await waitForVisibleAccount(page, second);
+  await selectAccount(page, second);
   assert.equal(await currentVisibleAccount(page), second);
-  assert.equal(await accountOption(shellRoot(page), second).getAttribute('aria-selected'), 'true');
-  assert.equal(await accountOption(shellRoot(page), first).getAttribute('aria-selected'), 'false');
+  assert.ok((await accountMenuButton(shellRoot(page)).innerText()).includes(second));
+  await waitForAccount(page, first);
+  await waitForAccount(page, second);
   assert.deepEqual(errors, []);
 });
 
@@ -535,21 +563,23 @@ test('the account switcher exposes full handles and selects the exact account by
   const second = '@same@b.example';
   const { page, errors } = await openShellPage(t, { sessions: [session(first, 'token-a'), session(second, 'token-b')] });
 
-  const firstOption = await waitForAccount(page, first);
-  const secondOption = await waitForAccount(page, second);
-  assert.ok((await firstOption.innerText()).includes(first));
-  assert.ok((await secondOption.innerText()).includes(second));
+  await waitForAccount(page, first);
+  await waitForAccount(page, second);
 
   await waitForVisibleAccount(page, first);
-  await secondOption.click();
-  await waitForVisibleAccount(page, second);
+  await selectAccount(page, second);
+  assert.equal(await currentVisibleAccount(page), second);
 
-  await accountOption(shellRoot(page), first).focus();
+  let menu = await openAccountMenu(page);
+  assert.equal(await page.getByRole('listbox').count(), 0, 'the account switcher must be a menu, not a listbox');
+  assert.equal(await menu.getByRole('menuitem').count(), 2);
+  await accountMenuItem(menu, first).focus();
   await page.keyboard.press('Enter');
   await waitForVisibleAccount(page, first);
   assert.equal(await currentVisibleAccount(page), first);
-  assert.equal(await accountOption(shellRoot(page), first).getAttribute('aria-selected'), 'true');
 
+  menu = await openAccountMenu(page);
+  await accountMenuItem(menu, first).focus();
   await page.keyboard.press('ArrowDown');
   const focused = await page.evaluate(() => document.activeElement?.textContent ?? '');
   assert.ok(focused.includes(second), 'ArrowDown must move focus to the next account');
@@ -575,7 +605,7 @@ test('the add-account dialog traps focus and returns it to its trigger when dism
   await page.keyboard.press('Escape');
   await page.getByRole('dialog').waitFor({ state: 'hidden', timeout: settleTimeout });
   assert.equal(await add.evaluate((element) => element === document.activeElement), true, 'focus must return to the add-account trigger');
-  assert.equal(await accountOption(shellRoot(page), existing).count(), 1);
+  await waitForAccount(page, existing);
   await waitForVisibleAccount(page, existing);
   assert.deepEqual(errors, []);
 });
@@ -646,8 +676,7 @@ test('switching accounts clears private drafts and ignores delayed responses fro
   const draft = shellRoot(page).getByLabel('Draft authoring');
   await draft.fill('first account private draft');
 
-  await accountOption(shellRoot(page), second).click();
-  await waitForVisibleAccount(page, second);
+  await selectAccount(page, second);
   await waitForActivity(page, second);
   assert.equal(await draft.inputValue(), '', 'the first account draft must not remain under the second account');
 
@@ -657,8 +686,7 @@ test('switching accounts clears private drafts and ignores delayed responses fro
   assert.ok(panelText.includes(`${second}-action`));
   assert.equal(panelText.includes(`${first}-action`), false, 'a delayed response from the previous account must not overwrite the current account');
 
-  await accountOption(shellRoot(page), first).click();
-  await waitForVisibleAccount(page, first);
+  await selectAccount(page, first);
   await waitForActivity(page, first);
   assert.equal(await draft.inputValue(), '', 'returning to an account must provide fresh private panel state');
   assert.deepEqual(errors, []);
@@ -683,9 +711,13 @@ test('an external session change clears a rejected selected account and retains 
     window.dispatchEvent(new Event(event));
   }, { key: sessionKey, event: sessionChangeEvent, accountId: rejected });
 
-  await accountOption(shellRoot(page), rejected).waitFor({ state: 'detached', timeout: settleTimeout });
-  await page.getByLabel('Handle').waitFor({ state: 'visible', timeout: settleTimeout });
-  assert.equal(await accountOption(shellRoot(page), retained).count(), 1);
+  await waitForAccount(page, retained);
+  const menu = await openAccountMenu(page);
+  assert.equal(await accountMenuItem(menu, rejected).count(), 0);
+  assert.equal(await accountMenuItem(menu, retained).count(), 1);
+  await page.keyboard.press('Escape');
+  await menu.waitFor({ state: 'hidden', timeout: settleTimeout });
+  assert.equal(await page.getByRole('dialog').count(), 0);
   assert.notEqual(await currentVisibleAccount(page), rejected);
   assert.equal((await page.locator('body').innerText()).includes('rejected account private draft'), false);
   assert.deepEqual(errors, []);
@@ -698,8 +730,7 @@ test('selective logout removes only the selected local session even when the res
 
   await waitForAccount(page, first);
   await waitForAccount(page, second);
-  await accountOption(shellRoot(page), first).click();
-  await waitForVisibleAccount(page, first);
+  await selectAccount(page, first);
 
   mock.onLogout = (accountId) => {
     assert.equal(accountId, first);
@@ -707,8 +738,12 @@ test('selective logout removes only the selected local session even when the res
   };
 
   await page.getByRole('button', { name: 'Log out' }).click();
-  await accountOption(shellRoot(page), first).waitFor({ state: 'detached', timeout: settleTimeout });
-  assert.equal(await accountOption(shellRoot(page), second).count(), 1);
+  await page.getByRole('button', { name: 'Log out' }).waitFor({ state: 'hidden', timeout: settleTimeout });
+  const menu = await openAccountMenu(page);
+  assert.equal(await accountMenuItem(menu, first).count(), 0);
+  assert.equal(await accountMenuItem(menu, second).count(), 1);
+  await page.keyboard.press('Escape');
+  await menu.waitFor({ state: 'hidden', timeout: settleTimeout });
   assert.deepEqual((await readSessions(page)).map((entry) => entry.accountId), [second]);
   assert.equal(await currentVisibleAccount(page), '', 'logout must clear selection rather than switch to another account');
 
@@ -724,8 +759,7 @@ test('a failed logout keeps the selected session and reports the failure', async
   const { page, mock, errors } = await openShellPage(t, { sessions: [session(account, 'token-logout-fail')] });
 
   await waitForAccount(page, account);
-  await accountOption(shellRoot(page), account).click();
-  await waitForVisibleAccount(page, account);
+  await selectAccount(page, account);
 
   mock.onLogout = () => ({ status: 503, json: { error: 'logout unavailable' } });
   await page.getByRole('button', { name: 'Log out' }).click();
@@ -733,7 +767,7 @@ test('a failed logout keeps the selected session and reports the failure', async
   const alert = page.getByRole('alert');
   await alert.waitFor({ state: 'visible', timeout: settleTimeout });
   assert.match(await alert.innerText(), /logout unavailable|unavailable/i);
-  assert.equal(await accountOption(shellRoot(page), account).count(), 1);
+  await waitForAccount(page, account);
   assert.deepEqual((await readSessions(page)).map((entry) => entry.accountId), [account]);
   await waitForVisibleAccount(page, account);
   assert.deepEqual(errors, []);
@@ -745,8 +779,8 @@ test('each shell owns an independent interaction state', async (t) => {
 
   const firstShell = shellRoot(page, 1);
   const secondShell = shellRoot(page, 2);
-  await accountOption(firstShell, account).waitFor({ state: 'visible', timeout: settleTimeout });
-  await accountOption(secondShell, account).waitFor({ state: 'visible', timeout: settleTimeout });
+  await waitForAccount(page, account, 1);
+  await waitForAccount(page, account, 2);
   await waitForVisibleTopic(page, 'connections', 1);
   await waitForVisibleTopic(page, 'connections', 2);
 
@@ -773,8 +807,7 @@ test('a late logout failure cannot become an error for a different selected acco
   };
   await page.getByRole('button', { name: 'Log out' }).click();
   await mock.waitFor((request) => request.path === logoutPath(first));
-  await accountOption(shellRoot(page), second).click();
-  await waitForVisibleAccount(page, second);
+  await selectAccount(page, second);
   const completed = page.waitForResponse((response) => new URL(response.url()).pathname === logoutPath(first));
   release();
   await (await completed).finished();

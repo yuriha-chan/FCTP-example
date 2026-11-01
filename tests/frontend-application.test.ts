@@ -783,34 +783,61 @@ function connectionsRegion(page: Page): Locator {
   return page.getByRole('region', { name: 'Connections' });
 }
 
-function accountOption(page: Page, handle: string): Locator {
-  return page.getByRole('option').filter({ hasText: handle });
+async function openAccountMenu(page: Page): Promise<Locator> {
+  const button = page.getByRole('button', { name: 'Account menu' });
+  await button.waitFor({ state: 'visible', timeout: settleTimeout });
+  await button.click();
+  const menu = page.getByRole('menu');
+  await menu.waitFor({ state: 'visible', timeout: settleTimeout });
+  return menu;
+}
+
+function accountMenuItem(menu: Locator, handle: string): Locator {
+  return menu.getByRole('menuitem').filter({ hasText: handle });
+}
+
+async function waitForAccount(page: Page, handle: string): Promise<void> {
+  const menu = await openAccountMenu(page);
+  const item = accountMenuItem(menu, handle);
+  await item.waitFor({ state: 'visible', timeout: settleTimeout });
+  assert.equal(await item.count(), 1, `expected one account menu item for ${handle}`);
+  await page.keyboard.press('Escape');
+  await menu.waitFor({ state: 'hidden', timeout: settleTimeout });
+}
+
+async function waitForSelectedAccount(page: Page, handle: string): Promise<void> {
+  await page.waitForFunction((text) => {
+    const button = document.querySelector('[aria-label="Account menu"]');
+    return Boolean(button && button.textContent && button.textContent.includes(text));
+  }, handle, { timeout: settleTimeout });
 }
 
 async function selectAccount(page: Page, handle: string): Promise<void> {
-  const target = accountOption(page, handle);
-  await target.waitFor({ state: 'visible', timeout: settleTimeout });
-  assert.equal(await target.count(), 1, `expected one account choice for ${handle}`);
-  await target.click();
-  await page.waitForFunction((text) => {
-    const options = Array.from(document.querySelectorAll('[role="option"]'));
-    const selected = options.find((candidate) => candidate.textContent?.includes(text));
-    return selected?.getAttribute('aria-selected') === 'true';
-  }, handle, { timeout: settleTimeout });
+  const menu = await openAccountMenu(page);
+  const item = accountMenuItem(menu, handle);
+  await item.waitFor({ state: 'visible', timeout: settleTimeout });
+  assert.equal(await item.count(), 1, `expected one account menu item for ${handle}`);
+  await item.click();
+  await menu.waitFor({ state: 'hidden', timeout: settleTimeout });
+  await waitForSelectedAccount(page, handle);
 }
 
 async function selectAccountWithoutPointer(page: Page, handle: string): Promise<void> {
-  await page.evaluate((text) => {
-    const option = Array.from(document.querySelectorAll('[role="option"]'))
-      .find((candidate) => candidate.textContent?.includes(text));
-    if (!(option instanceof HTMLElement)) throw new Error(`missing account choice for ${text}`);
-    option.click();
-  }, handle);
-  await page.waitForFunction((text) => {
-    const options = Array.from(document.querySelectorAll('[role="option"]'));
-    const selected = options.find((candidate) => candidate.textContent?.includes(text));
-    return selected?.getAttribute('aria-selected') === 'true';
-  }, handle, { timeout: settleTimeout });
+  await page.evaluate(() => {
+    const button = document.querySelector('[aria-label="Account menu"]');
+    if (!(button instanceof HTMLElement)) throw new Error('missing account menu trigger');
+    button.click();
+  });
+  const menu = page.getByRole('menu');
+  await menu.waitFor({ state: 'visible', timeout: settleTimeout });
+  const item = accountMenuItem(menu, handle);
+  await item.waitFor({ state: 'visible', timeout: settleTimeout });
+  await item.evaluate((element) => {
+    if (!(element instanceof HTMLElement)) throw new Error('missing account menu item');
+    element.click();
+  });
+  await menu.waitFor({ state: 'hidden', timeout: settleTimeout });
+  await waitForSelectedAccount(page, handle);
 }
 
 async function discover(page: Page, mock: ApplicationMock, origin: string): Promise<MockRequest> {
@@ -897,14 +924,15 @@ test('signs in, persists the account, discovers an origin, reads and refreshes a
     }
   });
 
-  await page.getByLabel('Handle', { exact: true }).waitFor({ state: 'visible', timeout: settleTimeout });
-  await page.getByLabel('Password').waitFor({ state: 'visible', timeout: settleTimeout });
-  await page.getByLabel('Handle', { exact: true }).fill(handle);
-  await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  const signInDialog = page.getByRole('dialog', { name: 'Sign in' });
+  await signInDialog.waitFor({ state: 'visible', timeout: settleTimeout });
+  await signInDialog.getByLabel('Handle', { exact: true }).fill(handle);
+  await signInDialog.getByLabel('Password').fill(password);
+  await signInDialog.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await signInDialog.waitFor({ state: 'hidden', timeout: settleTimeout });
 
-  await accountOption(page, handle).waitFor({ state: 'visible', timeout: settleTimeout });
-  assert.equal(await accountOption(page, handle).count(), 1);
+  await waitForAccount(page, handle);
 
   const logins = mock.requests.filter((request) => request.path === '/api/accounts/login');
   assert.equal(logins.length, 1);
@@ -924,7 +952,7 @@ test('signs in, persists the account, discovers an origin, reads and refreshes a
 
   const serverGetsBeforeReload = mock.requests.filter((request) => request.method === 'GET' && request.path === '/api/servers').length;
   await page.reload();
-  await accountOption(page, handle).waitFor({ state: 'visible', timeout: settleTimeout });
+  await waitForAccount(page, handle);
   await mock.waitUntil(
     () => mock.requests.filter((request) => request.method === 'GET' && request.path === '/api/servers').length > serverGetsBeforeReload,
     'expected a retained directory read after restoring the session'
@@ -1033,10 +1061,8 @@ test('keeps same-name accounts isolated while reopening the same retained author
     }
   });
 
-  await accountOption(page, first).waitFor({ state: 'visible', timeout: settleTimeout });
-  await accountOption(page, second).waitFor({ state: 'visible', timeout: settleTimeout });
-  assert.equal(await accountOption(page, first).count(), 1);
-  assert.equal(await accountOption(page, second).count(), 1);
+  await waitForAccount(page, first);
+  await waitForAccount(page, second);
 
   await selectAccount(page, first);
   const discovery = await discover(page, mock, origin);
@@ -1080,8 +1106,6 @@ test('keeps same-name accounts isolated while reopening the same retained author
   assert.equal(secondRead.query.accountId, second);
 
   assert.equal(await page.getByRole('tab').count(), 6, 'the same shell must remain coherent across the account switch');
-  assert.equal(await accountOption(page, first).count(), 1);
-  assert.equal(await accountOption(page, second).count(), 1);
   assert.equal(await page.locator('[role="tabpanel"]:visible').count(), 1);
 
   await dialog.getByRole('button', { name: 'Close' }).click();
@@ -1187,7 +1211,6 @@ test('selects a second authority, sends one observed policy control, and links e
     }
   });
 
-  await accountOption(page, handle).waitFor({ state: 'visible', timeout: settleTimeout });
   await selectAccount(page, handle);
   await page.getByRole('tab', { name: 'Administration', exact: true }).click();
 
@@ -1334,7 +1357,6 @@ test('opens the exact published resource from Activity and restores focus on Esc
     }
   });
 
-  await accountOption(page, handle).waitFor({ state: 'visible', timeout: settleTimeout });
   await selectAccount(page, handle);
   await page.getByRole('tab', { name: 'Activity', exact: true }).click();
 
@@ -1461,8 +1483,6 @@ test('derives Home ownership from the selected full handle and isolates same-nam
     }
   });
 
-  await accountOption(page, firstHandle).waitFor({ state: 'visible', timeout: settleTimeout });
-  await accountOption(page, secondHandle).waitFor({ state: 'visible', timeout: settleTimeout });
   await selectAccount(page, firstHandle);
   await page.getByRole('tab', { name: 'Administration', exact: true }).click();
 
@@ -1667,7 +1687,6 @@ test('composes Authoring across topics with an exact draft, field picker, public
     }
   });
 
-  await accountOption(page, handle).waitFor({ state: 'visible', timeout: settleTimeout });
   await selectAccount(page, handle);
 
   await topicTab(page, 'Author & Publish').click();
@@ -1934,7 +1953,6 @@ test('composes Explore and Logistics for a verified vessel, a directed saved pla
     }
   });
 
-  await accountOption(page, handle).waitFor({ state: 'visible', timeout: settleTimeout });
   await selectAccount(page, handle);
   await topicTab(page, 'Logistics & Production').click();
 
@@ -2257,7 +2275,6 @@ test('composes a place capability into Production, executes an advertised operat
     }
   });
 
-  await accountOption(page, handle).waitFor({ state: 'visible', timeout: settleTimeout });
   await selectAccount(page, handle);
   await topicTab(page, 'Logistics & Production').click();
 
@@ -2544,8 +2561,6 @@ test('isolates opaque same-name accounts across Authoring, Activity, Logistics, 
     }
   });
 
-  await accountOption(page, firstHandle).waitFor({ state: 'visible', timeout: settleTimeout });
-  await accountOption(page, secondHandle).waitFor({ state: 'visible', timeout: settleTimeout });
   await selectAccount(page, firstHandle);
   await topicTab(page, 'Author & Publish').click();
 

@@ -10,7 +10,7 @@ export interface ShellSnapshot {
   listError: string | undefined;
   actionError: string | undefined;
   listLoading: boolean;
-  addOpen: boolean;
+  signInOpen: boolean;
 }
 
 export function createShellState(): StateProxy<ShellSnapshot> {
@@ -21,6 +21,6 @@ export function createShellState(): StateProxy<ShellSnapshot> {
     listError: undefined,
     actionError: undefined,
     listLoading: false,
-    addOpen: false
+    signInOpen: false
   });
 }

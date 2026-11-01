@@ -2,14 +2,15 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactEle
 import {
   Button,
   Dialog,
-  DialogTrigger,
   Form,
   Input,
   Label,
-  ListBox,
-  ListBoxItem,
+  Menu,
+  MenuItem,
+  MenuTrigger,
   Modal,
   ModalOverlay,
+  Popover,
   Tab,
   TabList,
   TabPanel,
@@ -193,7 +194,7 @@ export function AppShell(props: AppShellProps): ReactElement {
     listError,
     actionError,
     listLoading,
-    addOpen
+    signInOpen
   } = useBoundFields(shellState);
 
   const mountedRef = useRef(true);
@@ -210,7 +211,7 @@ export function AppShell(props: AppShellProps): ReactElement {
 
   const setSelection = useCallback((nextAccountId: string | undefined): void => {
     selectionRevisionRef.current += 1;
-    shellState.addOpen = false;
+    shellState.signInOpen = false;
     shellState.actionError = undefined;
     shellState.accountId = nextAccountId;
   }, [shellState]);
@@ -267,14 +268,10 @@ export function AppShell(props: AppShellProps): ReactElement {
   }), [refreshAccounts]);
 
   const handleAuthenticated = useCallback((nextAccountId: string): void => {
+    shellState.signInOpen = false;
     shellState.actionError = undefined;
     void refreshAccounts({ preferredAccountId: nextAccountId });
   }, [refreshAccounts, shellState]);
-
-  const handleAddAuthenticated = useCallback((nextAccountId: string): void => {
-    shellState.addOpen = false;
-    handleAuthenticated(nextAccountId);
-  }, [handleAuthenticated, shellState]);
 
   const selectedAccount = accountId === undefined
     ? undefined
@@ -298,70 +295,81 @@ export function AppShell(props: AppShellProps): ReactElement {
     ...(accountId === undefined ? {} : { accountId }),
     ...(selectedAccount === undefined ? {} : { accountHandle: selectedAccount.handle, account: selectedAccount })
   };
+  const signInTitle = accounts.length === 0 ? 'Sign in' : 'Add account';
 
   return (
     <section aria-label="Client" className={style('shell')}>
       <header className={style('header')}>
         <h1 className={style('title')}>Client</h1>
-        {accounts.length === 0 ? null : (
-          <div className={style('accounts')}>
-            <ListBox
-              aria-label="Accounts"
-              className={style('accountList')}
-              selectionMode="single"
-              selectionBehavior="replace"
-              disallowEmptySelection
-              selectedKeys={accountId === undefined ? [] : [accountId]}
-              onSelectionChange={(keys) => {
-                if (keys === 'all') return;
-                const [key] = Array.from(keys);
-                if (key !== undefined) setSelection(String(key));
-              }}
-            >
-              {accounts.map((account) => (
-                <ListBoxItem key={account.id} id={account.id} textValue={account.handle} className={style('accountOption')}>
-                  {account.handle}
-                </ListBoxItem>
-              ))}
-            </ListBox>
-            <div className={style('accountActions')}>
-              {selectedAccount === undefined ? null : (
-                <Button className={style('secondary')} onPress={() => { void handleLogout(); }}>
-                  Log out
-                </Button>
-              )}
-              <DialogTrigger isOpen={addOpen} onOpenChange={(open) => { shellState.addOpen = open; }}>
-                <Button className={style('secondary')}>Add account</Button>
-                <ModalOverlay className={style('overlay')} isDismissable>
-                  <Modal className={style('modal')}>
-                    <Dialog aria-label="Add account" className={style('dialog')}>
-                      {({ close }) => (
-                        <div className={style('dialogContent')}>
-                          <h2>Add account</h2>
-                          <SignInForm onAuthenticated={handleAddAuthenticated} submitLabel="Sign in" />
-                          <Button className={style('secondary')} onPress={close}>Cancel</Button>
-                        </div>
-                      )}
-                    </Dialog>
-                  </Modal>
-                </ModalOverlay>
-              </DialogTrigger>
-            </div>
+        <div className={style('accounts')}>
+          {accounts.length === 0 ? null : (
+            <MenuTrigger>
+              <Button className={style('accountMenuTrigger')} aria-label="Account menu">
+                <span className={style('accountMenuLabel')}>{selectedAccount?.handle ?? 'Accounts'}</span>
+                <span aria-hidden="true" className={style('accountMenuChevron')}>▾</span>
+              </Button>
+              <Popover className={style('accountPopover')} placement="bottom end">
+                <Menu
+                  aria-label="Accounts"
+                  className={style('accountMenu')}
+                  onAction={(key) => { setSelection(String(key)); }}
+                >
+                  {accounts.map((account) => (
+                    <MenuItem
+                      key={account.id}
+                      id={account.id}
+                      textValue={account.handle}
+                      aria-label={account.id === accountId ? `${account.handle}, current account` : account.handle}
+                      className={style('accountMenuItem')}
+                    >
+                      <span className={style('accountMenuHandle')}>{account.handle}</span>
+                      {account.id === accountId ? <span aria-hidden="true" className={style('accountMenuCurrent')}>✓</span> : null}
+                    </MenuItem>
+                  ))}
+                </Menu>
+              </Popover>
+            </MenuTrigger>
+          )}
+          <div className={style('accountActions')}>
+            <Button className={style('secondary')} onPress={() => { shellState.signInOpen = true; }}>
+              {accounts.length === 0 ? 'Sign in' : 'Add account'}
+            </Button>
+            {selectedAccount === undefined ? null : (
+              <Button className={style('secondary')} onPress={() => { void handleLogout(); }}>
+                Log out
+              </Button>
+            )}
           </div>
-        )}
+        </div>
       </header>
+      <ModalOverlay
+        className={style('overlay')}
+        isOpen={signInOpen}
+        onOpenChange={(open) => { shellState.signInOpen = open; }}
+        isDismissable
+      >
+        <Modal className={style('modal')}>
+          <Dialog aria-label={signInTitle} className={style('dialog')}>
+            {({ close }) => (
+              <div className={style('dialogContent')}>
+                <h2>{signInTitle}</h2>
+                <p className={style('muted')}>
+                  {accounts.length === 0
+                    ? 'Use the account handle and password for this client session.'
+                    : 'Sign in with another account handle and password.'}
+                </p>
+                <SignInForm onAuthenticated={handleAuthenticated} submitLabel="Sign in" />
+                <Button className={style('secondary')} onPress={close}>Cancel</Button>
+              </div>
+            )}
+          </Dialog>
+        </Modal>
+      </ModalOverlay>
       {listError === undefined ? null : (
         <p role="status" className={style('error')}>Accounts could not be refreshed: {listError}</p>
       )}
       {actionError === undefined ? null : <p role="alert" className={style('error')}>{actionError}</p>}
       {listLoading && accounts.length === 0 ? <p role="status" className={style('muted')}>Loading accounts…</p> : null}
-      {selectedAccount === undefined ? (
-        <div className={style('signIn')}>
-          <h2>Sign in</h2>
-          <p className={style('muted')}>Use the account handle and password for this client session.</p>
-          <SignInForm onAuthenticated={handleAuthenticated} />
-        </div>
-      ) : null}
       <Tabs
         className={style('tabs')}
         selectedKey={topic}
