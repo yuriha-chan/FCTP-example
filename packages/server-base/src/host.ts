@@ -5,6 +5,7 @@ import type { FCTPActor } from '@fctp/protocol';
 import type { Activity } from '@fctp/federation';
 import { FctpServer, type ActivityHandler, type FctpServerOptions } from './server.js';
 import { createInboundVerifier } from './verification.js';
+import { readNodeInfo } from './nodeinfo.js';
 
 export interface HostActorDescriptor {
   name: string;
@@ -28,6 +29,7 @@ export interface CreateHostOptions {
   verifyInbound?: FctpServerOptions['verifyInbound'];
   authorizeAdmin?: FctpServerOptions['authorizeAdmin'];
   authorizeResource?: FctpServerOptions['authorizeResource'];
+  nodeInfo?: { name: string };
   onWorkerError?: (failure: HostWorkerError) => void;
   inboxHandlers?: Partial<Record<string, Record<string, ActivityHandler>>>;
   configure?: (server: FctpServer, actors: Readonly<Record<string, FCTPActor & Record<string, unknown>>>, keys: Readonly<Record<string, GeneratedActorKey>>) => void;
@@ -81,6 +83,7 @@ export async function createHost(options: CreateHostOptions): Promise<Host> {
     verifyInbound: options.verifyInbound ?? createInboundVerifier({ ...(options.fetcher ? { fetcher: options.fetcher } : {}), loader, resolveExpectedIssuer: options.resolveExpectedIssuer ?? (async () => undefined) }),
     ...(options.authorizeResource ? { authorizeResource: options.authorizeResource } : {}),
     authorizeAdmin: options.authorizeAdmin ?? (async () => false),
+    ...(options.nodeInfo ? { nodeInfo: readNodeInfo(options.nodeInfo.name) } : {}),
     signActivity: async (actorId, activity) => {
       const name = descriptors.find(({ name: candidate }) => actors[candidate]!.id === actorId)?.name;
       if (!name) throw new Error(`Unknown local Actor: ${actorId}`);

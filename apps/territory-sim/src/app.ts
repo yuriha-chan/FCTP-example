@@ -105,6 +105,7 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
   const host = await createHost({
     origin, storeFile: options.storeFile, ...(options.keyFile ? { keyFile: options.keyFile } : {}),
     actors: [{ name: 'territory', role: 'territory' }],
+    nodeInfo: { name: 'fctp-simulation' },
     ...(options.fetcher ? { fetcher: options.fetcher } : {}),
     authorizeAdmin: async (request) => safeSecret(request, options.adminSecret),
     authorizeResource: resourceAuth,

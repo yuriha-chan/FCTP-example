@@ -70,6 +70,29 @@ test('authority app discovers Actors, issues native credentials, and publishes a
   }
 });
 
+test('authority app publishes vessel and creation IDs under the canonical origin', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-authority-canonical-'));
+  const port = await availablePort();
+  const app = await createAuthorityApp({
+    origin: 'http://127.0.0.1:80',
+    storeFile: join(directory, 'authority.json'),
+    adminSecret: 'local-admin-secret'
+  });
+  try {
+    assert.equal(app.ids.vessel, 'http://127.0.0.1/objects/vessels/demo');
+    await app.authority.listen(port);
+    const vesselResponse = await fetch(`http://127.0.0.1:${port}/objects/vessels/demo`);
+    assert.equal(vesselResponse.status, 200);
+    const actorResponse = await fetch(`http://127.0.0.1:${port}/actors/player`);
+    assert.equal(actorResponse.status, 200);
+    const actor = await actorResponse.json() as { creations?: string };
+    assert.equal(actor.creations, 'http://127.0.0.1/objects/players/player/creations');
+  } finally {
+    await app.authority.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('authority app preserves persisted Registry adoption when restarted without an option', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-authority-adoption-'));
   const port = await availablePort();

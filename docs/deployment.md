@@ -28,6 +28,27 @@ docker compose --env-file docker/client/.env -f docker/client/compose.yaml up -d
 
 The default published host address is `127.0.0.1`, with host ports Authority `4100`, Policy `4101`, Simulation `4102`, and Client `4103`; each container listens on `8080`. Set `BIND_ADDRESS` in the relevant `.env` only when an operator intentionally needs a different host bind address. Compose project names and named data volumes are distinct per service.
 
+## NodeInfo build identity
+
+Every service exposes public NodeInfo 2.1 discovery:
+
+```text
+GET /.well-known/nodeinfo
+GET /nodeinfo/2.1
+```
+
+The document reports the service name and build git metadata under `software.version` and `metadata.git`. Build metadata is injected at image build time; the image does not read `.git` at runtime. Compose reads these values from the service `.env` file:
+
+```sh
+GIT_COMMIT="$(git rev-parse HEAD)" \
+GIT_DESCRIBE="$(git describe --tags --always --dirty)" \
+GIT_DIRTY="$(test -n "$(git status --porcelain)" && echo true || echo false)" \
+BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+docker compose --env-file docker/authority/.env -f docker/authority/compose.yaml build
+```
+
+`GIT_DESCRIBE` is preferred for `software.version`; otherwise `GIT_COMMIT` is used, and both default to `unknown`. These values identify the deployed revision; they do not change protocol state or authorization.
+
 ## Proxy, origins, and peer reachability
 
 Place a TLS-terminating reverse proxy in front of each service. Configure public DNS and certificates for the canonical origins in the JSON configs. Forward the complete path space, including `/local/`, `/objects/`, and `/api/`, without path-prefix rewriting; preserve the canonical request `Host` and externally visible scheme/host. These origins are protocol identities used in published Actor, resource, and route IDs. They must resolve and be reachable from every container that calls a peer; do not configure a Compose hostname or private container address as a peer identity.

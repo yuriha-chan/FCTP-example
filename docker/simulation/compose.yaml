@@ -4,6 +4,11 @@ services:
     build:
       context: ../..
       dockerfile: docker/simulation/Dockerfile
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+        GIT_DESCRIBE: ${GIT_DESCRIBE:-}
+        GIT_DIRTY: ${GIT_DIRTY:-false}
+        BUILD_TIME: ${BUILD_TIME:-}
     image: fctp-simulation:local
     init: true
     stop_grace_period: 30s

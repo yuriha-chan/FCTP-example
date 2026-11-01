@@ -14,6 +14,14 @@ RUN npm ci && npm run build:client && npm prune --omit=dev
 
 FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production
+ARG GIT_COMMIT=unknown
+ARG GIT_DESCRIBE=
+ARG GIT_DIRTY=false
+ARG BUILD_TIME=
+ENV FCTP_GIT_COMMIT=$GIT_COMMIT \
+    FCTP_GIT_DESCRIBE=$GIT_DESCRIBE \
+    FCTP_GIT_DIRTY=$GIT_DIRTY \
+    FCTP_BUILD_TIME=$BUILD_TIME
 WORKDIR /app
 COPY --from=build --chown=node:node /app/package.json /app/package-lock.json ./
 COPY --from=build --chown=node:node /app/node_modules ./node_modules

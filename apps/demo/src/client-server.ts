@@ -1,11 +1,13 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { nodeInfoDocument, nodeInfoLinks, readNodeInfo } from '@fctp/server-base';
 import type { ClientApplication } from '../../client-server/src/app.js';
 
 export interface StartClientServerOptions {
   port: number;
   host?: string;
+  origin?: string;
   root?: string;
   application?: ClientApplication;
 }
@@ -40,12 +42,32 @@ function staticAsset(staticRoot: string, pathname: string): { file: string; type
   return { file: join(staticRoot, 'assets', name), type };
 }
 
-export async function startClientServer({ port, host = '127.0.0.1', root = process.cwd(), application }: StartClientServerOptions): Promise<ClientServer> {
+export async function startClientServer({ port, host = '127.0.0.1', origin, root = process.cwd(), application }: StartClientServerOptions): Promise<ClientServer> {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new RangeError('Client server port must be an integer from 0 to 65535');
   const staticRoot = resolve(root, 'dist/frontend');
+  const nodeInfo = readNodeInfo('fctp-client');
+  let nodeInfoOrigin: string | undefined;
+  if (origin !== undefined) {
+    const parsed = new URL(origin);
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.pathname !== '/' || parsed.search || parsed.hash || parsed.username || parsed.password) {
+      throw new TypeError('Client origin must be an HTTP(S) origin');
+    }
+    nodeInfoOrigin = parsed.origin;
+  }
   const server = createServer((request, response) => {
     void (async () => {
       const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+      if (request.method === 'GET' && pathname === '/.well-known/nodeinfo') {
+        const base = nodeInfoOrigin ?? `http://${host.includes(':') ? `[${host}]` : host}:${(server.address() as { port: number }).port}`;
+        response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        response.end(JSON.stringify(nodeInfoLinks(base)));
+        return;
+      }
+      if (request.method === 'GET' && pathname === '/nodeinfo/2.1') {
+        response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        response.end(JSON.stringify(nodeInfoDocument(nodeInfo)));
+        return;
+      }
       if (application && await application.handle(request, response)) return;
       if (request.method !== 'GET' && request.method !== 'HEAD') { response.writeHead(405); response.end(); return; }
       const asset = staticAsset(staticRoot, pathname);

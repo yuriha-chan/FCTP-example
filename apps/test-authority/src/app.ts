@@ -42,20 +42,21 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
     adminSecret: options.adminSecret,
     ...(options.playerNames ? { playerNames: options.playerNames } : {}),
     ...(options.administratorNames ? { administratorNames: options.administratorNames } : {}),
+    nodeInfo: { name: 'fctp-authority' },
     fetcher,
     verifyInbound: createInboundVerifier({
       fetcher,
        resolveExpectedIssuer: async (_localActorId, senderActorId, activity) => registry.resolveExpectedIssuer(senderActorId, activity.object)
     })
   });
+  const origin = new URL(options.origin).origin;
   const home = installHome(authority, {
     fetcher,
     ...(options.accountPasswords ? { accountPasswords: options.accountPasswords } : {})
   });
   await home.ready;
-  const authoring = installAuthoring(authority, home, options.origin);
+  const authoring = installAuthoring(authority, home, origin);
   const playerNames = options.playerNames ?? ['player'];
-  const origin = options.origin.replace(/\/$/, '');
   const vesselNames = playerNames.map((name, index) => options.vesselNames?.[name] ?? (index === 0 ? 'demo' : name));
   if (new Set(vesselNames).size !== vesselNames.length || vesselNames.some((name) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name))) throw new TypeError('Vessel names must be unique and URL safe');
   const vessels = Object.fromEntries(playerNames.map((name, index) => [name, {

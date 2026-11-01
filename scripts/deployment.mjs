@@ -155,7 +155,7 @@ export async function startDeployment(service, config) {
       const { createClientApplication } = await import('../apps/client-server/dist/app.js');
       const { startClientServer } = await import('../dist/apps/demo/client-server.js');
       application = await createClientApplication({ storeFile, seedServers: config.seedServers, administratorBindings: config.administratorBindings, administratorCredentials: config.administratorCredentials });
-      server = await startClientServer({ port: config.port, host: config.listenHost, root: config.root, application });
+      server = await startClientServer({ port: config.port, host: config.listenHost, origin: config.origin, root: config.root, application });
     }
     else {
       const listening = await (service === 'authority' ? app.authority : app.host).listen(config.port, config.listenHost);

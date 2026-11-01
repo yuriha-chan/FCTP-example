@@ -17,6 +17,7 @@ export interface CreateAuthorityOptions {
   fetcher?: typeof fetch;
   verifyInbound?: FctpServerOptions['verifyInbound'];
   authorizeResource?: FctpServerOptions['authorizeResource'];
+  nodeInfo?: { name: string };
   onInbound?: (server: FctpServer, actors: AuthorityActors) => void;
   inboxHandlers?: Partial<Record<AuthorityRole, Record<string, ActivityHandler>>>;
 }
@@ -57,6 +58,7 @@ export async function createAuthority(options: CreateAuthorityOptions): Promise<
     ...(options.fetcher ? { fetcher: options.fetcher } : {}),
     ...(options.verifyInbound ? { verifyInbound: options.verifyInbound } : {}),
     ...(options.authorizeResource ? { authorizeResource: options.authorizeResource } : {}),
+    ...(options.nodeInfo ? { nodeInfo: options.nodeInfo } : {}),
     authorizeAdmin: options.adminSecret === undefined ? async () => false : async (request) => matchesSecret(request, options.adminSecret!),
     ...(options.inboxHandlers ? { inboxHandlers: options.inboxHandlers } : {}),
     configure: (server, actors) => {

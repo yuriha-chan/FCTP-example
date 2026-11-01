@@ -100,6 +100,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
   const host = await createHost({
     origin, storeFile: options.storeFile, ...(options.keyFile ? { keyFile: options.keyFile } : {}),
     actors: [{ name: 'territory', role: 'territory' }],
+    nodeInfo: { name: 'fctp-policy' },
     ...(options.fetcher ? { fetcher: options.fetcher } : {}),
     resolveExpectedIssuer: digestIssuer,
     authorizeAdmin: (request) => matchesSecret(request, options.adminSecret),

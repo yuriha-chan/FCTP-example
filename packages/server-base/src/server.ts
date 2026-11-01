@@ -6,6 +6,7 @@ import { parseWebFingerAddress, resolveActor } from '@fctp/identity';
 import { TokenCredentialStore, digestDiplomaticToken, type CredentialState } from '@fctp/auth';
 import { validateModel, type FCTPActor, type TokenDeclaration, type URI } from '@fctp/protocol';
 import { JsonSnapshotStore, type StoreState } from './store.js';
+import { nodeInfoDocument, nodeInfoLinks, type NodeInfoRuntime } from './nodeinfo.js';
 
 export interface VerificationReport {
   cryptographic: { verified: boolean; error?: string };
@@ -34,6 +35,7 @@ export interface FctpServerOptions {
   authorizeResource?: (request: IncomingMessage, actor: FCTPActor, resourceId: URI, player?: URI) => Promise<{ allowed: boolean; player?: URI }>;
   signActivity?: (actorId: URI, activity: Activity) => Promise<Activity>;
   corsOrigin?: string;
+  nodeInfo?: NodeInfoRuntime;
 }
 interface ResourceRecord { body: unknown; public: boolean; actorId?: URI; etag: string }
 
@@ -49,6 +51,7 @@ export class FctpServer {
   readonly #authorizeResource: NonNullable<FctpServerOptions['authorizeResource']>;
   readonly #origin: string | undefined;
   readonly #corsOrigin: string;
+  readonly #nodeInfo: NodeInfoRuntime | undefined;
   #http?: Server;
   #inboxRun: Promise<void> = Promise.resolve();
 
@@ -69,6 +72,7 @@ export class FctpServer {
     }
     this.#origin = origin?.origin;
     this.#corsOrigin = options.corsOrigin ?? '*';
+    this.#nodeInfo = options.nodeInfo;
   }
 
   async open(): Promise<void> { await this.store.open(); }
@@ -312,6 +316,14 @@ export class FctpServer {
     if (request.method === 'OPTIONS') { response.writeHead(204).end(); return; }
     const url = new URL(request.url ?? '/', this.#base(request));
     try {
+      if (this.#nodeInfo && request.method === 'GET' && url.pathname === '/.well-known/nodeinfo') {
+        json(response, 200, nodeInfoLinks(this.#base(request)), 'application/json', { 'Cache-Control': 'no-store' });
+        return;
+      }
+      if (this.#nodeInfo && request.method === 'GET' && url.pathname === '/nodeinfo/2.1') {
+        json(response, 200, nodeInfoDocument(this.#nodeInfo), 'application/json', { 'Cache-Control': 'no-store' });
+        return;
+      }
       for (const route of this.#routes) if (await route({ request, response, url, base: this })) return;
       if (url.pathname === '/.well-known/webfinger' && request.method === 'GET') { await this.#webfinger(url, response); return; }
       const inboxMatch = /^\/actors\/([^/]+)\/inbox$/.exec(url.pathname);
