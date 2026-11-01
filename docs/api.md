@@ -22,6 +22,7 @@ The rendered client exposes Asset text controls from a loaded public `creations`
 | `POST /local/home/rotate` | Authority admin | Optional `{ "actor": "<Player URI>" }` | `200 { actor, nativeToken }` |
 | `POST /local/home/digest-request` | Authority admin | `{ "resourceActor": "<Territory Actor URI>" }` | `202 { "status": "queued" }` |
 | `POST /local/home/revoke` | Authority admin | `{ "resourceActor": "<Territory Actor URI>" }` | `202 { "status": "queued" }` |
+| `GET /local/home/vessels` | Player native token | None | `200 { actor, vessels }`, containing only Registry vessels possessed by the authenticated Player |
 | `GET /local/home/proxy?uri=<URI>&resourceActor=<Actor URI>` | Player native token | Query parameters | `200` resource JSON or upstream authorization/not-found status |
 | `POST /local/registry/entry` | Authority admin | `{ territory, port, route, cargo? }`; cargo is optional `CargoManifest` | `202` created `EntryRequest` |
 | `POST /local/registry/departure` | Authority admin | `{ territory, port, route? }` | `202` created `DepartureRequest` |

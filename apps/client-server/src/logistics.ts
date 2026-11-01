@@ -120,19 +120,39 @@ function publicHttpUrl(value: string): URL | undefined {
   }
 }
 
-function candidatePublicationSource(account: AccountRecord): string | undefined {
+function ownedVesselsKey(accountId: string): string {
+  return `logistics-owned-vessels:${accountId}`;
+}
+
+function ownedVesselsSource(account: AccountRecord): string | undefined {
   const base = account.homeAuthority ?? account.actorId;
   const url = base === undefined ? undefined : publicHttpUrl(base);
   if (!url || account.login.status !== 'signed-in'
     || url.host !== account.homeServer || url.host !== account.login.homeServer) return undefined;
-  return new URL('/local/info', url).href;
+  return new URL('/local/home/vessels', url).href;
 }
 
-function publishedVesselIds(value: unknown): string[] | undefined {
-  const publication = record(value);
-  const maps = [publication.vessels, record(publication.ids).vessels].filter(isRecord);
-  if (maps.length === 0) return undefined;
-  return [...new Set(maps.flatMap((map) => Object.values(map).filter((id): id is string => typeof id === 'string')))];
+interface OwnedVesselsValue {
+  actor: string;
+  vessels: Array<Record<string, unknown> & {
+    id: string;
+    registry: string;
+    possessor: string;
+    capacity: number;
+    name?: string;
+  }>;
+}
+
+function ownedVesselsValue(value: unknown): OwnedVesselsValue | undefined {
+  if (!isRecord(value) || typeof value.actor !== 'string' || !Array.isArray(value.vessels)) return undefined;
+  const vessels: OwnedVesselsValue['vessels'] = [];
+  for (const entry of value.vessels) {
+    if (!isRecord(entry) || typeof entry.id !== 'string' || typeof entry.registry !== 'string'
+      || typeof entry.possessor !== 'string' || typeof entry.capacity !== 'number'
+      || (entry.name !== undefined && typeof entry.name !== 'string')) return undefined;
+    vessels.push({ ...entry, id: entry.id, registry: entry.registry, possessor: entry.possessor, capacity: entry.capacity, ...(entry.name === undefined ? {} : { name: entry.name }) });
+  }
+  return { actor: value.actor, vessels };
 }
 
 function logisticsKey(accountId: string, vesselId: string): string {
@@ -208,39 +228,42 @@ export function createLogisticsService(
   };
 
   const candidatesPage = async (account: AccountRecord): Promise<PageResponse<LogisticsVesselCandidatesData>> => {
-    const source = candidatePublicationSource(account);
+    const source = ownedVesselsSource(account);
     const blockers: string[] = [];
     const candidates: LogisticsVesselCandidate[] = [];
     const sourced: Record<string, SourcedObservation<unknown>> = {};
+    if (account.actorId === undefined) blockers.push('Account Actor identity is unavailable; owned vessels cannot be verified.');
     if (source === undefined) {
-      blockers.push('A verified issuing Home publication source is unavailable. Known vessel references remain usable.');
+      blockers.push('A verified Home server vessel listing source is unavailable.');
     } else {
-      const publication = await observations.readOne(`logistics-vessel-candidates:${account.id}`, source);
-      sourced[source] = publication;
-      const ids = publishedVesselIds(observationValue(publication));
-      if (ids === undefined) blockers.push('Published vessel candidates are missing or unavailable; this is not a complete fleet listing.');
-      for (const id of ids ?? []) {
-        const metadata = await observations.readOne(vesselMetadataKey(id), id);
-        sourced[id] = metadata;
-        const vessel = observationValue<VesselContext['vessel']>(metadata);
-        candidates.push({
-          id,
-          source: id,
-          state: metadata.state,
-          ...('observedAt' in metadata && metadata.observedAt !== undefined ? { observedAt: metadata.observedAt } : {}),
-          ...('error' in metadata && metadata.error !== undefined ? { error: metadata.error } : {}),
-          ownership: vessel === undefined || account.actorId === undefined ? 'unverified'
-            : isOwnedVessel(vessel, account.actorId) ? 'verified-owned' : 'not-owned',
-          ...(vessel === undefined ? {} : {
+      const observation = await observations.readOne(ownedVesselsKey(account.id), source);
+      sourced[source] = observation;
+      const value = observationValue<OwnedVesselsValue>(observation);
+      if (value === undefined) {
+        blockers.push(observation.state === 'not-retrieved'
+          ? 'Owned vessels have not been retrieved from the Home server.'
+          : 'The Home server vessel listing is unavailable; this does not establish that the account owns no vessels.');
+      } else if (value.actor !== account.actorId) {
+        blockers.push('The Home server vessel listing returned another account.');
+      } else {
+        const owned = value.vessels.filter((vessel) => vessel.possessor === account.actorId);
+        if (owned.length !== value.vessels.length) blockers.push('The Home server vessel listing contained a vessel owned by another account; it was omitted.');
+        for (const vessel of owned) {
+          candidates.push({
+            id: vessel.id,
             ...(vessel.name === undefined ? {} : { name: vessel.name }),
             registry: vessel.registry,
             possessor: vessel.possessor,
-            registrySupported: publicHttpUrl(vessel.registry)?.host === (account.login.status === 'signed-in' ? account.login.homeServer : undefined)
-          })
-        });
+            ownership: 'verified-owned',
+            registrySupported: publicHttpUrl(vessel.registry)?.host === (account.login.status === 'signed-in' ? account.login.homeServer : undefined),
+            source,
+            state: observation.state,
+            ...('observedAt' in observation && observation.observedAt !== undefined ? { observedAt: observation.observedAt } : {}),
+            ...('error' in observation && observation.error !== undefined ? { error: observation.error } : {})
+          });
+        }
       }
     }
-    if (account.actorId === undefined) blockers.push('Account Actor identity is unavailable; candidate ownership cannot be verified.');
     return { context: { accountId: account.id }, data: { accountId: account.id, candidates, blockers }, observations: sourced, actions: [] };
   };
 
@@ -468,27 +491,31 @@ export function createLogisticsService(
     },
     async refreshVesselCandidates(accountId) {
       const account = await signedInAccount(accountId);
-      const source = candidatePublicationSource(account);
-      if (source !== undefined) {
-        const publication = await observations.refresh({
-          key: `logistics-vessel-candidates:${account.id}`,
+      const source = ownedVesselsSource(account);
+      if (source !== undefined && account.actorId !== undefined && account.login.status === 'signed-in') {
+        const nativeToken = account.login.nativeToken;
+        const observation = await observations.refresh({
+          key: ownedVesselsKey(account.id),
           source,
           load: (signal) => call(async () => {
-            const response = await fetcher(source, { method: 'GET', headers: { Accept: 'application/json' }, cache: 'no-store', signal });
-            if (!response.ok) throw new Error(`Vessel publication unavailable: HTTP ${response.status}`);
-            const value: unknown = await response.json();
-            if (!isRecord(value)) throw new Error('Vessel publication is invalid');
+            const response = await fetcher(source, {
+              method: 'GET',
+              headers: { Accept: 'application/json', Authorization: `Bearer ${nativeToken}` },
+              cache: 'no-store',
+              signal
+            });
+            if (!response.ok) throw new Error(`Home vessel listing unavailable: HTTP ${response.status}`);
+            const value = ownedVesselsValue(await response.json());
+            if (value === undefined) throw new Error('Home vessel listing is invalid');
             return value;
           })
         });
-        for (const id of publishedVesselIds(observationValue(publication)) ?? []) {
-          await observations.refresh({
-            key: vesselMetadataKey(id), source: id,
-            load: (signal) => call(() => {
-              if (publicHttpUrl(id) === undefined) throw new Error('Published vessel reference must be an HTTP(S) URI without userinfo');
-              return readVesselDocument(fetcher, id, signal);
-            })
-          });
+        const value = observationValue<OwnedVesselsValue>(observation);
+        const observedAt = 'observedAt' in observation && typeof observation.observedAt === 'string' ? observation.observedAt : undefined;
+        if (value !== undefined && value.actor === account.actorId && observedAt !== undefined) {
+          for (const vessel of value.vessels.filter((entry) => entry.possessor === account.actorId)) {
+            await observations.retain({ key: vesselMetadataKey(vessel.id), source: vessel.id, value: vessel, observedAt });
+          }
         }
       }
       return candidatesPage(account);

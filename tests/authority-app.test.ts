@@ -70,6 +70,42 @@ test('authority app discovers Actors, issues native credentials, and publishes a
   }
 });
 
+test('Home lists only the vessels owned by the authenticated account', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-home-vessels-'));
+  const port = await availablePort();
+  const origin = `http://127.0.0.1:${port}`;
+  const app = await createAuthorityApp({
+    origin,
+    storeFile: join(directory, 'authority.json'),
+    adminSecret: 'local-admin-secret',
+    playerNames: ['alice', 'bob'],
+    accountPasswords: { alice: 'alice-secret', bob: 'bob-secret' }
+  });
+  try {
+    await app.authority.listen(port);
+    const host = new URL(origin).host;
+    const alice = await successfulLogin(origin, `@alice@${host}`, 'alice-secret');
+    const bob = await successfulLogin(origin, `@bob@${host}`, 'bob-secret');
+    const read = async (token: string): Promise<{ actor: string; vessels: Array<{ id: string; possessor: string }> }> => {
+      const response = await fetch(`${origin}/local/home/vessels`, { headers: { Authorization: `Bearer ${token}` } });
+      assert.equal(response.status, 200);
+      return await response.json() as { actor: string; vessels: Array<{ id: string; possessor: string }> };
+    };
+    const aliceVessels = await read(alice.nativeToken);
+    assert.equal(aliceVessels.actor, app.ids.players.alice);
+    assert.deepEqual(aliceVessels.vessels.map((vessel) => vessel.id), [app.ids.vessels.alice]);
+    assert.equal(aliceVessels.vessels[0]?.possessor, app.ids.players.alice);
+    const bobVessels = await read(bob.nativeToken);
+    assert.equal(bobVessels.actor, app.ids.players.bob);
+    assert.deepEqual(bobVessels.vessels.map((vessel) => vessel.id), [app.ids.vessels.bob]);
+    assert.equal(bobVessels.vessels[0]?.possessor, app.ids.players.bob);
+    assert.equal((await fetch(`${origin}/local/home/vessels`)).status, 401);
+  } finally {
+    await app.authority.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('authority app publishes vessel and creation IDs under the canonical origin', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-authority-canonical-'));
   const port = await availablePort();

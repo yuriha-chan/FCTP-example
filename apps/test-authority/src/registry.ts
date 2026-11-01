@@ -34,6 +34,7 @@ export interface Registry {
   switchAdoption(adoption: boolean, vesselId?: URI): Promise<void>;
   state(vesselId?: URI): Promise<VesselRegistryState>;
   fleet(): Promise<Record<URI, VesselRegistryState>>;
+  owned(playerActorId: URI): Promise<Vessel[]>;
   resolveExpectedIssuer(sender: URI, object: unknown): Promise<URI | undefined>;
 }
 
@@ -59,6 +60,9 @@ export function installRegistry(authority: Authority, options: InstallRegistryOp
     return structuredClone(selected);
   };
   const fleet = async (): Promise<Record<URI, VesselRegistryState>> => structuredClone((await readCollection()).vessels);
+  const owned = async (playerActorId: URI): Promise<Vessel[]> => Object.values((await readCollection()).vessels)
+    .flatMap((entry) => entry.vessel?.possessor === playerActorId ? [structuredClone(entry.vessel)] : [])
+    .sort((left, right) => left.id.localeCompare(right.id));
 
   const resolveExpectedIssuer = async (sender: URI, object: unknown): Promise<URI | undefined> => {
     if (!object || typeof object !== 'object') return undefined;
@@ -194,7 +198,7 @@ export function installRegistry(authority: Authority, options: InstallRegistryOp
     return departure;
   };
   const switchAdoption = async (adoption: boolean, vesselId?: URI): Promise<void> => authority.server.store.transaction((store) => { const data = migrate(store.domain.registry, initial); const id = vesselId ?? data.defaultVessel; const target = data.vessels[id]; if (!target) throw new Error(`Unknown Registry vessel: ${id}`); target.adoption = adoption; store.domain.registry = data; });
-  return { sendEntry, sendDeparture, switchAdoption, state, fleet, resolveExpectedIssuer };
+  return { sendEntry, sendDeparture, switchAdoption, state, fleet, owned, resolveExpectedIssuer };
 }
 
 function discoverActions(authority: Authority, vessel: URI, selected: VesselRegistryState): LocalActionDiscovery {

@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { createTokenDigest, createTokenRevoke, deriveDiplomaticToken, encodeNativeToken, type HomeLoginResult } from '@fctp/auth';
 import { parseHandle } from '@fctp/identity';
 import { ResourceClient, ResourceError } from '@fctp/resources';
-import type { FCTPActor, TokenDeclaration, URI } from '@fctp/protocol';
+import type { FCTPActor, TokenDeclaration, URI, Vessel } from '@fctp/protocol';
 import type { Authority } from './bootstrap.js';
 
 interface ResourceActor extends FCTPActor, Record<string, unknown> { inbox: URI }
@@ -31,6 +31,7 @@ export interface HomeService {
   requestDigest(playerActorId: URI, resource: UsedResource): Promise<TokenDeclaration>;
   deriveToken(playerActorId: URI, resourceActorId: URI): Promise<string>;
   getResource<T>(playerActorId: URI, resourceActorId: URI, uri: URI): Promise<T>;
+  setOwnedVessels(provider: (playerActorId: URI) => Promise<Vessel[]>): void;
 }
 
 export function installHome(authority: Authority, options: HomeOptions = {}): HomeService {
@@ -39,6 +40,7 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
   const resources = options.resourceClient ?? new ResourceClient(options.fetcher);
   const fetcher = options.fetcher ?? fetch;
   const playerQueues = new Map<URI, Promise<void>>();
+  let ownedVessels: (playerActorId: URI) => Promise<Vessel[]> = async () => [];
   const serializePlayer = <T>(id: URI, operation: () => Promise<T>): Promise<T> => {
     const previous = playerQueues.get(id) ?? Promise.resolve();
     const result = previous.then(operation);
@@ -210,6 +212,9 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
         const token = await deriveDiplomaticToken(player.nativeToken, resourceActorId);
         return (await resources.get<T>(uri, { token })).value;
       });
+    },
+    setOwnedVessels(provider) {
+      ownedVessels = provider;
     }
   };
 
@@ -218,6 +223,7 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
     const sendJson = (status: number, value: unknown): void => { response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); response.end(JSON.stringify(value)); };
     if (request.method === 'GET' && url.pathname === '/local/home/endpoints') {
       sendJson(200, { endpoints: [
+        { method: 'GET', path: '/local/home/vessels', authentication: 'native Player' },
         { method: 'GET', path: '/local/home/accounts', authentication: 'native Home governor' },
         { method: 'POST', path: '/local/home/accounts/availability', authentication: 'native Home governor' },
         { method: 'POST', path: '/local/home/issue', authentication: 'admin' },
@@ -226,6 +232,17 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
         { method: 'POST', path: '/local/home/digest-request', authentication: 'admin' },
         { method: 'GET', path: '/local/home/proxy?uri=&resourceActor=', authentication: 'native-token' }
       ] });
+      return true;
+    }
+    if (request.method === 'GET' && url.pathname === '/local/home/vessels') {
+      const header = request.headers.authorization ?? '';
+      const callerId = header.startsWith('Bearer ') ? await service.authenticateNativeToken(header.slice(7)) : undefined;
+      if (!callerId) { sendJson(401, { error: 'unauthorized' }); return true; }
+      try {
+        sendJson(200, { actor: callerId, vessels: await ownedVessels(callerId) });
+      } catch {
+        sendJson(500, { error: 'vessel-listing-failed' });
+      }
       return true;
     }
     if (request.method === 'GET' && url.pathname === '/local/home/accounts') {

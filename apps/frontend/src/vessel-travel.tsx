@@ -8,7 +8,6 @@ import type {
   JourneyStep,
   LogisticsRegistryObservation,
   LogisticsTerritoryObservation,
-  LogisticsVesselCandidate,
   PublicAccountRecord,
   RoutePlanRecord
 } from '@fctp/client-sdk';
@@ -113,12 +112,6 @@ function stateLabel(state: string | undefined): string {
   return state.charAt(0).toUpperCase() + state.slice(1);
 }
 
-function ownershipLabel(ownership: LogisticsVesselCandidate['ownership']): string {
-  if (ownership === 'verified-owned') return 'Verified owned';
-  if (ownership === 'not-owned') return 'Not owned by this account';
-  return 'Unverified; ownership cannot be verified';
-}
-
 function valueText(value: unknown): string {
   if (value === undefined) return 'unknown';
   if (value === null) return 'none';
@@ -206,7 +199,6 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
   const [planView, setPlanView] = useState<PlanView>({});
   const [browseView, setBrowseView] = useState<BrowseView>({});
   const [actionView, setActionView] = useState<ActionView>({});
-  const [knownVesselId, setKnownVesselId] = useState('');
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [adoption, setAdoption] = useState(false);
   const [sending, setSending] = useState(false);
@@ -226,7 +218,6 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
 
   useEffect(() => {
     setSelection((previous) => previous?.accountId === accountId ? previous : undefined);
-    setKnownVesselId('');
   }, [accountId]);
 
   useEffect(() => {
@@ -331,6 +322,7 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
   }, [vesselData]);
 
   const candidates = candidateView.accountId === accountId ? candidateView : undefined;
+  const ownedCandidates = candidates?.response?.data.candidates.filter((candidate) => candidate.ownership === 'verified-owned') ?? [];
   const currentBrowse = browseView.accountId === accountId && browseView.vesselId === vesselId ? browseView : undefined;
   const browseData = currentBrowse?.response;
   const ports = candidatePorts(browseData);
@@ -345,12 +337,6 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
     if (accountId === undefined) return;
     setSelection({ accountId, vesselId: id });
     onContextChange?.({ accountId, vesselId: id });
-  };
-
-  const openKnownVessel = (): void => {
-    const id = knownVesselId.trim();
-    if (id === '' || accountId === undefined) return;
-    selectVessel(id);
   };
 
   const refreshCandidates = (): void => {
@@ -505,22 +491,6 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
   return (
     <section aria-label="Vessel travel" className={styles.travel}>
       <h2 className={styles.heading}>Vessel travel</h2>
-
-      <section className={styles.section} aria-label="Known vessel reference">
-        <h3 className={styles.subheading}>Known vessel reference</h3>
-        <p className={styles.meta}>
-          A publication failure is not the same as owning no vessels. This reference opens the retained vessel page independently of candidate publication.
-        </p>
-        <div className={styles.controls}>
-          <TextField className={styles.field} value={knownVesselId} onChange={setKnownVesselId}>
-            <Label className={styles.label}>Known vessel ID</Label>
-            <Input className={styles.input} />
-          </TextField>
-          <Button className={styles.button} onPress={openKnownVessel} isDisabled={knownVesselId.trim() === '' || accountId === undefined}>
-            Open known vessel reference
-          </Button>
-        </div>
-      </section>
 
       {vesselId === undefined || accountId === undefined ? null : (
         <section className={styles.section} aria-label="Selected vessel state">
@@ -813,30 +783,32 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
       )}
 
       {accountId === undefined ? null : (
-        <section className={styles.section} aria-label="Published vessel candidates">
+        <section className={styles.section} aria-label="Owned vessels">
           <header className={styles.controls}>
-            <h3 className={styles.subheading}>Published vessel candidates</h3>
+            <h3 className={styles.subheading}>Owned vessels</h3>
             <Button className={styles.button} onPress={refreshCandidates} isPending={candidates?.refreshing === true}>
-              Refresh vessel candidates
+              Refresh owned vessels
             </Button>
           </header>
-          {candidates?.loading === true ? <p className={styles.status}>Reading retained vessel candidates…</p> : null}
+          {candidates?.loading === true ? <p className={styles.status}>Reading retained owned vessels…</p> : null}
           {candidates?.failure === undefined ? null : (
-            <p className={styles.failure} role="alert">Vessel candidates unavailable: {candidates.failure}</p>
+            <p className={styles.failure} role="alert">Owned vessels unavailable: {candidates.failure}</p>
           )}
           {candidates?.refreshError === undefined ? null : (
-            <p className={styles.failure} role="alert">Candidate refresh failed: {candidates.refreshError}. Retained candidates are unchanged.</p>
+            <p className={styles.failure} role="alert">Owned vessel refresh failed: {candidates.refreshError}. Retained owned vessels are unchanged.</p>
           )}
           {candidates?.response === undefined ? null : (
             <>
               {candidates.response.data.blockers.map((blocker) => (
                 <p key={blocker} className={styles.failure}>{blocker}</p>
               ))}
-              {candidates.response.data.candidates.length === 0 ? (
-                <p className={styles.status}>No published vessel candidates are retained. This is not a statement that the account owns no vessels.</p>
+              {ownedCandidates.length === 0 ? (
+                candidates.response.data.blockers.length === 0
+                  ? <p className={styles.status}>No owned vessels are available for this account.</p>
+                  : null
               ) : (
                 <ul className={styles.list}>
-                  {candidates.response.data.candidates.map((candidate) => (
+                  {ownedCandidates.map((candidate) => (
                     <li key={candidate.id} className={styles.item}>
                       <p className={styles.name}>
                         {candidate.name ?? (
@@ -847,18 +819,15 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
                         )}
                       </p>
                       <p className={styles.meta}>
-                        {ownershipLabel(candidate.ownership)} · {stateLabel(candidate.state)}
-                        {candidate.registrySupported === undefined ? '' : ` · Registry ${candidate.registrySupported ? 'supported' : 'unsupported'}`}
+                        {stateLabel(candidate.state)}
+                        {candidate.observedAt === undefined ? '' : ` · Observed: ${candidate.observedAt}`}
                       </p>
-                      {candidate.observedAt === undefined ? null : <p className={styles.meta}>Observed: {candidate.observedAt}</p>}
                       {candidate.error === undefined ? null : <p className={styles.failure}>{candidate.error}</p>}
-                      {candidate.ownership === 'verified-owned' ? (
-                        <Button className={styles.button} onPress={() => selectVessel(candidate.id)}>
-                          {`Select ${candidate.name ?? 'vessel'}`}
-                        </Button>
-                      ) : null}
+                      <Button className={styles.button} onPress={() => selectVessel(candidate.id)}>
+                        {`Select ${candidate.name ?? 'vessel'}`}
+                      </Button>
                       <details className={styles.details}>
-                        <summary>Candidate details</summary>
+                        <summary>Vessel details</summary>
                         <p className={styles.meta}>Exact ID: {candidate.id}</p>
                         <p className={styles.meta}>Source: {candidate.source}</p>
                         {candidate.registry === undefined ? null : <p className={styles.meta}>Registry: {candidate.registry}</p>}

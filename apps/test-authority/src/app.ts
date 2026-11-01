@@ -73,6 +73,7 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
       return authorization.startsWith('Bearer ') ? home.authenticateNativeToken(authorization.slice(7)) : undefined;
     }
   });
+  home.setOwnedVessels((playerActorId) => registry.owned(playerActorId));
   const savedRegistry = await authority.server.store.read((store) => store.domain.registry as unknown);
   const ids: AuthorityAppIds = {
     actor: {

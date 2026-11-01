@@ -897,7 +897,7 @@ test('creates an exact directed route plan, hands off only exact workflow contex
   assert.deepEqual(errors, []);
 });
 
-test('reads typed published vessel candidates and refreshes only on request without selecting a vessel', async (t) => {
+test('reads owned vessels from the Home listing and refreshes only on request without selecting a vessel', async (t) => {
   const { page, requests, errors } = await openFixture(t, {
     screen: 'travel',
     account: accountA,
@@ -914,28 +914,28 @@ test('reads typed published vessel candidates and refreshes only on request with
     }
   });
 
-  await waitForRegionText(page, 'Vessel travel', /Alice Skiff|published vessel candidates/i, 'expected verified vessel candidates');
+  await waitForRegionText(page, 'Vessel travel', /Owned vessels/i, 'expected the owned vessel workspace');
+  await waitForRegionText(page, 'Vessel travel', 'Alice Skiff', 'expected the owned vessel');
   const candidateReads = requestsFor(requests, 'GET', '/api/logistics/vessels');
-  assert.equal(candidateReads.length, 1, 'the candidate page must use one retained application read');
+  assert.equal(candidateReads.length, 1, 'the owned vessel page must use one retained application read');
   expectBearer(candidateReads[0]!);
   assert.deepEqual(candidateReads[0]?.search, { accountId: 'account-a' });
 
   const text = await regionText(page, 'Vessel travel');
-  assert.ok(text.includes('Alice Skiff'), 'an exact owned candidate must be named');
-  assert.ok(text.includes('Bob Cutter'), 'an other-account candidate must remain visible with its evidence');
-  assert.match(text, /not owned|other account|unverified|cannot be verified/i, 'foreign ownership must be explained');
-  assert.match(text, /unavailable|failed/i, 'a failed candidate document must be explained');
-  assert.ok(text.includes(observedAt), 'candidate evidence time must remain visible');
+  assert.ok(text.includes('Alice Skiff'), 'an owned vessel must be named');
+  assert.equal(text.includes('Bob Cutter'), false, 'another account vessel must not be shown');
+  assert.equal(/Known vessel ID|Published vessel candidates/i.test(text), false, 'manual and published candidate controls must be gone');
+  assert.ok(text.includes(observedAt), 'the listing observation time must remain visible');
 
   await openDetails(page, 'Vessel travel');
   const disclosed = await regionText(page, 'Vessel travel');
-  for (const exact of [vesselAliceId, vesselOutsiderId, vesselBrokenId]) {
-    assert.ok(disclosed.includes(exact), `expected exact candidate identity ${exact} in details`);
-  }
-  assert.equal(requests.filter((request) => request.method === 'POST').length, 0, 'reading publication must not refresh world observations');
-  assert.equal(requests.filter((request) => request.pathname.startsWith('/api/logistics/vessels/')).length, 0, 'a candidate list must not select the first vessel automatically');
-  await clickButton(page, /Refresh vessel candidates/i);
-  await waitForRegionText(page, 'Vessel travel', 'Fresh Alice Skiff', 'expected explicit candidate refresh');
+  assert.ok(disclosed.includes(vesselAliceId), 'the owned vessel exact ID remains in details');
+  assert.equal(disclosed.includes(vesselOutsiderId), false, 'foreign vessel details must not be shown');
+  assert.equal(disclosed.includes(vesselBrokenId), false, 'unverified vessel details must not be shown');
+  assert.equal(requests.filter((request) => request.method === 'POST').length, 0, 'reading owned vessels must not refresh world observations');
+  assert.equal(requests.filter((request) => request.pathname.startsWith('/api/logistics/vessels/')).length, 0, 'an owned vessel list must not select the first vessel automatically');
+  await clickButton(page, /Refresh owned vessels/i);
+  await waitForRegionText(page, 'Vessel travel', 'Fresh Alice Skiff', 'expected explicit owned-vessel refresh');
   const refreshed = requestsFor(requests, 'POST', '/api/logistics/vessels/refresh');
   assert.equal(refreshed.length, 1);
   expectBearer(refreshed[0]!);
@@ -972,30 +972,23 @@ test('selects a verified candidate into retained vessel state and communicates t
   assert.deepEqual(errors, []);
 });
 
-test('keeps a known vessel reference usable when the candidate publication is unavailable and explains missing Actor identity', async (t) => {
-  const { page, requests, errors } = await openFixture(t, {
+test('explains a Home vessel-listing failure without falling back to manual or published candidates', async (t) => {
+  const { page, errors } = await openFixture(t, {
     screen: 'travel',
     account: accountA,
     handle: (request) => {
       if (request.method === 'GET' && request.pathname === '/api/logistics/vessels') return { body: pageResponse({
-        accountId: 'account-a', candidates: [], blockers: ['Home publication unavailable; this does not prove the account owns no vessels.']
-      }, { publication: { source: homeInfoUri, state: 'unavailable', error: 'Home publication unavailable' } }, { accountId: 'account-a' }) };
-      if (request.method === 'GET' && request.pathname === `/api/logistics/vessels/${encodeURIComponent(vesselAliceId)}`) return { body: vesselState(vesselAliceId) };
+        accountId: 'account-a', candidates: [], blockers: ['The Home server vessel listing is unavailable; this does not establish that the account owns no vessels.']
+      }, { source: { state: 'unavailable', source: homeInfoUri, error: 'Home vessel listing unavailable' } }, { accountId: 'account-a' }) };
       return undefined;
     }
   });
 
-  await waitForRegionText(page, 'Vessel travel', /Home publication unavailable|publication.*unavailable/i, 'expected the candidate publication failure');
+  await waitForRegionText(page, 'Vessel travel', /Home server vessel listing is unavailable/i, 'expected the Home listing failure');
   const unavailableText = await regionText(page, 'Vessel travel');
-  assert.match(unavailableText, /not the same as owning no vessels|does not prove|no published candidates/i, 'a publication failure must not claim the account has no vessels');
-
-  await page.getByRole('textbox', { name: /Known vessel ID/i }).fill(vesselAliceId);
-  await clickButton(page, /Open known vessel reference/i);
-  await waitForRegionText(page, 'Vessel travel', /Registry cargo/i, 'the known vessel reference must open independently of publication');
-  const knownReads = requests.filter((request) => request.method === 'GET' && request.pathname === `/api/logistics/vessels/${encodeURIComponent(vesselAliceId)}`);
-  assert.equal(knownReads.length, 1, 'the known reference must use the retained vessel page');
-  expectBearer(knownReads[0]!);
-  assert.deepEqual(knownReads[0]?.search, { accountId: 'account-a' });
+  assert.match(unavailableText, /does not establish|unavailable/i, 'a Home failure must not claim the account owns no vessels');
+  assert.equal(/Known vessel ID|Open known vessel|Published vessel candidates/i.test(unavailableText), false, 'no manual or published fallback is offered');
+  assert.equal(unavailableText.includes('Select Alice Skiff'), false, 'no vessel is selectable without a Home listing');
 
   const noActor = await openFixture(t, {
     screen: 'travel',
@@ -1003,16 +996,15 @@ test('keeps a known vessel reference usable when the candidate publication is un
     handle: (request) => {
       if (request.method === 'GET' && request.pathname === '/api/logistics/vessels') return { body: pageResponse({
         accountId: accountNoActor.id,
-        candidates: [{ ...ownedCandidate(), ownership: 'unverified' }],
-        blockers: ['Missing Actor ID; ownership cannot be verified.']
+        candidates: [],
+        blockers: ['Account Actor identity is unavailable; owned vessels cannot be verified.']
       }, {}, { accountId: accountNoActor.id }) };
       return undefined;
     }
   });
-  await waitForRegionText(noActor.page, 'Vessel travel', /Actor ID|ownership cannot be verified/i, 'missing Actor identity must be explained');
+  await waitForRegionText(noActor.page, 'Vessel travel', /Actor identity is unavailable/i, 'missing Actor identity must be explained');
   const noActorText = await regionText(noActor.page, 'Vessel travel');
-  assert.match(noActorText, /cannot be verified|missing Actor ID/i);
-  assert.equal(noActorText.includes('Select Alice Skiff'), false, 'an unverifiable candidate must not be selectable');
+  assert.equal(noActorText.includes('Select Alice Skiff'), false, 'an unverifiable account must not show a vessel selector');
   assert.deepEqual(errors, []);
 });
 
