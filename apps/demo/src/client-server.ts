@@ -17,6 +17,8 @@ export interface ClientServer {
   close(): Promise<void>;
 }
 
+const TOPIC_PATHS = new Set(['/connections', '/explore', '/logistics', '/authoring', '/activity', '/administration']);
+
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
   '.css': 'text/css; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
@@ -29,7 +31,7 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
 };
 
 function staticAsset(staticRoot: string, pathname: string): { file: string; type: string } | undefined {
-  if (pathname === '/' || pathname === '/index.html') {
+  if (pathname === '/' || pathname === '/index.html' || TOPIC_PATHS.has(pathname)) {
     return { file: join(staticRoot, 'index.html'), type: CONTENT_TYPES['.html']! };
   }
   const match = /^\/assets\/([A-Za-z0-9._-]+)$/.exec(pathname);

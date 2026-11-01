@@ -119,6 +119,22 @@ test('serves the browser client and static assets on an isolated port', async ()
   await assert.rejects(fetch(client.origin));
 });
 
+test('serves the frontend for each known topic route', async () => {
+  const client = await startClientServer({ port: 0 });
+  try {
+    for (const path of ['/connections', '/explore', '/logistics', '/authoring', '/activity', '/administration']) {
+      const response = await fetch(new URL(path, client.origin));
+      assert.equal(response.status, 200, `${path} must serve the frontend`);
+      assert.match(response.headers.get('content-type') ?? '', /text\/html/);
+      assert.match(await response.text(), /<html/i);
+    }
+    const unknown = await fetch(new URL('/not-a-topic', client.origin));
+    assert.equal(unknown.status, 404);
+  } finally {
+    await client.close();
+  }
+});
+
 const firstAccount: AccountRecord = {
   id: 'account:first',
   handle: '@sana@first.test:4200',

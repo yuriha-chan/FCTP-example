@@ -26,11 +26,12 @@ import {
   subscribeSessionChanges,
   type AccountListResponse
 } from './application-api';
-import { createShellState, type TopicId } from './shell-state';
+import { canonicalizeRoute, navigateToTopic, useRouteTopic, type TopicId } from './router';
+import { createShellState } from './shell-state';
 import { useBoundFields } from './use-bound-state';
 import styles from './shell.module.css';
 
-export type { TopicId } from './shell-state';
+export type { TopicId } from './router';
 
 export interface AccountContext {
   accountId?: string;
@@ -189,13 +190,13 @@ export function AppShell(props: AppShellProps): ReactElement {
 
   const {
     accountId,
-    topic,
     accounts,
     listError,
     actionError,
     listLoading,
     signInOpen
   } = useBoundFields(shellState);
+  const topic = useRouteTopic();
 
   const mountedRef = useRef(true);
   const generationRef = useRef(0);
@@ -204,10 +205,12 @@ export function AppShell(props: AppShellProps): ReactElement {
 
   useEffect(() => { onAccountChange?.(accountId); }, [accountId, onAccountChange]);
 
+  useEffect(() => { canonicalizeRoute(); }, []);
+
   const navigateTopic = useCallback((next: TopicId): void => {
-    shellState.topic = next;
+    navigateToTopic(next);
     topicTabs.current[next]?.focus();
-  }, [shellState]);
+  }, []);
 
   const setSelection = useCallback((nextAccountId: string | undefined): void => {
     selectionRevisionRef.current += 1;
@@ -374,9 +377,7 @@ export function AppShell(props: AppShellProps): ReactElement {
         className={style('tabs')}
         selectedKey={topic}
         onSelectionChange={(key) => {
-          if (typeof key === 'string' && TOPIC_IDS.has(key)) {
-            shellState.topic = key as TopicId;
-          }
+          if (typeof key === 'string' && TOPIC_IDS.has(key)) navigateTopic(key as TopicId);
         }}
       >
         <TabList aria-label="Topics" className={style('tabList')}>

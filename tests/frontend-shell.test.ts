@@ -254,6 +254,7 @@ after(async () => {
 interface OpenOptions {
   sessions?: readonly StoredSession[];
   shellCount?: number;
+  path?: string;
   configureMock?: (mock: ShellMock) => void;
 }
 
@@ -296,8 +297,9 @@ async function openShellPage(t: TestContext, options: OpenOptions = {}): Promise
   });
 
   const shellCount = options.shellCount ?? 1;
-  const suffix = shellCount === 2 ? '?shells=2' : '';
-  await page.goto(`${fixtureOrigin}${suffix}`);
+  const target = new URL(options.path ?? '/', fixtureOrigin);
+  if (shellCount === 2) target.searchParams.set('shells', '2');
+  await page.goto(target.toString());
   if (options.sessions) {
     await storeSessions(page, options.sessions);
     await page.reload();
@@ -655,6 +657,52 @@ test('topic tabs are keyboard accessible, render one panel, and preserve drafts 
   assert.deepEqual(errors, []);
 });
 
+test('derives the visible topic from the pathname and pushes tab transitions into history', async (t) => {
+  const { page, mock, errors } = await openShellPage(t);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor({ state: 'visible', timeout: settleTimeout });
+  await page.waitForFunction(() => location.pathname === '/connections');
+  assert.equal(new URL(page.url()).pathname, '/connections', 'the root must canonicalize to the Connections URI');
+
+  await page.evaluate(() => { (window as unknown as { __routeMarker?: string }).__routeMarker = 'kept'; });
+  const requestsBefore = mock.requests.length;
+  const routes = [
+    { topic: 'explore', label: topicLabels.explore, path: '/explore' },
+    { topic: 'logistics', label: topicLabels.logistics, path: '/logistics' },
+    { topic: 'authoring', label: topicLabels.authoring, path: '/authoring' },
+    { topic: 'activity', label: topicLabels.activity, path: '/activity' },
+    { topic: 'administration', label: topicLabels.administration, path: '/administration' }
+  ] as const;
+
+  for (const route of routes) {
+    await shellRoot(page).getByRole('tab', { name: route.label, exact: true }).click();
+    await waitForVisibleTopic(page, route.topic);
+    assert.equal(new URL(page.url()).pathname, route.path, `${route.topic} must have its own URI`);
+  }
+
+  assert.equal(await page.evaluate(() => (window as unknown as { __routeMarker?: string }).__routeMarker), 'kept', 'topic transitions must not reload the document');
+  assert.equal(mock.requests.length, requestsBefore, 'topic transitions must not load sources');
+
+  await page.goBack();
+  await waitForVisibleTopic(page, 'activity');
+  assert.equal(new URL(page.url()).pathname, '/activity');
+  await page.goForward();
+  await waitForVisibleTopic(page, 'administration');
+  assert.equal(new URL(page.url()).pathname, '/administration');
+  assert.deepEqual(errors, []);
+});
+
+test('loads a topic from its URI on the first visit and after reload', async (t) => {
+  const { page, errors } = await openShellPage(t, { path: '/activity' });
+  await waitForVisibleTopic(page, 'activity');
+  assert.equal(new URL(page.url()).pathname, '/activity');
+
+  await page.reload();
+  await waitForFixture(page);
+  await waitForVisibleTopic(page, 'activity');
+  assert.equal(new URL(page.url()).pathname, '/activity');
+  assert.deepEqual(errors, []);
+});
+
 test('switching accounts clears private drafts and ignores delayed responses from the previous account', async (t) => {
   const first = '@delay@a.example';
   const second = '@delay@b.example';
@@ -773,7 +821,7 @@ test('a failed logout keeps the selected session and reports the failure', async
   assert.deepEqual(errors, []);
 });
 
-test('each shell owns an independent interaction state', async (t) => {
+test('mounted shells follow the browser-derived topic while keeping their own account controls', async (t) => {
   const account = '@isolated@a.example';
   const { page, errors } = await openShellPage(t, { sessions: [session(account, 'token-isolated')], shellCount: 2 });
 
@@ -786,9 +834,12 @@ test('each shell owns an independent interaction state', async (t) => {
 
   await firstShell.getByRole('tab', { name: topicLabels.explore, exact: true }).click();
   await waitForVisibleTopic(page, 'explore', 1);
+  await waitForVisibleTopic(page, 'explore', 2);
+  assert.equal(new URL(page.url()).pathname, '/explore');
   assert.equal(await firstShell.getByRole('tab', { name: topicLabels.explore, exact: true }).getAttribute('aria-selected'), 'true');
-  assert.equal(await secondShell.getByRole('tab', { name: topicLabels.connections, exact: true }).getAttribute('aria-selected'), 'true');
-  await waitForVisibleTopic(page, 'connections', 2);
+  assert.equal(await secondShell.getByRole('tab', { name: topicLabels.explore, exact: true }).getAttribute('aria-selected'), 'true');
+  assert.equal(await firstShell.getByRole('button', { name: 'Account menu' }).count(), 1);
+  assert.equal(await secondShell.getByRole('button', { name: 'Account menu' }).count(), 1);
   assert.deepEqual(errors, []);
 });
 
