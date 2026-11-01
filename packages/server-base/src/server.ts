@@ -27,6 +27,7 @@ export interface CustomRouteContext { request: IncomingMessage; response: Server
 export type CustomRoute = (context: CustomRouteContext) => boolean | Promise<boolean>;
 export interface FctpServerOptions {
   storeFile: string;
+  origin?: string;
   fetcher?: typeof fetch;
   verifyInbound?: (localActorId: URI, senderActorId: URI, activity: Activity) => Promise<VerificationReport>;
   authorizeAdmin?: (request: IncomingMessage, actor: FCTPActor) => Promise<boolean>;
@@ -46,6 +47,7 @@ export class FctpServer {
   readonly #verifyInbound: NonNullable<FctpServerOptions['verifyInbound']>;
   readonly #authorizeAdmin: NonNullable<FctpServerOptions['authorizeAdmin']>;
   readonly #authorizeResource: NonNullable<FctpServerOptions['authorizeResource']>;
+  readonly #origin: string | undefined;
   readonly #corsOrigin: string;
   #http?: Server;
   #inboxRun: Promise<void> = Promise.resolve();
@@ -61,6 +63,11 @@ export class FctpServer {
     }));
     this.#authorizeAdmin = options.authorizeAdmin ?? (async () => false);
     this.#authorizeResource = options.authorizeResource ?? (async () => ({ allowed: false }));
+    const origin = options.origin === undefined ? undefined : new URL(options.origin);
+    if (origin && (!['http:', 'https:'].includes(origin.protocol) || origin.pathname !== '/' || origin.search || origin.hash || origin.username || origin.password)) {
+      throw new TypeError('origin must be an HTTP(S) origin');
+    }
+    this.#origin = origin?.origin;
     this.#corsOrigin = options.corsOrigin ?? '*';
   }
 
@@ -294,13 +301,16 @@ export class FctpServer {
     return { port: address.port, close: () => new Promise<void>((resolve, reject) => this.#http?.close((error) => error ? reject(error) : resolve())) };
   }
 
+  #base(request: IncomingMessage): string {
+    return this.#origin ?? `http://${request.headers.host ?? 'localhost'}`;
+  }
+
   async #handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     response.setHeader('Access-Control-Allow-Origin', this.#corsOrigin);
     response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, If-None-Match');
     response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     if (request.method === 'OPTIONS') { response.writeHead(204).end(); return; }
-    const base = `http://${request.headers.host ?? 'localhost'}`;
-    const url = new URL(request.url ?? '/', base);
+    const url = new URL(request.url ?? '/', this.#base(request));
     try {
       for (const route of this.#routes) if (await route({ request, response, url, base: this })) return;
       if (url.pathname === '/.well-known/webfinger' && request.method === 'GET') { await this.#webfinger(url, response); return; }
@@ -363,7 +373,7 @@ export class FctpServer {
   }
 
   async #object(id: URI, request: IncomingMessage, response: ServerResponse): Promise<void> {
-    const absoluteId = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`).href;
+    const absoluteId = new URL(request.url ?? '/', this.#base(request)).href;
     const resource = this.#resources.get(absoluteId);
     const persisted = resource ? undefined : await this.store.read((state) => state.objects[absoluteId]);
     if (!resource && persisted === undefined) { json(response, 404, { error: 'not-found' }); return; }

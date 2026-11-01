@@ -109,3 +109,34 @@ test('protected GET distinguishes invalid credentials from denied resource polic
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('a canonical HTTPS origin retrieves published objects through an HTTP listener', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-server-canonical-'));
+  const storeFile = join(directory, 'state.json');
+  const origin = 'https://authority.example';
+  try {
+    const host = await createHost({
+      origin,
+      storeFile,
+      keyFile: join(directory, 'keys.json'),
+      actors: [{ name: 'player', role: 'player' }]
+    });
+    const actorId = host.actor('player').id;
+    const objectId = `${origin}/objects/players/player/asset-1`;
+    await host.server.commit(() => undefined, [], [{
+      actorId,
+      object: { id: objectId, type: 'Asset', name: 'Canonical Asset' },
+      activityId: `${origin}/activities/asset-1`
+    }]);
+    const listening = await host.listen();
+    try {
+      const response = await fetch(`http://127.0.0.1:${listening.port}/objects/players/player/asset-1`);
+      assert.equal(response.status, 200);
+      assert.equal((await response.json() as { id: string }).id, objectId);
+    } finally {
+      await host.close();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

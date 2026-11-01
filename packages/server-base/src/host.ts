@@ -76,6 +76,7 @@ export async function createHost(options: CreateHostOptions): Promise<Host> {
   const loader = createLocalDocumentLoader(new Map(Object.values(keys).map(({ keyPair, publicKey }) => [keyPair.id, publicKey])));
   const server = new FctpServer({
     storeFile: options.storeFile,
+    origin: base,
     ...(options.fetcher ? { fetcher: options.fetcher } : {}),
     verifyInbound: options.verifyInbound ?? createInboundVerifier({ ...(options.fetcher ? { fetcher: options.fetcher } : {}), loader, resolveExpectedIssuer: options.resolveExpectedIssuer ?? (async () => undefined) }),
     ...(options.authorizeResource ? { authorizeResource: options.authorizeResource } : {}),
