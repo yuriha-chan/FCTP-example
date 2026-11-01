@@ -54,6 +54,11 @@ export function publicationReferences(payload: unknown): ActionReference[] {
   return references;
 }
 
+export function publicationObjects(payload: unknown): Record<string, unknown>[] {
+  if (!isRecord(payload)) return [];
+  return [payload.asset, payload.variety, payload.grant].filter(isRecord);
+}
+
 export function catalogEntries(value: unknown): Pick<LibraryEntry, 'id' | 'type' | 'name' | 'holder' | 'asset' | 'variety' | 'grantee' | 'production' | 'media'>[] {
   const items = Array.isArray(value)
     ? value

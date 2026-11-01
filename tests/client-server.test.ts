@@ -4013,3 +4013,77 @@ test('legacy retained login state without client sessions never authorizes by it
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('published and library resource documents are packed for the reader without an extra refresh', { timeout: 120_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-packed-resources-'));
+  const storeFile = join(directory, 'client.store.json');
+  const world = await startProductionWorld(directory);
+  const opened = await openAuthoringClient(storeFile, world, {});
+  const first = world.accounts.first;
+  const second = world.accounts.second;
+  const resourceUrl = (accountId: string, resourceId: string): URL => {
+    const url = new URL(`/api/resources/${encodeURIComponent(resourceId)}`, opened.client.origin);
+    url.searchParams.set('accountId', accountId);
+    return url;
+  };
+  const resourceData = (body: unknown): Record<string, unknown> => bodyRecord(bodyRecord(body).data);
+  const resourceObservations = (body: unknown): Record<string, unknown> => bodyRecord(bodyRecord(body).observations);
+  const mediaObservation = (body: unknown, url: string): Record<string, unknown> | undefined =>
+    Object.values(resourceObservations(body)).find((value): value is Record<string, unknown> => isRecord(value) && value.source === url);
+  try {
+    const nativeToken = first.login.status === 'signed-in' ? first.login.nativeToken : '';
+    const seeded = await seedAuthorityAsset(world, nativeToken, 'Library Asset', 'Library asset text');
+    const seededId = typeof seeded.id === 'string' ? seeded.id : '';
+    assert.ok(seededId, 'the seeded Asset has an exact identity');
+    const refreshed = await postJson(new URL('/api/library/refresh', opened.client.origin), { accountId: first.id });
+    assert.equal(refreshed.status, 200);
+    assert.ok(libraryRecords(refreshed.body, 'assets').some((entry) => entry.id === seededId), 'the Library retains the seeded Asset');
+
+    const libraryRead = await getJson(resourceUrl(first.id, seededId));
+    assert.equal(libraryRead.status, 200);
+    const libraryValue = bodyRecord(resourceData(libraryRead.body).value);
+    assert.equal(libraryValue.type, 'Asset', 'the Library refresh packs the Asset document for the reader');
+    const libraryMedia = (Array.isArray(libraryValue.media) ? libraryValue.media : []).filter(isRecord)[0];
+    assert.ok(libraryMedia && typeof libraryMedia.url === 'string', 'the Asset publishes a media reference');
+    const libraryMediaObservation = mediaObservation(libraryRead.body, libraryMedia.url);
+    assert.equal(libraryMediaObservation?.state, 'available', 'the Library refresh packs Asset media for the reader');
+    assert.equal(libraryMediaObservation?.value, 'Library asset text');
+
+    const created = await postJson(new URL('/api/drafts', opened.client.origin), {
+      accountId: first.id,
+      kind: 'asset',
+      fields: { name: 'Published Asset', text: 'Published asset text' }
+    });
+    assert.ok([200, 201].includes(created.status));
+    const draftId = String(draftFrom(created.body).id);
+    const published = await postJson(new URL(`/api/drafts/${encodeURIComponent(draftId)}/publish`, opened.client.origin), { accountId: first.id });
+    assert.ok([200, 201].includes(published.status));
+    const action = bodyRecord(bodyRecord(published.body).action);
+    assert.equal(bodyRecord(action.submission).status, 'accepted');
+    const reference = (Array.isArray(action.resultReferences) ? action.resultReferences : [])
+      .filter(isRecord)
+      .find((candidate) => candidate.kind === 'resource');
+    assert.ok(reference && typeof reference.id === 'string', 'publication returns the exact resource reference');
+
+    const immediateRead = await getJson(resourceUrl(first.id, reference.id));
+    assert.equal(immediateRead.status, 200);
+    const immediateValue = bodyRecord(resourceData(immediateRead.body).value);
+    assert.equal(immediateValue.type, 'Asset', 'publication packs the returned Asset document before any readback');
+    const immediateMedia = (Array.isArray(immediateValue.media) ? immediateValue.media : []).filter(isRecord)[0];
+    assert.ok(immediateMedia && typeof immediateMedia.url === 'string');
+    const immediateMediaObservation = mediaObservation(immediateRead.body, immediateMedia.url);
+    assert.equal(immediateMediaObservation?.state, 'available', 'publication packs the Asset media before any readback');
+    assert.equal(immediateMediaObservation?.value, 'Published asset text');
+
+    const otherAccountRead = await getJson(resourceUrl(second.id, reference.id));
+    assert.equal(otherAccountRead.status, 200);
+    assert.equal(resourceData(otherAccountRead.body).value, undefined, 'packed resources remain account-scoped');
+    const otherObservation = Object.values(resourceObservations(otherAccountRead.body)).find((value): value is Record<string, unknown> => isRecord(value) && value.source === reference.id);
+    assert.equal(isRecord(otherObservation) ? otherObservation.state : undefined, 'not-retrieved');
+  } finally {
+    await opened.client.close();
+    await opened.application.close();
+    await world.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

@@ -2,9 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { FctpClient } from '@fctp/client-sdk';
 import type { AccountRecord, ActionEvidence, ActionRecord, AuthoringDraft, AuthoringKind, LibraryData, PageResponse, SourcedObservation } from '@fctp/client-sdk';
 import type { URI } from '@fctp/protocol';
-import { catalogData, catalogEntries, publicationBody, publicationEndpoint, publicationReferences, sanitizeDraftFields } from './adapters/authoring.js';
+import { catalogData, catalogEntries, publicationBody, publicationEndpoint, publicationObjects, publicationReferences, sanitizeDraftFields } from './adapters/authoring.js';
 import type { ActionHandler, ActionService } from './actions.js';
 import type { ObservationService } from './observations.js';
+import { packResourceMedia, packResourceObjects, resourceObjectDocuments } from './resource-observations.js';
 import type { ClientApplicationState } from './store.js';
 
 export class AuthoringRequestError extends Error {
@@ -107,6 +108,9 @@ export function createAuthoringPublicationHandler(state: ClientApplicationState,
       const payload: unknown = await response.json();
       const references = publicationReferences(payload);
       if (references.length === 0) throw new Error('Publication response did not identify a resource');
+      const documents = publicationObjects(payload);
+      await packResourceObjects(observations, accountId, documents, new Date().toISOString());
+      await packResourceMedia(observations, fetcher, accountId, documents);
       return { references, result: references[0]!.id };
     },
     async reconcile({ accountId, references, action, signal }) {
@@ -170,10 +174,29 @@ export function createAuthoringService(
     };
   };
 
-  const page = async (accountId: string): Promise<PageResponse<LibraryData>> => {
+  const packObservation = async (accountId: string, observation: SourcedObservation<unknown> | undefined): Promise<void> => {
+    if (observation === undefined) return;
+    const value = retainedValue(observation);
+    if (value === undefined) return;
+    const observedAt = 'observedAt' in observation && typeof observation.observedAt === 'string'
+      ? observation.observedAt
+      : new Date().toISOString();
+    await packResourceObjects(observations, accountId, resourceObjectDocuments(value), observedAt);
+  };
+
+  const page = async (accountId: string, observeMedia = false): Promise<PageResponse<LibraryData>> => {
     const { catalog, creations } = await readObservations(accountId);
     const base = catalogData(catalog === undefined ? undefined : retainedValue(catalog));
     const extra = catalogEntries(creations === undefined ? undefined : retainedValue(creations));
+    await packObservation(accountId, catalog);
+    await packObservation(accountId, creations);
+    if (observeMedia) {
+      const documents = [catalog, creations].flatMap((observation) => {
+        const value = observation === undefined ? undefined : retainedValue(observation);
+        return value === undefined ? [] : resourceObjectDocuments(value);
+      });
+      await packResourceMedia(observations, fetcher, accountId, documents, timeoutMs);
+    }
     const pageObservations: Record<string, SourcedObservation<unknown>> = {};
     if (catalog !== undefined) pageObservations[`${catalogKey(accountId)}:${catalog.source}`] = catalog;
     if (creations !== undefined) pageObservations[`${creationsKey(accountId)}:${creations.source}`] = creations;
@@ -242,7 +265,7 @@ export function createAuthoringService(
           });
         }
       }
-      return page(accountId);
+      return page(accountId, true);
     },
     async createDraft(input) {
       if (!isKind(input.kind)) throw new AuthoringRequestError(400, 'invalid-draft-kind');

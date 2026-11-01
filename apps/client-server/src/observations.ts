@@ -10,10 +10,19 @@ export interface ObservationRefreshInput<T> {
   timeoutMs?: number;
 }
 
+export interface ObservationRetainInput<T> {
+  key: string;
+  source: string;
+  value: T;
+  observedAt: string;
+  isEmpty?: boolean;
+}
+
 export interface ObservationService {
   read(key: string): Promise<readonly SourcedObservation<unknown>[]>;
   readOne(key: string, source: string): Promise<SourcedObservation<unknown>>;
   refresh<T>(input: ObservationRefreshInput<T>): Promise<SourcedObservation<T>>;
+  retain<T>(input: ObservationRetainInput<T>): Promise<SourcedObservation<T>>;
 }
 
 export interface ObservationServiceOptions {
@@ -86,6 +95,22 @@ export function createObservationService(state: ClientApplicationState, options:
         });
         return observation;
       }
+    },
+    async retain<T>(input: ObservationRetainInput<T>): Promise<SourcedObservation<T>> {
+      const prior = await findOne(input.key, input.source);
+      if (prior && 'observedAt' in prior && typeof prior.observedAt === 'string' && prior.observedAt > input.observedAt) {
+        return prior as SourcedObservation<T>;
+      }
+      const observation: SourcedObservation<T> = {
+        state: input.isEmpty ? 'empty' : 'available',
+        source: input.source,
+        observedAt: input.observedAt,
+        value: input.value
+      };
+      await state.transaction((current) => {
+        current.observations[observationKey(input.key, input.source)] = observation as SourcedObservation<unknown>;
+      });
+      return observation;
     }
   };
 }

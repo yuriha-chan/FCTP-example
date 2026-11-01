@@ -23,6 +23,7 @@ import type {
 } from '@fctp/client-sdk';
 import { withDeadline } from './deadline.js';
 import type { ObservationService } from './observations.js';
+import { resourceObservationKey } from './resource-observations.js';
 import type { ClientApplicationState } from './store.js';
 
 export class ExploreRequestError extends Error {
@@ -53,7 +54,6 @@ export interface ExploreService {
 
 const SEP = '\u0000';
 const EXPLORE = 'explore';
-const RESOURCE = 'resource';
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -657,10 +657,8 @@ function createScopedExploreService(
     return undefined;
   };
 
-  const resourceKey = (resourceId: string, accountId: string | undefined): { key: string; source: string; storedKey: string } => {
-    const key = [RESOURCE, accountId ?? '', resourceId].join(SEP);
-    return { key, source: resourceId, storedKey: `${key}${SEP}${resourceId}` };
-  };
+  const resourceKey = (resourceId: string, accountId: string | undefined): { key: string; source: string; storedKey: string } =>
+    resourceObservationKey(accountId, resourceId);
 
   const mediaUrls = (value: unknown): string[] => {
     if (!isRecord(value) || !Array.isArray(value.media)) return [];
