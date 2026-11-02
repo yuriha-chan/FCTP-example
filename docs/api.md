@@ -1,5 +1,7 @@
 # Local HTTP API reference
 
+> This document is a workflow-oriented reference. The normative server/client contract is the [Common Realms Client-Server Basic API Conventions](local-api-specification.md).
+
 All routes below are local demo APIs under `/local/`, not standardized FCTP endpoints. JSON bodies are objects. Use `Authorization: Bearer <credential>`; administrative credentials are separate per service from the Player's native token and Territory-specific diplomatic bearer tokens. See [the client walkthrough](client-walkthrough.md) for form workflows.
 
 ## Authority (port 4100)
