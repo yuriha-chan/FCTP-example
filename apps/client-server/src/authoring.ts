@@ -332,7 +332,10 @@ export function createAuthoringService(
       const updated = await state.transaction((current) => {
         const stored = draftFromStored(current.drafts[draftId]);
         if (!stored) return draft;
-        const published: AuthoringDraft = { ...stored, publication: { actionId: action.id, resourceIds } };
+        const published: AuthoringDraft = {
+          ...stored,
+          publication: { actionId: action.id, resourceIds, publishedFields: structuredClone(stored.fields) }
+        };
         current.drafts[draftId] = published as unknown as Record<string, unknown>;
         return published;
       });

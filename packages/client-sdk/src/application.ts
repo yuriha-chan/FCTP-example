@@ -207,6 +207,7 @@ export type AuthoringKind = 'asset' | 'variety';
 export interface AuthoringDraftPublication {
   actionId?: string;
   resourceIds?: string[];
+  publishedFields?: Record<string, unknown>;
 }
 
 export interface AuthoringDraft {

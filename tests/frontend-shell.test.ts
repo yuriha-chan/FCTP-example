@@ -691,6 +691,20 @@ test('derives the visible topic from the pathname and pushes tab transitions int
   assert.deepEqual(errors, []);
 });
 
+test('keeps authoring edit URLs on the authoring topic', async (t) => {
+  const assetPath = '/authoring/assets/edit/draft%3Aalpha';
+  const { page, errors } = await openShellPage(t, { path: assetPath });
+  await waitForVisibleTopic(page, 'authoring');
+  assert.equal(new URL(page.url()).pathname, assetPath);
+
+  const varietyPath = '/authoring/varieties/edit/draft%3Abeta';
+  await page.goto(new URL(varietyPath, fixtureOrigin).toString());
+  await waitForFixture(page);
+  await waitForVisibleTopic(page, 'authoring');
+  assert.equal(new URL(page.url()).pathname, varietyPath);
+  assert.deepEqual(errors, []);
+});
+
 test('loads a topic from its URI on the first visit and after reload', async (t) => {
   const { page, errors } = await openShellPage(t, { path: '/activity' });
   await waitForVisibleTopic(page, 'activity');

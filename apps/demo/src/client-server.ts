@@ -18,6 +18,7 @@ export interface ClientServer {
 }
 
 const TOPIC_PATHS = new Set(['/connections', '/explore', '/logistics', '/authoring', '/activity', '/administration']);
+const AUTHORING_EDIT_PATH = /^\/authoring\/(?:assets|varieties)\/edit\/[^/]+\/?$/;
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
   '.css': 'text/css; charset=utf-8',
@@ -31,7 +32,7 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
 };
 
 function staticAsset(staticRoot: string, pathname: string): { file: string; type: string } | undefined {
-  if (pathname === '/' || pathname === '/index.html' || TOPIC_PATHS.has(pathname)) {
+  if (pathname === '/' || pathname === '/index.html' || TOPIC_PATHS.has(pathname) || AUTHORING_EDIT_PATH.test(pathname)) {
     return { file: join(staticRoot, 'index.html'), type: CONTENT_TYPES['.html']! };
   }
   const match = /^\/assets\/([A-Za-z0-9._-]+)$/.exec(pathname);

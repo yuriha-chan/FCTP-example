@@ -122,7 +122,10 @@ test('serves the browser client and static assets on an isolated port', async ()
 test('serves the frontend for each known topic route', async () => {
   const client = await startClientServer({ port: 0 });
   try {
-    for (const path of ['/connections', '/explore', '/logistics', '/authoring', '/activity', '/administration']) {
+    for (const path of [
+      '/connections', '/explore', '/logistics', '/authoring', '/activity', '/administration',
+      '/authoring/assets/edit/draft%3Aalpha', '/authoring/varieties/edit/draft%3Abeta'
+    ]) {
       const response = await fetch(new URL(path, client.origin));
       assert.equal(response.status, 200, `${path} must serve the frontend`);
       assert.match(response.headers.get('content-type') ?? '', /text\/html/);
@@ -2970,6 +2973,9 @@ test('draft publication creates signed Asset and multi-entry Variety evidence, t
     assert.equal(publishedAssetDraft.id, assetDraftId);
     assert.ok(JSON.stringify(publishedAssetDraft).includes(assetAction.id), 'the draft retains its publication action');
     assert.ok(JSON.stringify(publishedAssetDraft).includes(assetRef.id), 'the draft retains its publication resource');
+    const publication = isRecord(publishedAssetDraft.publication) ? publishedAssetDraft.publication : undefined;
+    assert.ok(publication, 'the draft retains publication state');
+    assert.deepEqual(publication.publishedFields, assetDraft.fields, 'publication retains the fields used for the published resource');
 
     const assetReader = await postJson(new URL(`/api/resources/${encodeURIComponent(assetRef.id)}/refresh`, origin), { accountId: first.id });
     assert.equal(assetReader.status, 200);

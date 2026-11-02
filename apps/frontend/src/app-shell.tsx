@@ -26,7 +26,7 @@ import {
   subscribeSessionChanges,
   type AccountListResponse
 } from './application-api';
-import { canonicalizeRoute, navigateToTopic, useRouteTopic, type TopicId } from './router';
+import { canonicalizeRoute, navigateToTopic, useRoute, type AppRoute, type TopicId } from './router';
 import { createShellState } from './shell-state';
 import { useBoundFields } from './use-bound-state';
 import styles from './shell.module.css';
@@ -41,6 +41,7 @@ export interface AccountContext {
 
 export interface TopicContext extends AccountContext {
   navigateTopic: (topic: TopicId) => void;
+  route: AppRoute;
 }
 
 export interface AppShellProps {
@@ -196,7 +197,8 @@ export function AppShell(props: AppShellProps): ReactElement {
     listLoading,
     signInOpen
   } = useBoundFields(shellState);
-  const topic = useRouteTopic();
+  const route = useRoute();
+  const topic = route.topic;
 
   const mountedRef = useRef(true);
   const generationRef = useRef(0);
@@ -295,6 +297,7 @@ export function AppShell(props: AppShellProps): ReactElement {
 
   const topicContext: TopicContext = {
     navigateTopic,
+    route,
     ...(accountId === undefined ? {} : { accountId }),
     ...(selectedAccount === undefined ? {} : { accountHandle: selectedAccount.handle, account: selectedAccount })
   };

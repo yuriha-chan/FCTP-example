@@ -13,7 +13,6 @@ import type {
 import {
   createDraft,
   publishDraft,
-  readAction,
   readDraft,
   readExplorePlaces,
   readLibrary,
@@ -26,6 +25,7 @@ import {
 } from './application-api';
 import { ReferencePicker } from './reference-picker';
 import type { ReferencePickerKind, ReferencePickerSelection, ReferencePickerSource } from './reference-picker';
+import type { AuthoringEditKind, AuthoringEditRoute } from './router';
 import { ResourceReader } from './resource-reader';
 import type { ResourceReference } from './resource-reader';
 import { AssetEditor } from './asset-editor';
@@ -40,8 +40,13 @@ import cssStyles from './authoring.module.css';
 
 const styles = cssStyles as Record<'workspace' | 'heading' | 'controls' | 'button' | 'meta' | 'error' | 'section' | 'subheading' | 'list' | 'item' | 'label', string>;
 
+const AUTHORING_EDIT_STORAGE_KEY = 'fctp.authoring-edit';
+
 export interface AuthoringProps {
   accountId?: string;
+  edit?: AuthoringEditRoute;
+  onOpenDraft?: (kind: AuthoringEditKind, draftId: string) => void;
+  onCloseEdit?: () => void;
   onOpenAction?: (actionId: string) => void;
   onReadResource?: (reference: ResourceReference) => void;
 }
@@ -61,7 +66,6 @@ interface PickerState {
 }
 
 interface PublicationState {
-  draftId: string;
   action: ActionRecord;
   resourceIds: string[];
   status: 'accepted' | 'unverified' | 'completed';
@@ -85,6 +89,26 @@ function stateLabel(state: string): string {
 function draftName(draft: AuthoringDraft): string {
   const name = draft.fields.name;
   return typeof name === 'string' && name ? name : 'Untitled draft';
+}
+
+type DraftStatus = 'draft' | 'up-to-date' | 'unpublished changes';
+
+function draftStatus(draft: AuthoringDraft, activeDraftId: string | undefined, activeDirty: boolean): DraftStatus {
+  if (draft.publication === undefined) return 'draft';
+  if (activeDraftId === draft.id && activeDirty) return 'unpublished changes';
+  const publishedFields = draft.publication.publishedFields;
+  if (publishedFields === undefined) return 'up-to-date';
+  return JSON.stringify(draft.fields) === JSON.stringify(publishedFields) ? 'up-to-date' : 'unpublished changes';
+}
+
+function draftStringField(draft: AuthoringDraft, key: string): string | undefined {
+  const value = draft.fields[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function draftNumberField(draft: AuthoringDraft, key: string): number | undefined {
+  const value = draft.fields[key];
+  return typeof value === 'number' ? value : undefined;
 }
 
 function isLibraryResponse(response: LibraryResponse): boolean {
@@ -320,16 +344,35 @@ function EntryList(props: {
 function VarietyList(props: {
   title: string;
   entries: readonly LibraryEntry[];
+  drafts: readonly AuthoringDraft[];
+  activeDraftId: string | undefined;
+  activeDirty: boolean;
   onOpen: (reference: ResourceReference) => void;
+  onEditDraft: (draftId: string) => void;
 }): ReactElement | null {
-  const { title, entries, onOpen } = props;
-  if (entries.length === 0) return null;
+  const { title, entries, drafts, activeDraftId, activeDirty, onOpen, onEditDraft } = props;
+  if (entries.length === 0 && drafts.length === 0) return null;
   return (
     <section className={styles.section}>
       <h3 className={styles.subheading}>{title}</h3>
       <ul className={styles.list}>
+        {drafts.map((draft) => {
+          const mass = draftNumberField(draft, 'mass');
+          const version = draftStringField(draft, 'version');
+          return (
+            <li key={`draft:${draft.id}`}>
+              <VarietyCard
+                name={draftName(draft)}
+                {...(mass === undefined ? {} : { mass })}
+                {...(version === undefined ? {} : { version })}
+                status={draftStatus(draft, activeDraftId, activeDirty)}
+                onPress={() => onEditDraft(draft.id)}
+              />
+            </li>
+          );
+        })}
         {entries.map((entry) => (
-          <li key={entry.id}>
+          <li key={`entry:${entry.id}`}>
             <VarietyCard
               {...(entry.name === undefined ? {} : { name: entry.name })}
               {...(entry.creator === undefined ? {} : { creator: entry.creator })}
@@ -349,16 +392,29 @@ function VarietyList(props: {
 function AssetList(props: {
   title: string;
   entries: readonly LibraryEntry[];
+  drafts: readonly AuthoringDraft[];
+  activeDraftId: string | undefined;
+  activeDirty: boolean;
   onOpen: (reference: ResourceReference) => void;
+  onEditDraft: (draftId: string) => void;
 }): ReactElement | null {
-  const { title, entries, onOpen } = props;
-  if (entries.length === 0) return null;
+  const { title, entries, drafts, activeDraftId, activeDirty, onOpen, onEditDraft } = props;
+  if (entries.length === 0 && drafts.length === 0) return null;
   return (
     <section className={styles.section}>
       <h3 className={styles.subheading}>{title}</h3>
       <ul className={styles.list}>
+        {drafts.map((draft) => (
+          <li key={`draft:${draft.id}`}>
+            <AssetCard
+              name={draftName(draft)}
+              status={draftStatus(draft, activeDraftId, activeDirty)}
+              onPress={() => onEditDraft(draft.id)}
+            />
+          </li>
+        ))}
         {entries.map((entry) => (
-          <li key={entry.id}>
+          <li key={`entry:${entry.id}`}>
             <AssetCard
               {...(entry.name === undefined ? {} : { name: entry.name })}
               {...(entry.creator === undefined ? {} : { creator: entry.creator })}
@@ -374,12 +430,14 @@ function AssetList(props: {
 }
 
 export function Authoring(props: AuthoringProps): ReactElement {
-  const { accountId, onOpenAction, onReadResource } = props;
+  const { accountId, edit, onOpenDraft, onCloseEdit, onOpenAction, onReadResource } = props;
   const [library, setLibrary] = useState<LibraryResponse | undefined>();
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [libraryFailure, setLibraryFailure] = useState<string | undefined>();
   const [libraryRefreshError, setLibraryRefreshError] = useState<string | undefined>();
+  const [libraryActionError, setLibraryActionError] = useState<string | undefined>();
   const [refreshingLibrary, setRefreshingLibrary] = useState(false);
+  const [creatingDraft, setCreatingDraft] = useState(false);
   const [explore, setExplore] = useState<ExplorePlacesResponse | undefined>();
   const [exploreLoading, setExploreLoading] = useState(false);
   const [exploreError, setExploreError] = useState<string | undefined>();
@@ -395,7 +453,6 @@ export function Authoring(props: AuthoringProps): ReactElement {
   const [picker, setPicker] = useState<PickerState | undefined>();
   const [publication, setPublication] = useState<PublicationState | undefined>();
   const [checking, setChecking] = useState(false);
-  const [actionError, setActionError] = useState<string | undefined>();
   const [reader, setReader] = useState<ResourceReference | undefined>();
 
   const accountRef = useRef(accountId);
@@ -415,6 +472,7 @@ export function Authoring(props: AuthoringProps): ReactElement {
   const publishingRef = useRef(false);
   const checkingRef = useRef(false);
   const refreshingLibraryRef = useRef(false);
+  const creatingDraftRef = useRef(false);
   const exploreLoadingRef = useRef(false);
   const exploreAttempted = useRef(false);
   const refreshingExploreRef = useRef(false);
@@ -477,6 +535,7 @@ export function Authoring(props: AuthoringProps): ReactElement {
     publishingRef.current = false;
     checkingRef.current = false;
     refreshingLibraryRef.current = false;
+    creatingDraftRef.current = false;
     exploreLoadingRef.current = false;
     exploreAttempted.current = false;
     refreshingExploreRef.current = false;
@@ -494,14 +553,15 @@ export function Authoring(props: AuthoringProps): ReactElement {
     setPublishing(false);
     setChecking(false);
     setPublication(undefined);
-    setActionError(undefined);
     setReader(undefined);
     setExploreLoading(false);
     setExploreError(undefined);
     setRefreshingExplore(false);
     applyExplore(undefined);
     setLibraryRefreshError(undefined);
+    setLibraryActionError(undefined);
     setRefreshingLibrary(false);
+    setCreatingDraft(false);
     applyLibrary(undefined);
     setLibraryFailure(undefined);
 
@@ -669,6 +729,41 @@ export function Authoring(props: AuthoringProps): ReactElement {
     setProductionValidity(true);
   };
 
+  const createEmptyDraft = (kind: AuthoringEditKind): void => {
+    if (onOpenDraft === undefined) {
+      startNew(kind);
+      return;
+    }
+    const account = accountId;
+    if (account === undefined || creatingDraftRef.current) return;
+    creatingDraftRef.current = true;
+    setCreatingDraft(true);
+    setLibraryActionError(undefined);
+    const scope = scopeGeneration.current;
+    const fields = kind === 'asset'
+      ? { name: '', text: '' }
+      : { name: '', mass: 0, version: '' };
+    createDraft({ accountId: account, kind, fields }).then(
+      (response) => {
+        if (scope !== scopeGeneration.current || accountRef.current !== account) return;
+        creatingDraftRef.current = false;
+        setCreatingDraft(false);
+        if (!isOwnedDraft(response.draft, account, kind, undefined)) {
+          setLibraryActionError('The server returned an unexpected new draft.');
+          return;
+        }
+        upsertDraft(response.draft);
+        onOpenDraft(kind, response.draft.id);
+      },
+      (error: unknown) => {
+        if (scope !== scopeGeneration.current || accountRef.current !== account) return;
+        creatingDraftRef.current = false;
+        setCreatingDraft(false);
+        setLibraryActionError(errorText(error));
+      }
+    );
+  };
+
   const applyDraft = (draft: AuthoringDraft): void => {
     const next = { ...draft.fields };
     applyEditor({ draftId: draft.id, kind: draft.kind });
@@ -690,6 +785,12 @@ export function Authoring(props: AuthoringProps): ReactElement {
     setEditorError(undefined);
     setValidationErrors([]);
     setProductionValidity(true);
+  };
+
+  const closeEditorPage = (): void => {
+    closeEditor();
+    window.localStorage.removeItem(AUTHORING_EDIT_STORAGE_KEY);
+    onCloseEdit?.();
   };
 
   const openDraft = (draftId: string): void => {
@@ -718,6 +819,21 @@ export function Authoring(props: AuthoringProps): ReactElement {
       }
     );
   };
+
+  const openDraftRef = useRef(openDraft);
+  openDraftRef.current = openDraft;
+
+  useEffect(() => {
+    if (accountId === undefined || edit === undefined) return;
+    const current = editorRef.current;
+    if (current?.draftId === edit.draftId && current.kind === edit.kind) return;
+    openDraftRef.current(edit.draftId);
+  }, [accountId, edit]);
+
+  useEffect(() => {
+    if (edit === undefined) return;
+    window.localStorage.setItem(AUTHORING_EDIT_STORAGE_KEY, JSON.stringify(edit));
+  }, [edit]);
 
   const handleFieldsChange = (next: Record<string, unknown>): void => {
     dirtySinceOpen.current = true;
@@ -832,8 +948,7 @@ export function Authoring(props: AuthoringProps): ReactElement {
         upsertDraft(response.draft);
         const action = response.action;
         const resourceIds = mergeIds(resourceIdsFromAction(action), response.draft.publication?.resourceIds ?? []);
-        setPublication({ draftId, action, resourceIds, status: action.submission.status === 'accepted' ? 'accepted' : 'unverified', evidence: [], checkError: undefined });
-        setActionError(undefined);
+        setPublication({ action, resourceIds, status: action.submission.status === 'accepted' ? 'accepted' : 'unverified', evidence: [], checkError: undefined });
       },
       (error: unknown) => {
         if (scope !== scopeGeneration.current || accountRef.current !== account) return;
@@ -891,51 +1006,19 @@ export function Authoring(props: AuthoringProps): ReactElement {
     );
   };
 
-  const openPublicationAction = (draftId: string, actionId: string): void => {
-    const account = accountId;
-    if (account === undefined) return;
-    const scope = scopeGeneration.current;
-    const selection = ++publicationGeneration.current;
-    checkingRef.current = false;
-    setChecking(false);
-    setActionError(undefined);
-    readAction(account, actionId).then(
-      (response) => {
-        if (scope !== scopeGeneration.current || accountRef.current !== account || selection !== publicationGeneration.current) return;
-        if (!isActionFor(response.data.action, account, actionId)) {
-          setActionError('The retained publication action had unexpected ownership or identity.');
-          return;
-        }
-        const action = response.data.action;
-        setPublication((previous) => {
-          const resourceIds = previous !== undefined && previous.draftId === draftId
-            ? mergeIds(previous.resourceIds, resourceIdsFromAction(action))
-            : resourceIdsFromAction(action);
-          const complete = actionIsComplete(action);
-          return {
-            draftId,
-            action,
-            resourceIds,
-            status: complete ? 'completed' : 'unverified',
-            evidence: action.outcome.evidence,
-            checkError: undefined
-          };
-        });
-      },
-      (error: unknown) => {
-        if (scope !== scopeGeneration.current || accountRef.current !== account || selection !== publicationGeneration.current) return;
-        setActionError(errorText(error));
-      }
-    );
-  };
-
   const openResource = (reference: ResourceReference): void => {
     if (onReadResource !== undefined) onReadResource(reference);
     else setReader(reference);
   };
 
+  const openDraftForEdit = (kind: AuthoringEditKind, draftId: string): void => {
+    if (onOpenDraft !== undefined) onOpenDraft(kind, draftId);
+    else openDraft(draftId);
+  };
+
   const dirty = editor !== undefined && JSON.stringify(fields) !== JSON.stringify(baseline);
   const canPublish = editor !== undefined && editor.draftId !== undefined && !dirty && !saving && !publishing;
+  const showEditor = edit !== undefined || onOpenDraft === undefined;
   const editorErrors = [editorError, ...validationErrors].filter((message): message is string => message !== undefined);
 
   const libraryPickerError = libraryRefreshError ?? libraryFailure;
@@ -969,74 +1052,68 @@ export function Authoring(props: AuthoringProps): ReactElement {
     <section aria-label="Author & Publish" className={styles.workspace}>
       <h2 className={styles.heading}>Author &amp; Publish</h2>
 
-      <div className={styles.controls}>
-        <Button className={styles.button} onPress={() => startNew('asset')}>New Asset</Button>
-        <Button className={styles.button} onPress={() => startNew('variety')}>New Variety</Button>
-        <Button
-          className={styles.button}
-          onPress={refreshCurrentLibrary}
-          isPending={refreshingLibrary}
-          isDisabled={accountId === undefined || refreshingLibrary}
-        >
-          Refresh Library
-        </Button>
-      </div>
-
       {accountId === undefined ? <p className={styles.meta}>No account is selected for Author &amp; Publish.</p> : null}
-      {libraryLoading ? <p className={styles.meta}>Loading the retained Library…</p> : null}
-      {libraryFailure === undefined ? null : (
-        <p className={styles.error} role="alert">The Library could not be read: {libraryFailure}</p>
-      )}
-      {libraryRefreshError === undefined ? null : (
-        <p className={styles.error} role="alert">The Library refresh failed: {libraryRefreshError}</p>
-      )}
 
-      {library !== undefined ? (
+      {edit === undefined ? (
         <>
-          {libraryEmpty ? (
-            <p className={styles.meta}>The Library is empty: no assets, varieties, grants, or drafts are available.</p>
-          ) : null}
-          <AssetList title="Library assets" entries={library.data.assets} onOpen={openResource} />
-          <VarietyList title="Library varieties" entries={library.data.varieties} onOpen={openResource} />
-          <EntryList title="Library grants" entries={library.data.grants} onOpen={openResource} />
-          {library.data.drafts.length === 0 ? null : (
-            <section className={styles.section}>
-              <h3 className={styles.subheading}>Saved drafts</h3>
-              <ul className={styles.list}>
-                {library.data.drafts.map((draft) => (
-                  <li key={draft.id} className={styles.item}>
-                    <p className={styles.label}>{draftName(draft)}</p>
-                    <p className={styles.meta}>{draft.kind} · {draft.id} · saved {draft.savedAt}</p>
-                    <div className={styles.controls}>
-                      <Button className={styles.button} onPress={() => openDraft(draft.id)}>
-                        {`Open draft ${draft.id}`}
-                      </Button>
-                      {draft.publication?.actionId === undefined ? null : (
-                        <Button
-                          className={styles.button}
-                          onPress={() => openPublicationAction(draft.id, draft.publication!.actionId!)}
-                        >
-                          {`Open publication action ${draft.publication.actionId}`}
-                        </Button>
-                      )}
-                    </div>
-                    {draft.publication?.resourceIds === undefined || draft.publication.resourceIds.length === 0 ? null : (
-                      <div className={styles.controls}>
-                        {draft.publication.resourceIds.map((id) => (
-                          <Button key={id} className={styles.button} onPress={() => openResource({ id })}>
-                            {`Open resource ${id}`}
-                          </Button>
-                        ))}
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </section>
+          <div className={styles.controls}>
+            <Button className={styles.button} onPress={() => createEmptyDraft('asset')} isDisabled={creatingDraft}>New Asset</Button>
+            <Button className={styles.button} onPress={() => createEmptyDraft('variety')} isDisabled={creatingDraft}>New Variety</Button>
+            <Button
+              className={styles.button}
+              onPress={refreshCurrentLibrary}
+              isPending={refreshingLibrary}
+              isDisabled={accountId === undefined || refreshingLibrary}
+            >
+              Refresh Library
+            </Button>
+          </div>
+
+          {libraryLoading ? <p className={styles.meta}>Loading the retained Library…</p> : null}
+          {libraryFailure === undefined ? null : (
+            <p className={styles.error} role="alert">The Library could not be read: {libraryFailure}</p>
           )}
-          <ObservationList observations={library.observations} />
+          {libraryRefreshError === undefined ? null : (
+            <p className={styles.error} role="alert">The Library refresh failed: {libraryRefreshError}</p>
+          )}
+          {libraryActionError === undefined ? null : (
+            <p className={styles.error} role="alert">{libraryActionError}</p>
+          )}
+
+          {library !== undefined ? (
+            <>
+              {libraryEmpty ? (
+                <p className={styles.meta}>The Library is empty: no assets, varieties, grants, or drafts are available.</p>
+              ) : null}
+              <AssetList
+                title="Library assets"
+                entries={library.data.assets}
+                drafts={library.data.drafts.filter((draft) => draft.kind === 'asset')}
+                activeDraftId={editor?.draftId}
+                activeDirty={dirty}
+                onOpen={openResource}
+                onEditDraft={(draftId) => openDraftForEdit('asset', draftId)}
+              />
+              <VarietyList
+                title="Library varieties"
+                entries={library.data.varieties}
+                drafts={library.data.drafts.filter((draft) => draft.kind === 'variety')}
+                activeDraftId={editor?.draftId}
+                activeDirty={dirty}
+                onOpen={openResource}
+                onEditDraft={(draftId) => openDraftForEdit('variety', draftId)}
+              />
+              <EntryList title="Library grants" entries={library.data.grants} onOpen={openResource} />
+              <ObservationList observations={library.observations} />
+            </>
+          ) : null}
         </>
-      ) : null}
+      ) : (
+        <>
+          {accountId !== undefined && editor === undefined && editorError === undefined ? <p className={styles.meta}>Loading draft…</p> : null}
+          {editor === undefined && editorError !== undefined ? <p className={styles.error} role="alert">{editorError}</p> : null}
+        </>
+      )}
 
       {publication === undefined ? null : (
         <section aria-label="Publication" className={styles.section}>
@@ -1086,11 +1163,7 @@ export function Authoring(props: AuthoringProps): ReactElement {
         </section>
       )}
 
-      {actionError === undefined ? null : (
-        <p className={styles.error} role="alert">The publication action could not be read: {actionError}</p>
-      )}
-
-      {editor === undefined ? null : editor.kind === 'asset' ? (
+      {!showEditor || editor === undefined ? null : editor.kind === 'asset' ? (
         <AssetEditor
           key={`asset:${openGeneration.current}`}
           fields={fields}
@@ -1102,7 +1175,7 @@ export function Authoring(props: AuthoringProps): ReactElement {
           errors={editorErrors}
           onSave={saveCurrent}
           onPublish={publishCurrent}
-          onClose={closeEditor}
+          onClose={closeEditorPage}
         />
       ) : (
         <VarietyEditor
@@ -1116,7 +1189,7 @@ export function Authoring(props: AuthoringProps): ReactElement {
           errors={editorErrors}
           onSave={saveCurrent}
           onPublish={publishCurrent}
-          onClose={closeEditor}
+          onClose={closeEditorPage}
           onChooseAsset={openPicker}
           onChooseVariety={openPicker}
           onChooseArea={openPicker}

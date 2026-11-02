@@ -8,6 +8,7 @@ export interface AssetCardProps {
   creator?: readonly string[];
   holder?: string;
   media?: readonly LibraryMedia[];
+  status?: 'draft' | 'up-to-date' | 'unpublished changes';
   onPress?: () => void;
 }
 
@@ -16,6 +17,7 @@ export function AssetCard(props: AssetCardProps): ReactElement {
   const content = (
     <>
       <span className={cardStyles.name}>{title}</span>
+      {props.status === undefined ? null : <span className={cardStyles.status}>{props.status}</span>}
       <CardIdentities
         {...(props.creator === undefined ? {} : { creator: props.creator })}
         {...(props.holder === undefined ? {} : { holder: props.holder })}
@@ -26,7 +28,8 @@ export function AssetCard(props: AssetCardProps): ReactElement {
       />
     </>
   );
+  const label = props.status === undefined ? undefined : `${title} ${props.status}`;
   return props.onPress === undefined
     ? <article className={cardStyles.card}>{content}</article>
-    : <button type="button" className={`${cardStyles.card} ${cardStyles.interactive}`} onClick={props.onPress}>{content}</button>;
+    : <button type="button" aria-label={label} className={`${cardStyles.card} ${cardStyles.interactive}`} onClick={props.onPress}>{content}</button>;
 }

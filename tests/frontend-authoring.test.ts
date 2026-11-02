@@ -203,7 +203,7 @@ interface DraftOptions {
   kind: 'asset' | 'variety';
   fields: Record<string, unknown>;
   savedAt?: string;
-  publication?: { actionId?: string; resourceIds?: string[] };
+  publication?: { actionId?: string; resourceIds?: string[]; publishedFields?: Record<string, unknown> };
 }
 
 function makeDraft(options: DraftOptions): Record<string, unknown> {
@@ -432,16 +432,12 @@ function button(scope: Locator, name: RegExp): Locator {
   return scope.getByRole('button', { name }).first();
 }
 
-function draftButton(page: Page, id: string): Locator {
-  return page.getByRole('button', { name: new RegExp(`^Open draft ${escapeRegExp(id)}$`, 'i') }).first();
+function draftCard(page: Page, name: string): Locator {
+  return page.getByRole('button', { name: new RegExp(`^${escapeRegExp(name)}(?:\\s|$)`, 'i') }).first();
 }
 
 function resourceButton(page: Page, id: string): Locator {
   return page.getByRole('button', { name: new RegExp(`^Open resource ${escapeRegExp(id)}$`, 'i') }).first();
-}
-
-function publicationActionButton(page: Page, id: string): Locator {
-  return page.getByRole('button', { name: new RegExp(`^Open publication action ${escapeRegExp(id)}$`, 'i') }).first();
 }
 
 function requestFields(request: RequestInfo): Record<string, unknown> {
@@ -503,6 +499,46 @@ function openPickerDialog(page: Page, fieldLabel: string): Locator {
   return page.getByRole('dialog', { name: new RegExp(escapeRegExp(fieldLabel), 'i') }).first();
 }
 
+test('shows saved drafts as Library cards with publication markers and opens the editor from the card', async (t) => {
+  const plainFields = { name: 'Plain Draft', text: 'plain text' };
+  const currentFields = { name: 'Current Draft', text: 'current text' };
+  const changedFields = { name: 'Changed Draft', text: 'changed text' };
+  const plain = makeDraft({ id: 'draft:plain', kind: 'asset', fields: plainFields });
+  const current = makeDraft({
+    id: 'draft:current',
+    kind: 'asset',
+    fields: currentFields,
+    publication: { actionId, resourceIds: [assetId], publishedFields: currentFields }
+  });
+  const changed = makeDraft({
+    id: 'draft:changed',
+    kind: 'asset',
+    fields: changedFields,
+    publication: { actionId, resourceIds: [otherAssetId], publishedFields: { ...changedFields, text: 'published text' } }
+  });
+  const { page, requests, errors } = await openFixture(t, (request) => {
+    if (request.pathname === '/api/library') return libraryPage(accountA, { drafts: [plain, current, changed] });
+    if (request.pathname === `/api/drafts/${encodeURIComponent('draft:plain')}`) return { body: { draft: plain } };
+    return { status: 404, body: { error: 'unexpected request' } };
+  });
+
+  const region = await waitForRegion(page);
+  await waitForText(region, 'Plain Draft', 'expected the unpublished draft in the Library');
+  const cardLabel = async (name: string): Promise<string> => (await region.getByRole('button', { name: new RegExp(name) }).first().getAttribute('aria-label')) ?? '';
+  assert.ok((await cardLabel('Plain Draft')).endsWith('draft'));
+  assert.ok((await cardLabel('Current Draft')).endsWith('up-to-date'));
+  assert.ok((await cardLabel('Changed Draft')).endsWith('unpublished changes'));
+  assert.equal(await region.getByRole('button', { name: /^Open draft/i }).count(), 0);
+  assert.equal(await region.getByRole('button', { name: /^Open publication action/i }).count(), 0);
+  assert.equal(await region.getByRole('button', { name: /^Open resource/i }).count(), 0);
+
+  await region.getByRole('button', { name: /Plain Draft/ }).first().click();
+  await waitFor(() => requestsFor(requests, `/api/drafts/${encodeURIComponent('draft:plain')}`, 'GET').length === 1, 'expected the draft card to open the editor');
+  const editor = await editorRegion(page, 'Asset');
+  assert.equal(await editor.getByLabel(/^Name$/i).inputValue(), 'Plain Draft');
+  assert.deepEqual(errors, []);
+});
+
 test('preserves edits made during Save and does not adopt that Save into a later new draft', async (t) => {
   const pending = deferred<ServerResponse>();
   const draft = makeDraft({ id: assetDraftId, kind: 'asset', fields: { name: 'Original', text: '' } });
@@ -513,7 +549,7 @@ test('preserves edits made during Save and does not adopt that Save into a later
     if (request.pathname === '/api/drafts') return { body: { draft: makeDraft({ id: secondDraftId, kind: 'asset', fields: requestFields(request) }) } };
     return { status: 404, body: { error: 'unexpected request' } };
   });
-  await draftButton(page, assetDraftId).click();
+  await draftCard(page, 'Original').click();
   const editor = await editorRegion(page, 'Asset');
   await editor.getByRole('textbox', { name: 'Name', exact: true }).fill('Submitted');
   await button(editor, /^Save draft$/i).click();
@@ -554,11 +590,11 @@ test('resets same-kind draft JSON state and returns picker focus to the exact re
     if (request.pathname === `/api/drafts/${encodeURIComponent(secondDraftId)}`) return { body: { draft: second } };
     return { status: 404, body: { error: 'unexpected request' } };
   });
-  await draftButton(page, varietyDraftId).click();
+  await draftCard(page, 'First').click();
   const editor = await editorRegion(page, 'Variety');
   await editor.getByRole('checkbox', { name: 'Advanced Production JSON' }).check();
   await editor.getByRole('textbox', { name: 'Production JSON', exact: true }).fill('{broken');
-  await draftButton(page, secondDraftId).click();
+  await draftCard(page, 'Second').click();
   await waitFor(() => editor.getByRole('textbox', { name: 'Name', exact: true }).inputValue().then((value) => value === 'Second'), 'expected second draft');
   assert.equal(await editor.getByRole('checkbox', { name: 'Advanced Production JSON' }).isChecked(), false, 'draft-local invalid editor must not survive draft selection');
   const invoking = group(editor, 'Stack ingredient 1').getByRole('button', { name: 'Choose ingredient variety', exact: true });
@@ -584,32 +620,6 @@ test('does not let an older retained Library read replace an explicit refresh', 
   await sleep(150);
   assert.ok((await authoringRegion(page).innerText()).includes('Fresh resource'));
   assert.equal((await authoringRegion(page).innerText()).includes('Older resource'), false);
-  assert.deepEqual(errors, []);
-});
-
-test('does not apply an older publication check to a later selected publication', async (t) => {
-  const pending = deferred<ServerResponse>();
-  const otherActionId = 'action:other-publication';
-  const first = makeDraft({ id: assetDraftId, kind: 'asset', fields: {}, publication: { actionId, resourceIds: [assetId] } });
-  const second = makeDraft({ id: secondDraftId, kind: 'asset', fields: {}, publication: { actionId: otherActionId, resourceIds: [otherAssetId] } });
-  const { page, requests, errors } = await openFixture(t, (request) => {
-    if (request.pathname === '/api/library') return libraryPage(accountA, { drafts: [first, second] });
-    if (request.pathname === `/api/activity/${encodeURIComponent(actionId)}/refresh`) return pending.promise;
-    if (request.pathname === `/api/activity/${encodeURIComponent(actionId)}`) return actionDetail(makeAction({ resultReferences: [{ kind: 'resource', id: assetId }] }));
-    if (request.pathname === `/api/activity/${encodeURIComponent(otherActionId)}`) return actionDetail(makeAction({ id: otherActionId, resultReferences: [{ kind: 'resource', id: otherAssetId }] }));
-    return { status: 404, body: { error: 'unexpected request' } };
-  });
-  await publicationActionButton(page, actionId).click();
-  const publication = page.getByRole('region', { name: 'Publication', exact: true });
-  await waitForText(publication, actionId, 'expected first publication');
-  await button(publication, /^Check publication$/i).click();
-  await waitFor(() => requestsFor(requests, `/api/activity/${encodeURIComponent(actionId)}/refresh`).length === 1, 'expected check');
-  await publicationActionButton(page, otherActionId).click();
-  await waitForText(publication, otherActionId, 'expected second publication');
-  pending.resolve(actionDetail(makeAction({ resultReferences: [{ kind: 'resource', id: assetId }] })));
-  await sleep(150);
-  assert.ok((await publication.innerText()).includes(otherActionId));
-  assert.equal((await publication.innerText()).includes(assetId), false, 'older check must not contaminate the later resource set');
   assert.deepEqual(errors, []);
 });
 
@@ -656,7 +666,7 @@ test('retains one Library snapshot, keeps independent source states, and refresh
   assert.ok(initial.includes('Alloy'), 'expected retained Library varieties');
   assert.ok(initial.includes('Rope grant'), 'expected retained Library grants');
   assert.ok(initial.includes('Loose Rope'), 'expected retained drafts by name');
-  await draftButton(page, assetDraftId).waitFor({ state: 'visible', timeout: settleTimeout });
+  await draftCard(page, 'Loose Rope').waitFor({ state: 'visible', timeout: settleTimeout });
   assert.ok(initial.includes(catalogSource), 'expected the stale catalog source');
   assert.ok(initial.includes(creationsSource), 'expected the unavailable creations source');
   assert.ok(initial.includes('catalog observation is stale'), 'expected the independent catalog error');
@@ -742,7 +752,7 @@ test('creates incomplete drafts in separate editors, reopens the exact retained 
     assert.equal(Object.hasOwn(createdFields, forbidden), false, `draft fields must not carry ${forbidden}`);
   }
   assert.equal(create.headers.authorization, 'Bearer token-a');
-  await draftButton(page, assetDraftId).waitFor({ state: 'visible', timeout: settleTimeout });
+  await draftCard(page, 'Loose Rope').waitFor({ state: 'visible', timeout: settleTimeout });
 
   await button(assetEditor, /^Close editor$/i).click();
   await button(region, /^New Variety$/i).click();
@@ -756,7 +766,7 @@ test('creates incomplete drafts in separate editors, reopens the exact retained 
   assert.equal(requestFields(varietyCreate).name, 'Alloy');
 
   await button(varietyEditor, /^Close editor$/i).click();
-  await draftButton(page, assetDraftId).click();
+  await draftCard(page, 'Loose Rope').click();
   await waitFor(() => requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}`, 'GET').length === 1, 'expected the retained draft GET');
   const read = requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}`, 'GET')[0]!;
   assert.equal(read.params.accountId, accountA);
@@ -840,7 +850,7 @@ test('round-trips extension-bearing structured Production without normalizing pr
 
   const region = await waitForRegion(page);
   await waitForText(region, 'Alloy', 'expected the retained Production draft');
-  await draftButton(page, productionDraftId).click();
+  await draftCard(page, 'Alloy').click();
   const editor = await editorRegion(page, 'Variety');
   const entryOne = group(editor, /^Production entry 1$/i);
   const entryTwo = group(editor, /^Production entry 2$/i);
@@ -897,7 +907,7 @@ test('round-trips extension-bearing structured Production without normalizing pr
 
   await button(editor, /^Close editor$/i).click();
   await waitForText(region, 'Alloy', 'expected the updated retained draft');
-  await draftButton(page, productionDraftId).click();
+  await draftCard(page, 'Alloy').click();
   const reopened = await editorRegion(page, 'Variety');
   await button(reopened, /^Save draft$/i).click();
   await waitFor(() => requestsFor(requests, `/api/drafts/${encodeURIComponent(productionDraftId)}`, 'POST').length === 3, 'expected the re-opened no-op save');
@@ -950,7 +960,7 @@ test('keeps invalid Production text editable, blocks publication without normali
 
   const region = await waitForRegion(page);
   await waitForText(region, 'Alloy', 'expected the retained Variety draft');
-  await draftButton(page, varietyDraftId).click();
+  await draftCard(page, 'Alloy').click();
   const editor = await editorRegion(page, 'Variety');
   const entry = group(editor, /^Production entry 1$/i);
   const stack = group(entry, /^Stack ingredient 1$/i);
@@ -1050,14 +1060,14 @@ test('validates retained Production shapes before publishing without rejecting s
   await waitForRegion(page);
   await waitForText(authoringRegion(page), 'Validation 0', 'expected validation drafts');
   for (let index = 0; index < invalid.length; index += 1) {
-    await draftButton(page, `validation:${index}`).click();
+    await draftCard(page, `Validation ${index}`).click();
     const editor = await editorRegion(page, 'Variety');
     await waitFor(async () => await editor.getByLabel(/^Name$/i).inputValue() === `Validation ${index}`, 'expected selected validation draft');
     await button(editor, /^Publish draft$/i).click();
     await waitFor(async () => await editor.getByRole('alert').count() > 0, `expected validation error for shape ${index}`);
     assert.equal(requests.filter((request) => request.pathname.endsWith('/publish')).length, 0, `invalid shape ${index} must not publish`);
   }
-  await draftButton(page, `validation:${invalid.length}`).click();
+  await draftCard(page, `Validation ${invalid.length}`).click();
   const editor = await editorRegion(page, 'Variety');
   await waitFor(async () => await editor.getByLabel(/^Name$/i).inputValue() === `Validation ${invalid.length}`, 'expected valid draft');
   await button(editor, /^Publish draft$/i).click();
@@ -1159,7 +1169,7 @@ test('returns each Asset, tool, Variety, and Area selection to its exact field a
 
   const region = await waitForRegion(page);
   await waitForText(region, 'Alloy', 'expected the retained picker draft');
-  await draftButton(page, pickerDraftId).click();
+  await draftCard(page, 'Alloy').click();
   const editor = await editorRegion(page, 'Variety');
   const entry = group(editor, /^Production entry 1$/i);
   const stack = group(entry, /^Stack ingredient 1$/i);
@@ -1276,7 +1286,6 @@ test('publishes only saved fields, keeps acknowledgment distinct from evidenced 
   });
   let publishCalls = 0;
   let refreshCalls = 0;
-  let readCalls = 0;
   const { page, requests, errors } = await openFixture(t, (request) => {
     if (request.pathname === '/api/library' && request.method === 'GET') {
       return libraryPage(accountA, { drafts: [stored] });
@@ -1329,24 +1338,12 @@ test('publishes only saved fields, keeps acknowledgment distinct from evidenced 
       }
       return { status: 503, body: { error: 'readback unavailable' } };
     }
-    if (request.pathname === `/api/activity/${encodeURIComponent(actionId)}` && request.method === 'GET') {
-      readCalls += 1;
-      return actionDetail(makeAction({
-        id: actionId,
-        resultReferences: [
-          { kind: 'resource', id: assetId },
-          { kind: 'resource', id: grantId }
-        ],
-        submission: { status: 'accepted' },
-        outcome: { status: 'pending', evidence: [] }
-      }));
-    }
     return { status: 404, body: { error: 'unexpected request' } };
   });
 
   const region = await waitForRegion(page);
   await waitForText(region, 'Rope', 'expected the retained publication draft');
-  await draftButton(page, publicationDraftId).click();
+  await draftCard(page, 'Rope').click();
   const editor = await editorRegion(page, 'Asset');
   await waitFor(async () => (await editor.getByLabel(/^Name$/i).inputValue()) === 'Rope', 'expected the retained draft fields');
   const publish = button(editor, /^Publish draft$/i);
@@ -1398,14 +1395,6 @@ test('publishes only saved fields, keeps acknowledgment distinct from evidenced 
   assert.ok(failed.includes(grantId), 'failed readback must retain the grant reference');
   assert.equal(publishCalls, 1, 'failed readback must not republish');
   assert.equal(refreshCalls, 2);
-
-  await button(editor, /^Close editor$/i).click();
-  await publicationActionButton(page, actionId).click();
-  await waitFor(() => readCalls === 1, 'expected the retained publication action read');
-  const read = requestsFor(requests, `/api/activity/${encodeURIComponent(actionId)}`, 'GET')[0]!;
-  assert.equal(read.params.accountId, accountA);
-  assert.equal(read.headers.authorization, 'Bearer token-a');
-  assert.equal(refreshCalls, 2, 'reopening the publication action must use the retained GET, not refresh');
   assert.deepEqual(errors, []);
 });
 
@@ -1435,7 +1424,7 @@ test('rejects returned drafts that are not owned by the requested account or do 
   await button(createEditor, /^Save draft$/i).click();
   const ownershipError = await waitForText(createRegion, /mismatch|ownership|another account|not owned|unexpected draft/i, 'expected an ownership failure');
   assert.ok(ownershipError.includes('Foreign draft') || (await createEditor.getByLabel(/^Name$/i).inputValue()) === 'Foreign draft', 'failed ownership must retain the editable fields');
-  assert.equal(await draftButton(createFixture.page, mismatchDraftId).count(), 0, 'a draft owned by another account must not be adopted');
+  assert.equal(await draftCard(createFixture.page, 'Foreign draft').count(), 0, 'a draft owned by another account must not be adopted');
   assert.deepEqual(createFixture.errors, []);
 
   const publishFixture = await openFixture(t, (request) => {
@@ -1464,7 +1453,7 @@ test('rejects returned drafts that are not owned by the requested account or do 
   });
   await waitForRegion(publishFixture.page);
   await waitForText(authoringRegion(publishFixture.page), 'Alloy', 'expected the publication draft');
-  await draftButton(publishFixture.page, publicationDraftId).click();
+  await draftCard(publishFixture.page, 'Alloy').click();
   const publishEditor = await editorRegion(publishFixture.page, 'Variety');
   await button(publishEditor, /^Publish draft$/i).click();
   await waitForText(authoringRegion(publishFixture.page), /mismatch|exact|unexpected draft|ownership/i, 'expected a mismatched publication draft to be rejected');
@@ -1495,7 +1484,7 @@ test('locks simultaneous saves synchronously and discards a late same-draft resp
 
   await waitForRegion(page);
   await waitForText(authoringRegion(page), 'Draft One', 'expected the first retained draft');
-  await draftButton(page, assetDraftId).click();
+  await draftCard(page, 'Draft One').click();
   const editor = await editorRegion(page, 'Asset');
   await editor.getByLabel(/^Text$/i).fill('changed-one');
   const save = button(editor, /^Save draft$/i);
@@ -1508,7 +1497,7 @@ test('locks simultaneous saves synchronously and discards a late same-draft resp
   await sleep(150);
   assert.equal(requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}`, 'POST').length, 1, 'a double click must not submit twice');
 
-  await draftButton(page, secondDraftId).click();
+  await draftCard(page, 'Draft Two').click();
   const secondEditor = await editorRegion(page, 'Asset');
   assert.equal(await secondEditor.getByLabel(/^Name$/i).inputValue(), 'Draft Two');
 
@@ -1548,7 +1537,7 @@ test('clears private drafts across account A to B to A, ignores a late old-accou
 
   await waitForRegion(page);
   await waitForText(authoringRegion(page), 'Account A draft', 'expected account A drafts');
-  await draftButton(page, assetDraftId).click();
+  await draftCard(page, 'Account A draft').click();
   const firstEditor = await editorRegion(page, 'Asset');
   assert.equal(await firstEditor.getByLabel(/^Text$/i).inputValue(), 'a-private');
   await firstEditor.getByLabel(/^Text$/i).fill('unsaved-a-marker');
@@ -1609,7 +1598,7 @@ test('discards a late save after unmount and shows only fresh server fields afte
 
   await waitForRegion(page);
   await waitForText(authoringRegion(page), 'Account A draft', 'expected the retained draft');
-  await draftButton(page, assetDraftId).click();
+  await draftCard(page, 'Account A draft').click();
   const editor = await editorRegion(page, 'Asset');
   await editor.getByLabel(/^Text$/i).fill('unsaved-unmounted');
   await button(editor, /^Save draft$/i).click();
@@ -1629,7 +1618,7 @@ test('discards a late save after unmount and shows only fresh server fields afte
   await waitForRegion(page);
   await waitForText(authoringRegion(page), 'Account A draft', 'expected a fresh Library after remount');
   assert.equal((await page.locator('body').innerText()).includes('late-unmounted-marker'), false, 'remounting must not inherit the late response');
-  await draftButton(page, assetDraftId).click();
+  await draftCard(page, 'Account A draft').click();
   const reopened = await editorRegion(page, 'Asset');
   assert.equal(await reopened.getByLabel(/^Text$/i).inputValue(), 'server-text', 'remounting must show fresh retained server fields');
   assert.deepEqual(errors, []);

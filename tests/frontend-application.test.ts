@@ -702,6 +702,7 @@ after(async () => {
 });
 
 interface OpenOptions {
+  path?: string;
   sessions?: readonly StoredSession[];
   configureMock?: (mock: ApplicationMock) => void;
 }
@@ -754,7 +755,7 @@ async function openApplicationPage(t: TestContext, options: OpenOptions = {}): P
     await route.fulfill({ status: 200, contentType: 'text/html', body: html });
   });
 
-  await page.goto(fixtureOrigin);
+  await page.goto(new URL(options.path ?? '/', fixtureOrigin).toString());
   return { page, mock, errors, context };
 }
 
@@ -1695,16 +1696,27 @@ test('composes Authoring across topics with an exact draft, field picker, public
   await authoring.getByRole('button', { name: 'New Asset', exact: true }).waitFor({ state: 'visible', timeout: settleTimeout });
 
   await authoring.getByRole('button', { name: 'New Asset', exact: true }).click();
+  const createAssetRequest = await mock.waitFor((request) => {
+    if (request.method !== 'POST' || request.path !== '/api/drafts') return false;
+    return (parsedBody(request) as Record<string, unknown>).kind === 'asset';
+  });
+  assert.equal(createAssetRequest.authorization, `Bearer ${token}`, 'creating an empty Asset draft must use the exact session');
   let assetEditor = page.getByRole('region', { name: 'Asset draft' });
   await assetEditor.waitFor({ state: 'visible', timeout: settleTimeout });
+  assert.equal(new URL(page.url()).pathname, `/authoring/assets/edit/${encodeURIComponent(draftId)}`);
+  const storedEdit = await page.evaluate(() => localStorage.getItem('fctp.authoring-edit'));
+  assert.deepEqual(JSON.parse(storedEdit ?? 'null'), { kind: 'asset', draftId });
   await assetEditor.getByLabel('Name', { exact: true }).fill('Draft Rope');
 
   await topicTab(page, 'Explore').click();
   await topicTab(page, 'Author & Publish').click();
+  assert.equal(new URL(page.url()).pathname, '/authoring', 'returning to the tab routes to the Library for now');
+  assert.equal(await page.getByRole('region', { name: 'Asset draft' }).count(), 0, 'returning to the tab must not keep the inline editor');
+  await authoring.getByRole('button', { name: /Untitled draft/ }).first().click();
   assetEditor = page.getByRole('region', { name: 'Asset draft' });
   await waitForCondition(
     async () => await assetEditor.getByLabel('Name', { exact: true }).inputValue() === 'Draft Rope',
-    'an unsaved Asset draft must survive a topic switch'
+    'an unsaved Asset draft must survive a topic switch through its draft card'
   );
   await assetEditor.getByRole('button', { name: 'Close editor', exact: true }).click();
 
@@ -1753,18 +1765,23 @@ test('composes Authoring across topics with an exact draft, field picker, public
 
   await topicTab(page, 'Explore').click();
   await topicTab(page, 'Author & Publish').click();
+  assert.equal(new URL(page.url()).pathname, '/authoring', 'returning to the tab routes to the Library for now');
+  assert.equal(await page.getByRole('region', { name: 'Variety draft' }).count(), 0, 'returning to the tab must not keep the inline editor');
+  await authoring.getByRole('button', { name: /Untitled draft/ }).first().click();
   await waitForCondition(async () => {
     const name = await varietyEditor.getByLabel('Name', { exact: true }).inputValue();
     const mass = await varietyEditor.getByLabel('Mass', { exact: true }).inputValue();
     const asset = await varietyEditor.getByLabel('Asset', { exact: true }).inputValue();
     return name === 'Alloy' && mass === '2' && asset === assetId;
-  }, 'edited Variety fields must survive a topic switch');
+  }, 'edited Variety fields must survive a topic switch through its draft card');
 
   await varietyEditor.getByRole('button', { name: 'Save draft', exact: true }).click();
-  const saveRequest = await mock.waitFor((request) => request.method === 'POST' && request.path === '/api/drafts');
+  const saveRequest = await mock.waitFor((request) => {
+    if (request.method !== 'POST' || request.path !== `/api/drafts/${encodeURIComponent(draftId)}`) return false;
+    return ((parsedBody(request) as Record<string, unknown>).fields as Record<string, unknown>).name === 'Alloy';
+  });
   const saveBody = parsedBody(saveRequest) as Record<string, unknown>;
   assert.equal(saveBody.accountId, accountId);
-  assert.equal(saveBody.kind, 'variety');
   const savedFields = saveBody.fields as Record<string, unknown>;
   assert.equal(savedFields.name, 'Alloy');
   assert.equal(savedFields.mass, 2);
@@ -1833,7 +1850,40 @@ test('composes Authoring across topics with an exact draft, field picker, public
   assert.equal(mock.requests.filter((request) => request.path.includes('/local/tick')).length, 0);
   assert.equal(mock.requests.filter((request) => request.path === `/api/drafts/${encodeURIComponent(draftId)}/publish`).length, 1);
   const storageKeys = await page.evaluate(() => Object.keys(localStorage).sort());
-  assert.deepEqual(storageKeys, [sessionKey], 'draft and picker state must not be written to browser storage');
+  assert.deepEqual(storageKeys, ['fctp.authoring-edit', sessionKey].sort(), 'only the selected edit route may be persisted in browser storage');
+  assert.deepEqual(errors, []);
+});
+
+test('loads an authoring draft editor directly from its route', async (t) => {
+  const accountId = 'account:direct-author';
+  const handle = '@direct@alpha.example';
+  const token = 'token-direct-author';
+  const draftId = 'draft:direct-author';
+  const stored = draftOf({ id: draftId, accountId, kind: 'asset', fields: { name: 'Direct Draft', text: 'direct text' } });
+  const { page, errors } = await openApplicationPage(t, {
+    path: `/authoring/assets/edit/${encodeURIComponent(draftId)}`,
+    sessions: [{ accountId, handle, clientToken: token }],
+    configureMock: (candidate) => {
+      candidate.onWorkflow = (request) => {
+        if (request.method === 'GET' && request.path === '/api/library') {
+          return { json: pageOf(request.accountId ?? accountId, libraryOf({ drafts: [stored] })) };
+        }
+        if (request.method === 'GET' && request.path === `/api/drafts/${encodeURIComponent(draftId)}`) {
+          return { json: { draft: stored } };
+        }
+        return undefined;
+      };
+    }
+  });
+
+  await selectAccount(page, handle);
+  const editor = page.getByRole('region', { name: 'Asset draft' });
+  await editor.waitFor({ state: 'visible', timeout: settleTimeout });
+  assert.equal(await editor.getByLabel('Name', { exact: true }).inputValue(), 'Direct Draft');
+  assert.equal(new URL(page.url()).pathname, `/authoring/assets/edit/${encodeURIComponent(draftId)}`);
+  const editState = await page.evaluate(() => localStorage.getItem('fctp.authoring-edit'));
+  assert.deepEqual(JSON.parse(editState ?? 'null'), { kind: 'asset', draftId });
+  assert.equal(await page.getByRole('button', { name: 'New Asset', exact: true }).count(), 0, 'the edit page must not render Library controls');
   assert.deepEqual(errors, []);
 });
 
@@ -2481,6 +2531,8 @@ test('isolates opaque same-name accounts across Authoring, Activity, Logistics, 
       legs: [{ routeId, from: originPlace, to: destinationPlace, territoryId: authorityFirst, kind: 'local-movement', status: 'pending' }]
     }
   });
+  const isolatedDraftId = 'draft:isolated-alpha';
+  let isolatedDraft: AuthoringDraft | undefined;
 
   const { page, mock, errors } = await openApplicationPage(t, {
     sessions: [
@@ -2497,9 +2549,23 @@ test('isolates opaque same-name accounts across Authoring, Activity, Logistics, 
                 id: requestAccount === first ? assetFirst : assetSecond,
                 type: 'Asset',
                 name: requestAccount === first ? 'Alpha Asset' : 'Beta Asset'
-              }]
+              }],
+              drafts: isolatedDraft?.accountId === requestAccount ? [isolatedDraft] : []
             }))
           };
+        }
+        if (request.method === 'POST' && request.path === '/api/drafts') {
+          isolatedDraft = draftOf({
+            id: isolatedDraftId,
+            accountId: requestAccount,
+            kind: request.body?.kind === 'asset' ? 'asset' : 'variety',
+            fields: (request.body?.fields ?? {}) as Record<string, unknown>
+          });
+          return { status: 201, json: { draft: isolatedDraft } };
+        }
+        if (request.method === 'GET' && request.path === `/api/drafts/${encodeURIComponent(isolatedDraftId)}`) {
+          if (isolatedDraft?.accountId !== requestAccount) return { status: 404, json: { error: 'draft-not-found' } };
+          return { json: { draft: isolatedDraft } };
         }
         if (request.method === 'GET' && request.path === '/api/explore/places') {
           return {

@@ -1,4 +1,4 @@
-import { useCallback, useState, type ReactElement } from 'react';
+import { useCallback, useRef, useState, type ReactElement } from 'react';
 import { AppShell, type AccountContext, type TopicContext } from './app-shell';
 import { Activity, type ActivityContext } from './activity';
 import { Administration } from './administration';
@@ -8,6 +8,7 @@ import { Explore } from './explore';
 import { Production } from './production';
 import { VesselTravel } from './vessel-travel';
 import { ResourceReader, type ResourceReference } from './resource-reader';
+import { navigateToAuthoringEdit, navigateToTopic, routeFromPathname, type AuthoringEditRoute } from './router';
 import type { VesselWorkflowContext } from './workflow-context';
 import './tokens.css';
 
@@ -72,15 +73,20 @@ function AdministrationWorkspace({ accountId, accountHandle, authorityId, select
 }
 
 interface AuthoringWorkspaceProps extends AccountContext {
+  authoringEdit?: AuthoringEditRoute;
   onOpenAction: (actionId: string) => void;
+  onCloseEdit: () => void;
 }
 
-function AuthoringWorkspace({ accountId, onOpenAction }: AuthoringWorkspaceProps): ReactElement {
+function AuthoringWorkspace({ accountId, authoringEdit, onOpenAction, onCloseEdit }: AuthoringWorkspaceProps): ReactElement {
   const [resource, setResource] = useState<ResourceReference | undefined>();
   return (
     <>
       <Authoring
         {...(accountId === undefined ? {} : { accountId })}
+        {...(authoringEdit === undefined ? {} : { edit: authoringEdit })}
+        onOpenDraft={(kind, draftId) => navigateToAuthoringEdit({ kind, draftId })}
+        onCloseEdit={onCloseEdit}
         onOpenAction={onOpenAction}
         onReadResource={setResource}
       />
@@ -166,8 +172,14 @@ function nextVessel(previous: WorkflowSelection | undefined, context: VesselWork
 
 export function Application(): ReactElement {
   const [selection, setSelection] = useState<WorkflowSelection | undefined>();
+  const previousAccount = useRef<string | undefined>(undefined);
   const clearOtherAccount = useCallback((accountId: string | undefined): void => {
+    const previous = previousAccount.current;
+    previousAccount.current = accountId;
     setSelection((current) => current?.accountId === accountId ? current : undefined);
+    if (previous !== undefined && previous !== accountId && routeFromPathname(window.location.pathname).authoringEdit !== undefined) {
+      navigateToTopic('authoring');
+    }
   }, []);
   const openAction = (context: TopicContext, actionId: string): void => {
     const { accountId } = context;
@@ -250,7 +262,14 @@ export function Application(): ReactElement {
           onOpenAction={(actionId) => openAction(context, actionId)}
         />
       );
-      if (topic === 'authoring') return <AuthoringWorkspace {...context} onOpenAction={(actionId) => openAction(context, actionId)} />;
+      if (topic === 'authoring') return (
+        <AuthoringWorkspace
+          {...context}
+          {...(context.route.authoringEdit === undefined ? {} : { authoringEdit: context.route.authoringEdit })}
+          onOpenAction={(actionId) => openAction(context, actionId)}
+          onCloseEdit={() => context.navigateTopic('authoring')}
+        />
+      );
       if (topic === 'activity') return (
         <ActivityWorkspace
           {...context}
