@@ -8,9 +8,9 @@ Communications between servers are defined in FCTP federation protocol, and outs
 
 ## 1. Introduction
 
-Common Realms consist of severs of different FCTP roles: Home, Registry, Territory, and Repository of Assets and Varieties. To serve the functionality the roles expect, servers may expose a set of HTTP API under `/local/`. To name a few, the local API carries account authentication, vessel registration, entry and departure requests, Territory operations, administrative controls.
+Common Realms consist of servers of different FCTP roles: Home, Registry, Territory, and Repository of Assets and Varieties. To serve the functionality the roles expect, servers may expose a set of HTTP API under `/local/`. To name a few, the local API carries account authentication, vessel registration, entry and departure requests, Territory operations, administrative controls.
 
-The Common Realms Client-Server Basic API Conventions, shortly the Basic API, is a defined set of APIs to serve this purpose. Browser clients, backend-sever clients, or native clients may access to the Basic API.
+The Common Realms Client-Server Basic API Conventions, shortly the Basic API, is a defined set of APIs to serve this purpose. Browser clients, backend-server clients, or native clients may access to the Basic API.
 
 ## 2. Conformance and Terminology
 
@@ -38,7 +38,7 @@ Terms are mostly defined in the FCTP protocol.
 
 **Account.** A Home login identity. An account resolves to a Player Actor.
 
-**Administrator.** An account authorized by a server to perform administrative operations on the authorty.
+**Administrator.** An account authorized by a server to perform administrative operations on the authority.
 
 **Vessel possessor.** The Player Actor identified by a vessel's `possessor` member.
 
