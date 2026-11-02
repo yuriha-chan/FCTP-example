@@ -26,9 +26,9 @@ Terms are mostly defined in the FCTP protocol.
 
 **Server.** A Common Realms server implementing one or more roles in this document.
 
-**Client.** A client software which calls the Basic API. A Client usually holds Player credentials and acts for signed-in accounts.
+**Client.** A client software which calls the Basic API and acts for signed-in accounts.
 
-**Home server.** A server that provides account login, native-token issuance, and Home-local APIs.
+**Home server.** A server that provides account login and Home-local APIs.
 
 **Registry server.** A server that maintains a vessel registry.
 
@@ -66,13 +66,13 @@ A server that implements the Territory role MAY provide any subset of the endpoi
 
 ### 3.5 Client role
 
-A Client that implements this convention MUST follow the obligations in Section 14. A Client MAY support any subset of server roles and optional endpoints, but it MUST NOT call a route that the selected server does not provide.
+A Client that implements this convention MUST follow the requirements in Section 14. A Client MAY support any subset of server roles and optional endpoints, but it MUST NOT call a route that the selected server does not provide.
 
 ## 4. Transport and Message Rules
 
 ### 4.1 HTTP
 
-Basic API routes use HTTP. Non-loopback deployments MUST use HTTPS. A Client MUST NOT send a credential over cleartext HTTP except for a loopback development deployment where the operator has accepted that risk. A server MUST publish a canonical origin.
+Basic API routes use HTTP. Non-loopback deployments MUST use HTTPS. A Client MUST NOT send authentication material over cleartext HTTP except for a loopback development deployment where the operator has accepted that risk. A server MUST publish a canonical origin.
 
 The path portion of a Basic API route is relative to the server's canonical origin. Clients MUST call the canonical origin and MUST use the exact path and method defined for the route. A server MUST generate all object and Actor identifiers using its canonical origin.
 
@@ -82,17 +82,11 @@ Request bodies and response bodies are JSON objects unless a route states otherw
 
 Servers MAY include additional members in response objects beyond those defined in this document. Clients MUST ignore members they do not understand. Unless a route explicitly says otherwise, servers MUST ignore unknown members in request objects.
 
-Server responses and request bodies MAY be subject to a size limit. A server that imposes a limit MUST reject an oversized body with `400`. Policy and Simulation servers MUST accept bodies up to 16 KiB.
+Server responses and request bodies MAY be subject to a size limit. A server that imposes a limit MUST reject an oversized body with `400`. Territory servers MUST accept bodies up to 16 KiB.
 
-### 4.3 Credentials
+### 4.3 Permission labels
 
-All authenticated routes use:
-
-```http
-Authorization: Bearer <credential>
-```
-
-Clients MUST NOT place a credential in a query parameter, fragment, or request body. Servers MUST NOT accept a credential kind on a route whose Authorization requirements do not include that credential kind.
+Each route table specifies a required permission; Section 5 defines the values.
 
 ### 4.4 Status codes
 
@@ -105,7 +99,7 @@ Servers SHOULD use the following status codes with the meanings below.
 | `202` | The request was accepted for later processing. It does not mean the requested effect is complete. |
 | `400` | The request is malformed or invalid for the route. |
 | `401` | Authentication is missing or invalid, or the route reports an authentication failure with `401`. |
-| `403` | The caller is authenticated but not permitted to perform the operation. |
+| `403` | The caller lacks the required permission. |
 | `404` | The route, resource, vessel, or request does not exist. |
 | `409` | The request is valid but was rejected by local domain rules. |
 | `500` | The server failed to complete a local operation. |
@@ -125,69 +119,29 @@ Clients MUST rely on the HTTP status code and MUST NOT require an error body. So
 
 Clients MUST NOT cache authenticated Basic API responses unless a route explicitly permits caching. Servers SHOULD send `Cache-Control: no-store` for authenticated Basic API responses.
 
-## 5. Authentication and Authorization
+## 5. Required Permission
 
-### 5.1 Native Player token
+An administrator is an account authorized by the target server's deployment configuration to perform administrative operations on that server. Administrator permission is target-specific.
 
-Home issues a native Player token through login, issue, or rotate. T is a base64url-encoded byte string without padding. A Client MUST treat T as opaque except when deriving D as specified in Section 5.2. Home MUST accept T only while the account is available and the token is current.
+Each route table uses one of the following values:
 
-A Client MUST retain T in its backend and MUST NOT expose T to a browser, harness, or other untrusted component. A Client MUST NOT store T in browser storage, the DOM, or client-side persistent state. Possession of T does not by itself grant administrator status. A Territory server MUST NOT accept T as a target credential. Home MUST return T only from login, issue, or rotate.
-
-### 5.2 Diplomatic token
-
-A diplomatic token for target Actor `targetActorId` is derived from T as follows:
-
-```text
-D = base64url-without-padding(HMAC-SHA256(decode(T), UTF-8(targetActorId)))
-```
-
-The target server MUST accept D only when it has an active token digest for the Player and target Actor. The digest MUST have been declared by the Home resolved for the Player. A revoked, absent, or mismatched digest MUST cause authentication to fail.
-
-D identifies the Player Actor. It does not grant an administrative role. A target MUST authorize every administrative operation independently. Like T, D MUST remain in the trusted Client backend and MUST NOT be exposed to browser code, harnesses, or other untrusted components, or stored in browser storage or the DOM.
-
-### 5.3 Static administrator secret
-
-A server MAY require a static administrator secret for its administrative routes. The secret is an opaque, high-entropy value configured out of band. A server MUST compare it without leaking timing information.
-
-A static administrator secret is a deployment credential. It MUST NOT be distributed to browsers or ordinary accounts. A server MUST NOT accept a static administrator secret on a route whose Authorization column does not list it.
-
-### 5.4 Configured administrator
-
-A server MAY be configured with an administrator account handle.
-
-- A Home server configured with an administrator handle MUST require that handle to identify a local account. Home MUST authorize that account's native token or Home-derived diplomatic token for Home account-administration routes. The Home administration-claim routes in Section 8.3 require the account's native token.
-- A Registry or Territory server configured with an administrator handle MUST resolve the handle's Actor and Home from its namespace. It MUST accept that Actor's target-scoped diplomatic token for its administrative routes.
-- If a Registry or Territory server is not configured with an administrator, its administrative routes MUST accept the static administrator secret and MUST NOT treat an ordinary Player token as administrative.
-- If a Home server is not configured with an administrator, Home MAY use native-token governor accounts for account management.
-
-An administrator handle is deployment configuration. A Client MUST NOT infer administrator status from an account name, a Home administration entry, or a UI selection. A permission map is informational; reading it MUST NOT be treated as authorization for an administrative operation.
-
-### 5.5 Vessel possessor
-
-Registry routes that accept a native Player token MUST map that token to a Player and MUST require the selected vessel's `possessor` to equal that Player.
-
-Territory cargo endpoints MUST identify the Player from D and MUST require the active local visit's possessor to equal that Player.
-
-### 5.6 Authorization matrix
-
-| Route family | Required authorization |
+| Permission | Meaning |
 |---|---|
-| Home login, Home endpoint discovery | None |
-| Home vessel list, Home administration entries, Home proxy | Native Player token |
-| Home permission map | Native Player token or Home-scoped diplomatic token |
-| Home accounts and account availability | Configured Home administrator; native-token governor fallback when no administrator is configured |
-| Home issue, rotate, revoke, digest-request | Static Home administrator secret |
-| Registry fleet | Registry administrator |
-| Registry state | Registry administrator or native Player possessing the selected vessel |
-| Registry actions | Native Player token for the vessel possessor |
-| Registry entry, departure, adoption | Registry administrator or native Player possessing the selected vessel |
-| Registry permission map | Registry-scoped diplomatic token |
-| Repository authoring | Native Player token |
-| Territory permission map | Territory-scoped diplomatic token |
-| Territory state | Player diplomatic token or Territory administrator |
-| Territory action discovery | Player diplomatic token |
-| Territory player operations | Player diplomatic token; cargo operations additionally require the active visit possessor |
-| Territory administration | Territory administrator |
+| `none` | No Player or administrator permission is required. |
+| `player` | The caller must act for an authenticated Player. |
+| `administrator` | The caller must be an administrator of the target server. |
+
+Authentication and how a caller proves permission are implementation-defined and outside this convention. A server MUST reject a request that lacks the required permission.
+
+An administrator MAY use a route marked `player` when the route's requirements explicitly allow administrator access.
+
+A Client MUST NOT infer administrator permission from an account name, a Home administration entry, or a UI selection. A permission map is informational; reading it MUST NOT be treated as permission for an administrative operation.
+
+### 5.1 Player-scoped constraints
+
+Registry routes marked `player` that operate on a vessel MUST require the selected vessel's `possessor` to equal the authenticated Player.
+
+Territory cargo endpoints marked `player` MUST require the active local visit's possessor to equal the authenticated Player.
 
 ## 6. State, Observation, and Completion Semantics
 
@@ -227,7 +181,7 @@ Route direction is explicit. A Client MUST NOT reverse a route's `from` and `to`
 
 ### 6.5 Action discovery
 
-`LocalActionDiscovery` responses are advisory. Action availability, request bodies, and effects describe a possible operation at the time the response was assembled. A Client MUST treat execution as authoritative and MUST NOT assume that an action remains available after the response is generated. The existence of a route or action MUST NOT be treated as authorization.
+`LocalActionDiscovery` responses are advisory. Action availability, request bodies, and effects describe a possible operation at the time the response was assembled. A Client MUST treat execution as authoritative and MUST NOT assume that an action remains available after the response is generated. The existence of a route or action MUST NOT be treated as permission.
 
 Action discovery MUST NOT be used as a substitute for state reads or completion evidence.
 
@@ -239,7 +193,7 @@ A `GET` may be retried when the Client needs a fresh retained read. Retrying a `
 
 ### 6.7 Discovery advertisements
 
-A server MUST implement any discovery route required by the role or endpoint it provides. The content of an endpoint advertisement is advisory. It MAY omit routes defined by this convention and MAY describe authentication approximately. A Client MUST NOT treat an advertisement as an exhaustive route list, an authorization decision, or a reachability guarantee. Clients MUST use the route definitions in this document.
+A server MUST implement any discovery route required by the role or endpoint it provides. The content of an endpoint advertisement is advisory. It MAY omit routes defined by this convention and MAY describe required permission approximately. A Client MUST NOT treat an advertisement as an exhaustive route list, a permission decision, or a reachability guarantee. Clients MUST use the route definitions in this document.
 
 ## 7. Data Types
 
@@ -327,7 +281,7 @@ A successful operation returns `200`. A domain rejection returns `409`. Invalid 
 
 ```ts
 type HomeLoginResult =
-  | { status: 'signed-in'; handle: string; actorId: string; nativeToken: string; expiresAt?: string }
+  | { status: 'signed-in'; handle: string; actorId: string }
   | { status: 'rejected' | 'unavailable'; handle: string; reason: string };
 ```
 
@@ -343,7 +297,7 @@ interface AdministrationEntry {
 }
 ```
 
-An administration entry is Home's retained claim that the account was verified as an administrator of the target. It is not an authorization token, and it does not replace target-side enforcement.
+An administration entry is Home's retained claim that the account was verified as an administrator of the target. It is not a permission grant, and it does not replace target-side enforcement.
 
 ### 7.8 Registry state
 
@@ -438,7 +392,7 @@ The simulation state endpoint (`GET /local/territory/state`) returns a `Simulati
 - `admission`: the simulation admission policy;
 - `requests`: retained entry request records.
 
-Clients MAY use additional server-defined members but MUST NOT depend on their presence for authorization.
+Clients MAY use additional server-defined members but MUST NOT depend on their presence for permission.
 
 ### 7.11 FCTP objects
 
@@ -448,39 +402,35 @@ Requests and responses may contain FCTP objects defined by the FCTP protocol spe
 
 A Home server MUST implement the following routes.
 
-| Method and path | Authorization | Request | Success |
+| Method and path | Required permission | Request | Success |
 |---|---|---|---|
-| `GET /local/home/endpoints` | None | None | `200 { endpoints: Array<{ method, path, authentication }> }` |
-| `GET /local/home/vessels` | Native Player token | None | `200 { actor, vessels: Vessel[] }` |
-| `GET /local/home/permissions` | Native Player token or Home diplomatic token | None | `200 { "<home-handle>": string[] }` |
-| `GET /local/home/administration` | Native Player token | None | `200 { actor, entries: AdministrationEntry[] }` |
-| `POST /local/home/administration` | Native Player token | `{ authorityId: string }` | `200 { entry: AdministrationEntry }` |
-| `GET /local/home/accounts` | Home administrator | None | `200 { accounts: Array<{ handle, actorId, available }> }` |
-| `POST /local/home/accounts/availability` | Home administrator | `{ handle: string, available: boolean }` | `200 { handle, actorId, available }` |
-| `POST /local/home/login` | None | `{ handle: string, password: string }` | `200` with `HomeLoginResult` |
-| `GET /local/home/proxy?uri=<URI>&resourceActor=<Actor URI>` | Native Player token | Query parameters | `200` with the upstream resource JSON |
-| `POST /local/home/issue` | Home administrator secret | Optional `{ actor?: string }` | `200 { actor, nativeToken }` |
-| `POST /local/home/rotate` | Home administrator secret | Optional `{ actor?: string }` | `200 { actor, nativeToken }` |
-| `POST /local/home/revoke` | Home administrator secret | `{ actor?: string, resourceActor: string }` | `202 { status: "queued" }` |
-| `POST /local/home/digest-request` | Home administrator secret | `{ actor?: string, resourceActor: string }` | `202 { status: "queued" }` |
+| `GET /local/home/endpoints` | none | None | `200 { endpoints: Array<{ method, path, permission }> }` |
+| `GET /local/home/vessels` | player | None | `200 { actor, vessels: Vessel[] }` |
+| `GET /local/home/permissions` | player | None | `200 { "<home-handle>": string[] }` |
+| `GET /local/home/administration` | player | None | `200 { actor, entries: AdministrationEntry[] }` |
+| `POST /local/home/administration` | player | `{ authorityId: string }` | `200 { entry: AdministrationEntry }` |
+| `GET /local/home/accounts` | administrator | None | `200 { accounts: Array<{ handle, actorId, available }> }` |
+| `POST /local/home/accounts/availability` | administrator | `{ handle: string, available: boolean }` | `200 { handle, actorId, available }` |
+| `POST /local/home/login` | none | `{ handle: string, password: string }` | `200` with `HomeLoginResult` |
+| `GET /local/home/proxy?uri=<URI>&resourceActor=<Actor URI>` | player | Query parameters | `200` with the upstream resource JSON |
 
 ### 8.1 Home vessel list
 
 `GET /local/home/vessels` MUST return only Registry vessels whose `possessor` equals the authenticated Player's Actor ID. It MUST NOT be treated as a full Registry fleet listing.
 
-The route MUST return `401 { "error": "unauthorized" }` for a missing or invalid native token. It MUST return `500 { "error": "vessel-listing-failed" }` if the owned-vessel listing fails.
+The route MUST return `401 { "error": "unauthorized" }` for missing or invalid `player` permission. It MUST return `500 { "error": "vessel-listing-failed" }` if the owned-vessel listing fails.
 
 ### 8.2 Home permission map
 
-The response key MUST be the Home Actor's published WebFinger handle. The value MUST be `["admin"]` for a configured Home administrator, or for a governor when no administrator is configured. Otherwise the value MUST be `[]`.
+The response key MUST be the Home Actor's published WebFinger handle. The value MUST be `["admin"]` for an account with administrator permission. Otherwise the value MUST be `[]`.
 
-The route MUST return `401 { "error": "unauthorized" }` for a missing or invalid credential. It MUST return `500 { "error": "actor-handle-unavailable" }` if the Home Actor has no published handle.
+The route MUST return `401 { "error": "unauthorized" }` for missing or invalid `player` permission. It MUST return `500 { "error": "actor-handle-unavailable" }` if the Home Actor has no published handle.
 
 ### 8.3 Home administration entries
 
 `GET /local/home/administration` MUST return the authenticated account's retained entries. `POST /local/home/administration` MUST verify the target before storing an entry.
 
-The POST request's `authorityId` MUST be an absolute HTTP(S) Actor URL with no userinfo, query, or fragment. Home MUST fetch that Actor without credentials, require `id` to equal `authorityId`, and require `role` to be `home`, `registry`, or `territory`. Home MUST call the target's `/local/<role>/permissions` route with the account's native token for a Home target or a target-scoped diplomatic token otherwise.
+The POST request's `authorityId` MUST be an absolute HTTP(S) Actor URL with no userinfo, query, or fragment. Home MUST fetch that Actor without authentication, require `id` to equal `authorityId`, and require `role` to be `home`, `registry`, or `territory`. Home MUST call the target's `/local/<role>/permissions` route using the account's permission for that target.
 
 Home MUST store an entry only when the target permission map reports `admin`. Errors:
 
@@ -488,23 +438,23 @@ Home MUST store an entry only when the target permission map reports `admin`. Er
 |---|---|---|
 | `400` | `invalid-request` | Malformed JSON or non-object body |
 | `400` | `invalid-authority` | Invalid URI, Actor document, ID, or role |
-| `401` | `unauthorized` | Invalid native token, or no retained Home player state |
+| `401` | `unauthorized` | Missing or invalid `player` permission, or no retained Home player state |
 | `403` | `not-administrator` | Target reports no `admin` role for this account |
 | `502` | `target-actor-unavailable` | Target Actor cannot be fetched |
 | `502` | `target-permissions-unavailable` | Target permission route fails other than `401` |
 | `502` | `invalid-target-permissions` | Target permission response is not an object, or its handle conflicts with the Actor's published handle |
 
-A successful POST MUST mutate only the authenticated account's retained administration entries. It MUST NOT change target authorization.
+A successful POST MUST mutate only the authenticated account's retained administration entries. It MUST NOT change target permission.
 
 ### 8.4 Home accounts and availability
 
 `GET /local/home/accounts` MUST return the configured accounts and their availability. `POST /local/home/accounts/availability` MUST change one local account's availability.
 
-The availability request MUST contain a `handle` for a local Home account and a boolean `available`. A caller MUST NOT be able to make itself unavailable. Disabling an account MUST clear its native token and MUST cause a revocation declaration to be queued for known resources. Re-enabling an account MUST require a fresh login.
+The availability request MUST contain a `handle` for a local Home account and a boolean `available`. A caller MUST NOT be able to make itself unavailable. Disabling an account MUST invalidate its active authentication state and MUST cause any required revocation declaration to be queued for known resources. Re-enabling an account MUST require a fresh login.
 
 Errors:
 
-- `401 { "error": "unauthorized" }` for a caller that is not the Home administrator.
+- `401 { "error": "unauthorized" }` for a caller without administrator permission.
 - `400 { "error": "invalid-request" }` for malformed JSON, a non-object body, or missing or mistyped fields.
 - `400 { "error": "invalid-target" }` for a foreign or unknown handle, a non-Player account, or self-disable.
 
@@ -513,58 +463,47 @@ Errors:
 `POST /local/home/login` MUST accept `{ handle, password }` and return `HomeLoginResult`.
 
 - Missing or empty fields, malformed JSON, or a non-object body MUST return `400` with `status: "rejected"` and `reason: "invalid-request"`.
-- Invalid credentials MUST return `401` with `status: "rejected"`.
+- An invalid handle or password MUST return `401` with `status: "rejected"`.
 - An unavailable account MUST return `401` with `status: "unavailable"` and `reason: "account-unavailable"`.
-- A successful login MUST return `200` with `status: "signed-in"`, the account handle, the Player Actor ID, and T.
+- A successful login MUST return `200` with `status: "signed-in"`, the account handle, and the Player Actor ID.
 
-The native token MUST NOT be returned to a browser or harness. Home MUST accept a password only on `/local/home/login`; no other local route may consume a password.
+Home MUST accept a password only on `/local/home/login`; no other local route may consume a password.
 
 ### 8.6 Home proxy
 
-`GET /local/home/proxy?uri=<URI>&resourceActor=<Actor URI>` MUST require a native Player token and both query parameters. Home MUST derive the Player's diplomatic token for `resourceActor` and fetch the exact resource URI.
+`GET /local/home/proxy?uri=<URI>&resourceActor=<Actor URI>` MUST require `player` permission and both query parameters. Home MUST fetch the exact resource URI using the Player's permission for `resourceActor`.
 
-Success MUST return the upstream JSON value. A missing parameter MUST return `400 { "error": "uri-and-resourceActor-required" }`. A resource authorization or retrieval failure MUST return the upstream `ResourceError` status with `{ "error": "<code>" }`.
+Success MUST return the upstream JSON value. A missing parameter MUST return `400 { "error": "uri-and-resourceActor-required" }`. A resource-permission or retrieval failure MUST return the upstream `ResourceError` status with `{ "error": "<code>" }`.
 
 The proxy MUST NOT mutate local world state.
-
-### 8.7 Home token provisioning
-
-`issue` and `rotate` MUST return a native token. `revoke` and `digest-request` MUST queue the requested declaration and return `202 { "status": "queued" }`.
-
-The optional `actor` MUST default to the primary configured Player. `revoke` and `digest-request` MUST require a resolvable `resourceActor`.
-
-All four routes MUST require the static Home administrator secret. Failure MUST return `401 { "error": "administrator-authorization-failed" }`. Invalid Player or resource input MUST return `400 { "error": "<message>" }`.
 
 ## 9. Registry
 
 A Registry server MUST implement the following routes.
 
-| Method and path | Authorization | Request | Success |
+| Method and path | Required permission | Request | Success |
 |---|---|---|---|
-| `GET /local/registry/permissions` | Registry diplomatic token | None | `200 { "<registry-handle>": string[] }` |
-| `GET /local/registry/fleet` | Registry administrator | None | `200` with the fleet map |
-| `GET /local/registry/state?vessel=<URI>` | Registry administrator or the vessel's native-token possessor | Optional query | `200` with `VesselRegistryState` |
-| `GET /local/registry/actions?vessel=<URI>` | Native Player token for the vessel possessor | Required query | `200` with `LocalActionDiscovery` |
-| `POST /local/registry/entry` | Registry administrator or the vessel's native-token possessor | Entry request body | `202` with `EntryRequest` |
-| `POST /local/registry/departure` | Registry administrator or the vessel's native-token possessor | Departure request body | `202` with `DepartureRequest` |
-| `POST /local/registry/adoption` | Registry administrator or the vessel's native-token possessor | `{ adoption: boolean, vessel?: string }` | `200` with an empty body |
+| `GET /local/registry/permissions` | player | None | `200 { "<registry-handle>": string[] }` |
+| `GET /local/registry/fleet` | administrator | None | `200` with the fleet map |
+| `GET /local/registry/state?vessel=<URI>` | player | Optional query | `200` with `VesselRegistryState` |
+| `GET /local/registry/actions?vessel=<URI>` | player | Required query | `200` with `LocalActionDiscovery` |
+| `POST /local/registry/entry` | player | Entry request body | `202` with `EntryRequest` |
+| `POST /local/registry/departure` | player | Departure request body | `202` with `DepartureRequest` |
+| `POST /local/registry/adoption` | player | `{ adoption: boolean, vessel?: string }` | `200` with an empty body |
 
 ### 9.1 Registry access rules
 
-A Registry administrator MUST be either:
+A Registry administrator is an account authorized by the Registry's deployment configuration. An administrator MAY use a route marked `player` when the route's requirements explicitly allow administrator access.
 
-- a holder of the static Registry administrator secret, or
-- the configured administrator presenting a Registry-scoped diplomatic token.
-
-A native Player caller MUST be accepted only for a vessel whose `possessor` equals that Player. If `vessel` is omitted, the Registry MUST use the default vessel when the caller is an administrator, or when the native Player caller is its possessor.
+A Player caller MUST be accepted only for a vessel whose `possessor` equals that Player. If `vessel` is omitted, the Registry MUST use the default vessel when the caller is an administrator, or when the Player caller is its possessor.
 
 Registry error responses MAY be status-only. In particular:
 
-- `403` for failed administrator or possessor authorization;
+- `403` for a failed required-permission or possessor check;
 - `404` for an unknown vessel or unavailable state;
 - `400` for missing required request strings or a non-boolean adoption value.
 
-`GET /local/registry/permissions` MUST return `401` with an empty body for a missing or invalid diplomatic token, and `500` with an empty body if the Registry has no published handle. An authenticated non-administrator MUST receive `200` with an empty role array.
+`GET /local/registry/permissions` MUST return `401` with an empty body for missing or invalid `player` permission, and `500` with an empty body if the Registry has no published handle. An authenticated non-administrator MUST receive `200` with an empty role array.
 
 ### 9.2 Registry state
 
@@ -574,7 +513,7 @@ The route MUST read retained Registry state and MUST NOT observe the world or ad
 
 ### 9.3 Registry action discovery
 
-`GET /local/registry/actions` MUST require a native Player token for the selected vessel's possessor. The response MUST include:
+`GET /local/registry/actions` MUST require `player` permission for the selected vessel's possessor. The response MUST include:
 
 - the current retained cargo and adoption flag;
 - the latest recorded berth, if any;
@@ -610,11 +549,11 @@ Acceptance of an entry or departure request MUST NOT be represented as completio
 
 A Repository server MUST implement the following authoring routes.
 
-| Method and path | Authorization | Request | Success |
+| Method and path | Required permission | Request | Success |
 |---|---|---|---|
-| `GET /local/authoring` | Native Player token | None | `200 { actor, assets, varieties, grants }` for the authenticated Player only |
-| `POST /local/authoring/assets` | Native Player token | `{ name: string, text: string }` | `201 { asset, activity }` |
-| `POST /local/authoring/varieties` | Native Player token | `{ name, mass, version, asset?, production? }` | `201 { variety, activity, grant? }` |
+| `GET /local/authoring` | player | None | `200 { actor, assets, varieties, grants }` for the authenticated Player only |
+| `POST /local/authoring/assets` | player | `{ name: string, text: string }` | `201 { asset, activity }` |
+| `POST /local/authoring/varieties` | player | `{ name, mass, version, asset?, production? }` | `201 { variety, activity, grant? }` |
 
 ### 10.1 Asset authoring
 
@@ -640,31 +579,31 @@ Published Assets, Varieties, Grants, media, and the Player's public creations co
 
 The following policy endpoints are optional. A Territory server MAY implement any of them. If it implements an endpoint, it MUST satisfy the corresponding requirements.
 
-| Method and path | Authorization | Request | Success |
+| Method and path | Required permission | Request | Success |
 |---|---|---|---|
-| `GET /local/territory/info` | None | None | `200` with kind, Actor, IDs, endpoints, production |
-| `GET /local/territory/permissions` | Territory diplomatic token | None | `200 { "<territory-handle>": string[] }` |
-| `GET /local/territory/actions?vessel=<URI>` | Player diplomatic token | Required query | `200` with `LocalActionDiscovery` |
-| `GET /local/territory/state` | Player diplomatic token or Territory administrator | None | `200` with `PolicyStateView` |
-| `POST /local/territory/traverse` | Player diplomatic token | `{ vessel: string, route: string }` | `200 { success: true, event: VoyageEvent }` or a domain-failure result |
-| `POST /local/territory/mine` | Player diplomatic token | `{ count: integer, variety?: string }` | `200` with `OperationResult` |
-| `POST /local/territory/manufacture` | Player diplomatic token | `{ count: integer, recipe: "ore-to-metal" }` | `200` with `OperationResult` |
-| `POST /local/territory/transfer` | Player diplomatic token | `{ count, variety, direction }` | `200` with `OperationResult` |
-| `POST /local/territory/load` | Player diplomatic token and active visit possessor | `{ vessel, variety, count }` | `200` with `OperationResult` |
-| `POST /local/territory/unload` | Player diplomatic token and active visit possessor | `{ vessel, variety, count }` | `200` with `OperationResult` |
-| `POST /local/territory/admin/policy` | Territory administrator | Full policy object | `200` with `OperationResult`, or `400` for invalid policy |
-| `POST /local/territory/admin/admission` | Territory administrator | Partial admission object | `200 { admission }` |
-| `GET /local/territory/admin/entry-requests` | Territory administrator | None | `200 { requests }` |
-| `POST /local/territory/admin/entry-requests/:requestId/approve` | Territory administrator | Optional `{ reason?: string }` | `200` with decision result |
-| `POST /local/territory/admin/entry-requests/:requestId/reject` | Territory administrator | Optional `{ reason?: string }` | `200` with decision result |
+| `GET /local/territory/info` | none | None | `200` with kind, Actor, IDs, endpoints, production |
+| `GET /local/territory/permissions` | player | None | `200 { "<territory-handle>": string[] }` |
+| `GET /local/territory/actions?vessel=<URI>` | player | Required query | `200` with `LocalActionDiscovery` |
+| `GET /local/territory/state` | player | None | `200` with `PolicyStateView` |
+| `POST /local/territory/traverse` | player | `{ vessel: string, route: string }` | `200 { success: true, event: VoyageEvent }` or a domain-failure result |
+| `POST /local/territory/mine` | player | `{ count: integer, variety?: string }` | `200` with `OperationResult` |
+| `POST /local/territory/manufacture` | player | `{ count: integer, recipe: "ore-to-metal" }` | `200` with `OperationResult` |
+| `POST /local/territory/transfer` | player | `{ count, variety, direction }` | `200` with `OperationResult` |
+| `POST /local/territory/load` | player | `{ vessel, variety, count }` | `200` with `OperationResult` |
+| `POST /local/territory/unload` | player | `{ vessel, variety, count }` | `200` with `OperationResult` |
+| `POST /local/territory/admin/policy` | administrator | Full policy object | `200` with `OperationResult`, or `400` for invalid policy |
+| `POST /local/territory/admin/admission` | administrator | Partial admission object | `200 { admission }` |
+| `GET /local/territory/admin/entry-requests` | administrator | None | `200 { requests }` |
+| `POST /local/territory/admin/entry-requests/:requestId/approve` | administrator | Optional `{ reason?: string }` | `200` with decision result |
+| `POST /local/territory/admin/entry-requests/:requestId/reject` | administrator | Optional `{ reason?: string }` | `200` with decision result |
 
 ### 11.1 Permission map
 
-`GET /local/territory/permissions` MUST return `401 { "error": "unauthorized" }` for a missing or invalid diplomatic token, and `500 { "error": "actor-handle-unavailable" }` if the Territory has no published handle. An authenticated non-administrator MUST receive `200` with an empty role array.
+`GET /local/territory/permissions` MUST return `401 { "error": "unauthorized" }` for missing or invalid `player` permission, and `500 { "error": "actor-handle-unavailable" }` if the Territory has no published handle. An authenticated non-administrator MUST receive `200` with an empty role array.
 
 ### 11.2 Action discovery
 
-`GET /local/territory/actions` MUST require a diplomatic Player token and a parseable `vessel` URI.
+`GET /local/territory/actions` MUST require `player` permission and a parseable `vessel` URI.
 
 If the vessel has no retained local visit, the Territory server MUST fetch the vessel document and MUST require:
 
@@ -678,7 +617,7 @@ Errors:
 
 | Status | Error | Condition |
 |---|---|---|
-| `401` | `unauthorized` | Missing or invalid Player token |
+| `401` | `unauthorized` | Missing or invalid `player` permission |
 | `400` | `invalid-vessel` | Missing or unparseable vessel query |
 | `404` | `vessel-retrieval-failed` | Vessel document returns `404` |
 | `400` | `vessel-retrieval-failed` or `invalid-vessel` | Vessel retrieval fails otherwise, or document is invalid |
@@ -724,7 +663,7 @@ Successful `load` and `unload` MUST queue a `CargoOperationEvent` for the Regist
 - nonnegative safe integers for quota, reserve, and limits;
 - permits that reference existing recipe IDs;
 - `decisions` values of `allow` or `deny`;
-- optional `varietyPortPolicy` keyed by absolute HTTP(S) URIs without credentials, with `allow` or `deny` values.
+- optional `varietyPortPolicy` keyed by absolute HTTP(S) URIs without userinfo, with `allow` or `deny` values.
 
 Invalid policy MUST return `400 { "error": "invalid-input" }` or a `400` `OperationResult` depending on whether validation or domain update rejected it.
 
@@ -742,30 +681,30 @@ A policy endpoint approval MAY produce a `BerthingEvent` immediately. A rejectio
 
 The following simulation endpoints are optional. A Territory server MAY implement any of them. If it implements an endpoint, it MUST satisfy the corresponding requirements.
 
-| Method and path | Authorization | Request | Success |
+| Method and path | Required permission | Request | Success |
 |---|---|---|---|
-| `GET /local/territory/info` | None | None | `200` with kind, Actor, IDs, endpoints, production |
-| `GET /local/territory/permissions` | Territory diplomatic token | None | `200 { "<territory-handle>": string[] }` |
-| `GET /local/territory/actions?vessel=<URI>` | Player diplomatic token | Required query | `200` with `LocalActionDiscovery` |
-| `GET /local/territory/state` | Player diplomatic token or Territory administrator | None | `200` with `SimulationTerritoryState` |
-| `POST /local/territory/mine` | Player diplomatic token | `{ count, duration? }` | `200 { job: number }` |
-| `POST /local/territory/manufacture` | Player diplomatic token | `{ count, recipe: "native" | "imported" }` | `200 { job: number }` |
-| `POST /local/territory/load` | Player diplomatic token and visit possessor | `{ entryRequest, cargo, duration }` | `200 { job: number }` |
-| `POST /local/territory/unload` | Player diplomatic token and visit possessor | `{ entryRequest, cargo, duration }` | `200 { job: number }` |
-| `POST /local/territory/admin/facilities` | Territory administrator | Partial facility sections | `200 { ok: true }` |
-| `POST /local/territory/admin/tick` | Territory administrator | No required body; any body ignored | `200` with `SimulationTerritoryState` |
-| `POST /local/territory/admin/admission` | Territory administrator | Partial admission object | `200 { admission }` |
-| `GET /local/territory/admin/entry-requests` | Territory administrator | None | `200 { requests }` |
-| `POST /local/territory/admin/entry-requests/:requestId/approve` | Territory administrator | Optional `{ reason?: string }` | `200` with decision result |
-| `POST /local/territory/admin/entry-requests/:requestId/reject` | Territory administrator | Optional `{ reason?: string }` | `200` with decision result |
+| `GET /local/territory/info` | none | None | `200` with kind, Actor, IDs, endpoints, production |
+| `GET /local/territory/permissions` | player | None | `200 { "<territory-handle>": string[] }` |
+| `GET /local/territory/actions?vessel=<URI>` | player | Required query | `200` with `LocalActionDiscovery` |
+| `GET /local/territory/state` | player | None | `200` with `SimulationTerritoryState` |
+| `POST /local/territory/mine` | player | `{ count, duration? }` | `200 { job: number }` |
+| `POST /local/territory/manufacture` | player | `{ count, recipe: "native" | "imported" }` | `200 { job: number }` |
+| `POST /local/territory/load` | player | `{ entryRequest, cargo, duration }` | `200 { job: number }` |
+| `POST /local/territory/unload` | player | `{ entryRequest, cargo, duration }` | `200 { job: number }` |
+| `POST /local/territory/admin/facilities` | administrator | Partial facility sections | `200 { ok: true }` |
+| `POST /local/territory/admin/tick` | administrator | No required body; any body ignored | `200` with `SimulationTerritoryState` |
+| `POST /local/territory/admin/admission` | administrator | Partial admission object | `200 { admission }` |
+| `GET /local/territory/admin/entry-requests` | administrator | None | `200 { requests }` |
+| `POST /local/territory/admin/entry-requests/:requestId/approve` | administrator | Optional `{ reason?: string }` | `200` with decision result |
+| `POST /local/territory/admin/entry-requests/:requestId/reject` | administrator | Optional `{ reason?: string }` | `200` with decision result |
 
 ### 12.1 Permission map
 
-`GET /local/territory/permissions` MUST return `401 { "error": "unauthorized" }` for a missing or invalid diplomatic token, and `500 { "error": "actor-handle-unavailable" }` if the Territory has no published handle. An authenticated non-administrator MUST receive `200` with an empty role array.
+`GET /local/territory/permissions` MUST return `401 { "error": "unauthorized" }` for missing or invalid `player` permission, and `500 { "error": "actor-handle-unavailable" }` if the Territory has no published handle. An authenticated non-administrator MUST receive `200` with an empty role array.
 
 ### 12.2 Action discovery
 
-`GET /local/territory/actions` MUST require a Player diplomatic token and a vessel query. An administrator credential alone MUST NOT be sufficient.
+`GET /local/territory/actions` MUST require `player` permission and a vessel query. Administrator permission alone MUST NOT be sufficient.
 
 If the vessel has an active local visit, the server MUST use that visit and MUST require the visit possessor to equal the Player. Otherwise the server MUST fetch the vessel document and MUST require:
 
@@ -779,8 +718,8 @@ Errors:
 
 | Status | Condition |
 |---|---|
-| `401` | No valid Player token |
-| `403` | Admin-only credential, non-possessor, or Registry not admitted |
+| `401` | Missing or invalid `player` permission |
+| `403` | Administrator-only permission, non-possessor, or Registry not admitted |
 | `400` | Missing vessel, or invalid vessel metadata |
 | `404` | Vessel metadata returns `404` |
 | `502` | Vessel metadata source is unavailable |
@@ -868,37 +807,18 @@ A Home server MUST expose `/local/home/endpoints` with at least:
 ```json
 {
   "endpoints": [
-    { "method": "GET", "path": "/local/home/vessels", "authentication": "native Player" }
+    { "method": "GET", "path": "/local/home/vessels", "permission": "player" }
   ]
 }
 ```
 
 ### 13.2 Advisory nature
 
-An endpoint advertisement is advisory. A server MUST NOT require a Client to call a discovery route before any other route. A Client MUST NOT require an advertisement before calling a route. A Client MUST NOT treat an omitted route as unavailable or an advertised authentication label as an authorization decision.
+An endpoint advertisement is advisory. A server MUST NOT require a Client to call a discovery route before any other route. A Client MUST NOT require an advertisement before calling a route. A Client MUST NOT treat an omitted route as unavailable or an advertised permission label as a permission decision.
 
-## 14. Client Obligations
+## 14. Client Conformance
 
-A conforming Client MUST:
-
-1. Keep T in its backend and MUST NOT expose T to a browser, harness, or other untrusted component.
-2. Send T only to Home, Registry possessor, and Repository authoring routes that require it, and never to a Territory server.
-3. Derive D for the exact target Actor and send D only to that target.
-4. Use the exact identifiers returned by servers; it MUST NOT construct or infer identifiers from display names, URL tails, or local numeric values.
-5. Treat `202`, "accepted", "queued", and similar responses as acceptance only, not completion.
-6. Require the relevant event, observation, or retained state before claiming a berth, departure, cargo change, production result, or publication.
-7. Avoid automatic replay of non-idempotent `POST` requests after ambiguous outcomes; reconcile exact references first.
-8. Treat action discovery as advisory and execution as authoritative.
-9. Treat discovery advertisements as advisory and non-exhaustive.
-10. Treat Home administration entries as claims, not authorization. The target server remains the authorization authority.
-11. Treat retained reads as local state, not a promise that the world was observed or advanced.
-12. Handle `401`, `403`, `404`, `409`, `500`, and `502` as distinct outcomes and MUST NOT collapse them into a generic success or empty state.
-13. Represent unknown, pending, stale, failed, and unverified states honestly; it MUST NOT fabricate a completed result.
-14. Validate that an action request uses an expected local API origin, path, and method before executing it; it MUST NOT execute an arbitrary advertised URL.
-15. Use HTTPS for non-loopback deployments and MUST NOT send credentials over cleartext HTTP outside an accepted loopback development deployment.
-16. Cache authenticated local API responses only when the route explicitly permits caching.
-17. Send an account password only to `/local/home/login`; it MUST NOT be sent to a Territory, Registry, authoring, or administrative route.
-18. If provisioned with a static administrator secret, use it only for the corresponding service's administrative routes and never for player routes.
+A conforming Client MUST follow the route definitions, required permissions, and response semantics in this convention. It MAY use additional implementation-defined routes, but those routes are outside this convention.
 
 ## 15. Server Conformance
 
@@ -910,26 +830,25 @@ A server that implements the Repository role MUST implement the routes in Sectio
 
 A server that implements the Territory role MUST satisfy the requirements in Sections 11 and 12 for each endpoint it provides. It MAY implement any subset of those optional endpoints.
 
-A conforming server MUST enforce the authorization rules in Section 5, the state and completion semantics in Section 6, and the route-specific requirements for every role and endpoint it provides.
+A conforming server MUST enforce the required-permission rules in Section 5, the state and completion semantics in Section 6, and the route-specific requirements for every role and endpoint it provides.
 
-A conforming Client MUST satisfy the obligations in Section 14.
+A conforming Client MUST satisfy the requirements in Section 14.
 
 A server MAY implement additional routes, but those routes are outside this convention. A server MUST NOT require a Client to use an undocumented route to obtain a result promised by this convention.
 
 ## 16. Security Considerations
 
-The Basic API uses bearer credentials. Possession of T allows its holder to act as the corresponding Player at Home. Possession of D allows its holder to act as the Player at the target until the digest is revoked. Possession of a static administrator secret allows administrative operations at that service. A Client MUST protect D while it is valid.
+The Basic API relies on server-defined authentication. Possession of valid authentication for a Player allows its holder to act as that Player at the server that accepted it. Administrator permission allows administrative operations at that server. A Client MUST protect authentication material and MUST NOT expose it to untrusted components.
 
-A Client MUST protect T and MUST NOT expose it to browser code. A server MUST protect static administrator secrets and MUST NOT include them in public responses. Clients and servers SHOULD redact bearer credentials and passwords from logs and diagnostics.
+A server MUST protect authentication material and MUST NOT include it in public responses. Clients and servers SHOULD redact authentication material and passwords from logs and diagnostics.
 
-A Home compromise can break authentication for its accounts. A target or operator compromise can break that target's authorization policy and data. TLS is required for any non-loopback deployment that carries credentials.
+A Home compromise can break authentication for its accounts. A target or operator compromise can break that target's permission policy and data. TLS is required for any non-loopback deployment that carries authentication material.
 
-The Basic API proves possession of credentials. It does not prove human presence, intent, or independent authorization beyond the configured administrator model.
+The Basic API proves possession of whatever authentication the server requires. It does not prove human presence, intent, or independent permission beyond the configured administrator model.
 
 ## 17. References
 
 - [RFC2119] Bradner, S., "Key words for use in RFCs to Indicate Requirement Levels", BCP 14, RFC 2119.
 - [RFC8174] Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC 2119 Key Words", BCP 14, RFC 8174.
 - [RFC8259] Bray, T., "The JavaScript Object Notation (JSON) Data Interchange Format".
-- [RFC6750] Jones, M., and Hardt, D., "The OAuth 2.0 Authorization Framework: Bearer Token Usage".
 - FCTP protocol specification (`protocol.txt`).
