@@ -5,6 +5,7 @@ import type {
   AdministrationData,
   AdministrationRequestRecord,
   AdministrationTargetRecord,
+  AuthorityRole,
   PageResponse,
   SourcedObservation
 } from '@fctp/client-sdk';
@@ -32,13 +33,7 @@ export class AdministrationRequestError extends Error {
   }
 }
 
-export interface AdministrationBinding {
-  accountId: string;
-  authorityActorIds: readonly string[];
-}
-
 export interface AdministrationServiceOptions {
-  bindings: readonly AdministrationBinding[];
   resolveToken: (accountId: string, authorityId: string) => Promise<string>;
   timeoutMs?: number;
 }
@@ -63,9 +58,15 @@ export interface AdministrationDecisionInput {
   reason?: string;
 }
 
+export interface AdministrationClaimInput {
+  accountId: string;
+  authorityId: string;
+}
+
 export interface AdministrationService {
   page(accountId: string): Promise<PageResponse<AdministrationData>>;
   refresh(input: AdministrationRefreshInput): Promise<PageResponse<AdministrationData>>;
+  claim(input: AdministrationClaimInput): Promise<PageResponse<AdministrationData>>;
   control(input: AdministrationControlInput): Promise<{ action: ActionRecord }>;
   decide(input: AdministrationDecisionInput): Promise<{ action: ActionRecord }>;
 }
@@ -87,12 +88,55 @@ function administrationKey(accountId: string): string {
   return `administration:${accountId}`;
 }
 
+function homeAdministrationKey(accountId: string): string {
+  return `home-administration:${accountId}`;
+}
+
 function retainedValue<T>(observation: SourcedObservation<T>): T | undefined {
   return observation.state === 'available' || observation.state === 'stale' || observation.state === 'empty' ? observation.value : undefined;
 }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+interface HomeAdministrationEntry {
+  authorityId: string;
+  roles: AuthorityRole[];
+  name?: string;
+}
+
+const authorityRoles = new Set<AuthorityRole>(['home', 'territory', 'registry', 'asset-server']);
+
+function homeAdministrationSource(account: AccountRecord & { login: { status: 'signed-in'; homeServer: string; nativeToken: string } }): string | undefined {
+  const base = account.homeAuthority ?? account.actorId;
+  if (base === undefined || account.login.status !== 'signed-in') return undefined;
+  let url: URL;
+  try {
+    url = new URL(base);
+  } catch {
+    return undefined;
+  }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return undefined;
+  if (url.host !== account.homeServer || url.host !== account.login.homeServer) return undefined;
+  return new URL('/local/home/administration', url).href;
+}
+
+function homeAdministrationEntries(value: unknown): HomeAdministrationEntry[] {
+  if (!isRecord(value) || !Array.isArray(value.entries)) throw new Error('Invalid Home administration response');
+  const entries: HomeAdministrationEntry[] = [];
+  for (const raw of value.entries) {
+    if (!isRecord(raw) || typeof raw.authorityId !== 'string' || !URL.canParse(raw.authorityId)) continue;
+    if (!Array.isArray(raw.roles) || !Array.isArray(raw.permissions) || !raw.permissions.includes('admin')) continue;
+    const roles = raw.roles.filter((role): role is AuthorityRole => typeof role === 'string' && authorityRoles.has(role as AuthorityRole));
+    if (roles.length === 0) continue;
+    entries.push({
+      authorityId: raw.authorityId,
+      roles,
+      ...(typeof raw.name === 'string' && raw.name.length > 0 ? { name: raw.name } : {})
+    });
+  }
+  return entries;
 }
 
 function includesValues(observed: unknown, submitted: unknown): boolean {
@@ -237,31 +281,52 @@ export function createAdministrationService(
     return account as AccountRecord & { login: { status: 'signed-in'; nativeToken: string } };
   };
 
-  const targetsFor = async (account: AccountRecord): Promise<AdministrationTarget[]> => state.read((current) => {
+  const retainedHomeAdministration = async (accountId: string, source: string): Promise<HomeAdministrationEntry[] | undefined> => {
+    const observation = (await observations.read(homeAdministrationKey(accountId))).find((entry) => entry.source === source);
+    if (observation === undefined) return undefined;
+    if (observation.state !== 'available' && observation.state !== 'stale' && observation.state !== 'empty') return undefined;
+    return Array.isArray(observation.value) ? observation.value as HomeAdministrationEntry[] : undefined;
+  };
+
+  const refreshHomeAdministration = async (account: AccountRecord & { login: { status: 'signed-in'; homeServer: string; nativeToken: string } }): Promise<HomeAdministrationEntry[]> => {
+    const source = homeAdministrationSource(account);
+    if (source === undefined) throw new AdministrationRequestError(403, 'home-source-unavailable');
+    try {
+      await observations.refresh<HomeAdministrationEntry[]>({
+        key: homeAdministrationKey(account.id),
+        source,
+        load: (signal) => call(async () => {
+          const response = await fetcher(source, {
+            headers: { Accept: 'application/json', Authorization: `Bearer ${account.login.nativeToken}` },
+            cache: 'no-store',
+            signal
+          });
+          if (!response.ok) throw new AdministrationRequestError(response.status === 401 ? 401 : 502, 'home-administration-unavailable');
+          return homeAdministrationEntries(await response.json());
+        })
+      });
+    } catch (error) {
+      if (error instanceof AdministrationRequestError) throw error;
+      throw new AdministrationRequestError(502, 'home-administration-unavailable');
+    }
+    return await retainedHomeAdministration(account.id, source) ?? [];
+  };
+
+  const targetsFor = async (account: AccountRecord & { login: { status: 'signed-in'; homeServer: string; nativeToken: string } }): Promise<AdministrationTarget[]> => {
+    const source = homeAdministrationSource(account);
+    if (source === undefined) throw new AdministrationRequestError(403, 'home-source-unavailable');
+    const entries = await retainedHomeAdministration(account.id, source) ?? await refreshHomeAdministration(account);
     const targets = new Map<string, AdministrationTarget>();
-    for (const authority of Object.values(current.authorities)) {
-      const bound = options.bindings.some((binding) => binding.accountId === account.id && binding.authorityActorIds.includes(authority.actorId));
-      const home = authority.roles.includes('home') && authority.actorId === account.homeAuthority;
-      if (!bound && !home) continue;
-      targets.set(authority.actorId, {
-        authorityId: authority.actorId, server: authority.server, roles: [...authority.roles],
-        ...(authority.name === undefined ? {} : { name: authority.name })
+    for (const entry of entries) {
+      targets.set(entry.authorityId, {
+        authorityId: entry.authorityId,
+        server: new URL(entry.authorityId).host,
+        roles: entry.roles,
+        ...(entry.name === undefined ? {} : { name: entry.name })
       });
     }
-    for (const binding of options.bindings) {
-      if (binding.accountId !== account.id) continue;
-      for (const authorityId of binding.authorityActorIds) {
-        if (targets.has(authorityId)) continue;
-        try {
-          const url = new URL(authorityId);
-          targets.set(authorityId, { authorityId, server: url.host, roles: ['territory'] });
-        } catch {
-          continue;
-        }
-      }
-    }
     return [...targets.values()];
-  });
+  };
 
   const retained = async (accountId: string): Promise<Record<string, SourcedObservation<Record<string, unknown>>>> => {
     const entries = await observations.read(administrationKey(accountId));
@@ -381,7 +446,11 @@ export function createAdministrationService(
   };
 
   return {
-    page: (accountId) => buildPage(accountId),
+    async page(accountId) {
+      const account = await signedInAccount(accountId);
+      await refreshHomeAdministration(account);
+      return buildPage(account.id);
+    },
     async refresh(input) {
       const account = await signedInAccount(input.accountId);
       const targets = await targetsFor(account);
@@ -395,15 +464,33 @@ export function createAdministrationService(
       });
       return buildPage(account.id);
     },
+    async claim(input) {
+      const account = await signedInAccount(input.accountId);
+      const source = homeAdministrationSource(account);
+      if (source === undefined) throw new AdministrationRequestError(403, 'home-source-unavailable');
+      const response = await call((signal) => fetcher(source, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${account.login.nativeToken}` },
+        body: JSON.stringify({ authorityId: input.authorityId }),
+        cache: 'no-store',
+        signal
+      }));
+      if (response.status === 401) throw new AdministrationRequestError(401, 'home-unauthorized');
+      if (response.status === 403) throw new AdministrationRequestError(403, 'not-administrator');
+      if (response.status === 400) throw new AdministrationRequestError(400, 'invalid-authority');
+      if (!response.ok) throw new AdministrationRequestError(502, 'home-administration-unavailable');
+      await refreshHomeAdministration(account);
+      return buildPage(account.id);
+    },
     async control(input) {
       const account = await signedInAccount(input.accountId);
+      if (!(CONTROL_NAMES as readonly string[]).includes(input.control)) throw new AdministrationRequestError(400, 'unsupported-control');
+      if (input.control === 'adoption' && (typeof input.inputs.vesselId !== 'string' || !input.inputs.vesselId || typeof input.inputs.adoption !== 'boolean')) throw new AdministrationRequestError(400, 'vessel-and-adoption-required');
       const targets = await targetsFor(account);
       const target = targets.find((candidate) => candidate.authorityId === input.authorityId);
       if (!target) throw new AdministrationRequestError(403, 'unknown-target');
-      if (!(CONTROL_NAMES as readonly string[]).includes(input.control)) throw new AdministrationRequestError(400, 'unsupported-control');
       const kind = await kindFor(account.id, target, input.control);
       if (!administrationControlPath(kind, input.control)) throw new AdministrationRequestError(400, 'unsupported-control');
-      if (input.control === 'adoption' && (typeof input.inputs.vesselId !== 'string' || !input.inputs.vesselId || typeof input.inputs.adoption !== 'boolean')) throw new AdministrationRequestError(400, 'vessel-and-adoption-required');
       await tokenFor(account, target);
       const action = await actions.submit({
         accountId: account.id,

@@ -7,5 +7,6 @@
   "adminSecretFile": "/run/secrets/admin-secret",
   "authorityOrigin": "https://authority.example.org",
   "peerOrigin": "https://simulation.example.org",
+  "administrator": "@governor@authority.example.org",
   "playerNames": ["player", "player-2"]
 }

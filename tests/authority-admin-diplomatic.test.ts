@@ -160,6 +160,71 @@ test('the configured administrator diplomatic token authorizes Home account list
   }
 });
 
+test('permission maps list the authority actor with the requester roles', async () => {
+  const fixture = await createAdminFixture('fctp-authority-permissions-');
+  try {
+    const homeHandle = fixture.app.authority.actor('home').webfinger;
+    const registryHandle = fixture.app.authority.actor('registry').webfinger;
+    assert.equal(typeof homeHandle, 'string');
+    assert.equal(typeof registryHandle, 'string');
+
+    const homeAdmin = await fetch(`${fixture.origin}/local/home/permissions`, { headers: bearer(fixture.governorNative) });
+    assert.equal(homeAdmin.status, 200);
+    assert.deepEqual(await homeAdmin.json(), { [homeHandle as string]: ['admin'] });
+
+    const homePlayer = await fetch(`${fixture.origin}/local/home/permissions`, { headers: bearer(fixture.playerNative) });
+    assert.equal(homePlayer.status, 200);
+    assert.deepEqual(await homePlayer.json(), { [homeHandle as string]: [] });
+
+    const registryAdmin = await fetch(`${fixture.origin}/local/registry/permissions`, { headers: bearer(fixture.registryAdminToken) });
+    assert.equal(registryAdmin.status, 200);
+    assert.deepEqual(await registryAdmin.json(), { [registryHandle as string]: ['admin'] });
+
+    const registryPlayer = await fetch(`${fixture.origin}/local/registry/permissions`, { headers: bearer(fixture.playerRegistryToken) });
+    assert.equal(registryPlayer.status, 200);
+    assert.deepEqual(await registryPlayer.json(), { [registryHandle as string]: [] });
+
+    assert.equal((await fetch(`${fixture.origin}/local/home/permissions`)).status, 401);
+    assert.equal((await fetch(`${fixture.origin}/local/registry/permissions`)).status, 401);
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+test('Home stores verified administration entries in the account storage', async () => {
+  const fixture = await createAdminFixture('fctp-authority-administration-storage-');
+  try {
+    const registryHandle = fixture.app.authority.actor('registry').webfinger;
+    assert.equal(typeof registryHandle, 'string');
+
+    const added = await fetch(`${fixture.origin}/local/home/administration`, {
+      method: 'POST', headers: bearer(fixture.governorNative), body: JSON.stringify({ authorityId: fixture.registryActorId })
+    });
+    assert.equal(added.status, 200);
+    const addedBody = await added.json() as { entry: Record<string, unknown> };
+    assert.equal(addedBody.entry.authorityId, fixture.registryActorId);
+    assert.equal(addedBody.entry.authorityHandle, registryHandle);
+    assert.deepEqual(addedBody.entry.roles, ['registry']);
+    assert.deepEqual(addedBody.entry.permissions, ['admin']);
+
+    const listed = await fetch(`${fixture.origin}/local/home/administration`, { headers: bearer(fixture.governorNative) });
+    assert.equal(listed.status, 200);
+    const listedBody = await listed.json() as { entries: Array<Record<string, unknown>> };
+    assert.equal(listedBody.entries.length, 1);
+    assert.equal(listedBody.entries[0]!.authorityId, fixture.registryActorId);
+
+    const playerAdd = await fetch(`${fixture.origin}/local/home/administration`, {
+      method: 'POST', headers: bearer(fixture.playerNative), body: JSON.stringify({ authorityId: fixture.registryActorId })
+    });
+    assert.equal(playerAdd.status, 403);
+    const playerList = await fetch(`${fixture.origin}/local/home/administration`, { headers: bearer(fixture.playerNative) });
+    assert.equal(playerList.status, 200);
+    assert.deepEqual(await playerList.json(), { actor: fixture.playerId, entries: [] });
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
 test('a normal player Registry diplomatic token is rejected from Registry administration', async () => {
   const fixture = await createAdminFixture('fctp-authority-admin-registry-player-');
   try {

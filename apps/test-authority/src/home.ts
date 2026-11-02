@@ -9,10 +9,12 @@ import type { Authority } from './bootstrap.js';
 
 interface ResourceActor extends FCTPActor, Record<string, unknown> { inbox: URI }
 interface UsedResource { id: URI; inbox: URI }
-interface PlayerState { nativeToken?: string; resources: Record<string, UsedResource>; revisions: Record<string, number>; available?: boolean }
+interface AdministrationEntry { authorityId: URI; authorityHandle: string; roles: string[]; permissions: string[]; verifiedAt: string }
+interface PlayerState { nativeToken?: string; resources: Record<string, UsedResource>; revisions: Record<string, number>; available?: boolean; administration?: Record<string, AdministrationEntry> }
 interface PasswordCredential { salt: string; hash: string }
 interface HomeState { players: Record<string, PlayerState>; credentials?: Record<string, PasswordCredential> }
 const derivePasswordHash = promisify(scrypt) as (password: string, salt: string, keylen: number) => Promise<Buffer>;
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 export interface HomeOptions {
   playerActorId?: URI;
@@ -242,6 +244,9 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
     if (request.method === 'GET' && url.pathname === '/local/home/endpoints') {
       sendJson(200, { endpoints: [
         { method: 'GET', path: '/local/home/vessels', authentication: 'native Player' },
+        { method: 'GET', path: '/local/home/permissions', authentication: 'authenticated account' },
+        { method: 'GET', path: '/local/home/administration', authentication: 'native Player' },
+        { method: 'POST', path: '/local/home/administration', authentication: 'native Player' },
         { method: 'GET', path: '/local/home/accounts', authentication: 'native Home governor' },
         { method: 'POST', path: '/local/home/accounts/availability', authentication: 'native Home governor' },
         { method: 'POST', path: '/local/home/issue', authentication: 'admin' },
@@ -261,6 +266,105 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
       } catch {
         sendJson(500, { error: 'vessel-listing-failed' });
       }
+      return true;
+    }
+    if (request.method === 'GET' && url.pathname === '/local/home/permissions') {
+      const header = request.headers.authorization ?? '';
+      const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+      if (!token) { sendJson(401, { error: 'unauthorized' }); return true; }
+      let callerId = await service.authenticateNativeToken(token);
+      if (callerId === undefined) callerId = await authority.server.authenticateDiplomaticToken(authority.actor('home').id, token);
+      if (callerId === undefined) { sendJson(401, { error: 'unauthorized' }); return true; }
+      const handle = authority.actor('home').webfinger;
+      if (typeof handle !== 'string' || !handle) { sendJson(500, { error: 'actor-handle-unavailable' }); return true; }
+      const admin = await isAdministrator(request);
+      sendJson(200, { [handle]: admin ? ['admin'] : [] });
+      return true;
+    }
+    if (url.pathname === '/local/home/administration' && (request.method === 'GET' || request.method === 'POST')) {
+      const header = request.headers.authorization ?? '';
+      const callerId = header.startsWith('Bearer ') ? await service.authenticateNativeToken(header.slice(7)) : undefined;
+      if (!callerId) { sendJson(401, { error: 'unauthorized' }); return true; }
+      if (request.method === 'GET') {
+        const player = await readPlayer(callerId);
+        if (!player) { sendJson(401, { error: 'unauthorized' }); return true; }
+        sendJson(200, { actor: callerId, entries: Object.values(player.administration ?? {}) });
+        return true;
+      }
+      let body: Record<string, unknown>;
+      try {
+        body = await readJson(request);
+      } catch (error) {
+        if (!(error instanceof SyntaxError || error instanceof TypeError)) throw error;
+        sendJson(400, { error: 'invalid-request' });
+        return true;
+      }
+      const authorityId = typeof body.authorityId === 'string' ? body.authorityId : '';
+      let target: URL;
+      try {
+        target = new URL(authorityId);
+      } catch {
+        sendJson(400, { error: 'invalid-authority' });
+        return true;
+      }
+      if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password || target.search || target.hash) {
+        sendJson(400, { error: 'invalid-authority' });
+        return true;
+      }
+      let actorDocument: unknown;
+      try {
+        const response = await fetcher(target, { headers: { Accept: 'application/ld+json, application/json' }, cache: 'no-store' });
+        if (!response.ok) { sendJson(502, { error: 'target-actor-unavailable' }); return true; }
+        actorDocument = await response.json();
+      } catch {
+        sendJson(502, { error: 'target-actor-unavailable' });
+        return true;
+      }
+      if (!isRecord(actorDocument) || actorDocument.id !== authorityId || typeof actorDocument.role !== 'string' || !['home', 'registry', 'territory'].includes(actorDocument.role)) {
+        sendJson(400, { error: 'invalid-authority' });
+        return true;
+      }
+      const player = await readPlayer(callerId);
+      if (!player?.nativeToken || player.available === false) { sendJson(401, { error: 'unauthorized' }); return true; }
+      const role = actorDocument.role;
+      const token = role === 'home' ? player.nativeToken : await deriveDiplomaticToken(player.nativeToken, authorityId as URI);
+      let permissions: unknown;
+      try {
+        const response = await fetcher(`${target.origin}/local/${role}/permissions`, {
+          headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+          cache: 'no-store'
+        });
+        if (response.status === 401) { sendJson(403, { error: 'not-administrator' }); return true; }
+        if (!response.ok) { sendJson(502, { error: 'target-permissions-unavailable' }); return true; }
+        permissions = await response.json();
+      } catch {
+        sendJson(502, { error: 'target-permissions-unavailable' });
+        return true;
+      }
+      if (!isRecord(permissions)) { sendJson(502, { error: 'invalid-target-permissions' }); return true; }
+      const authorized = Object.entries(permissions).find(([, roles]) => Array.isArray(roles) && roles.includes('admin'));
+      if (!authorized || typeof authorized[0] !== 'string') { sendJson(403, { error: 'not-administrator' }); return true; }
+      if (typeof actorDocument.webfinger === 'string' && actorDocument.webfinger !== authorized[0]) {
+        sendJson(502, { error: 'invalid-target-permissions' });
+        return true;
+      }
+      const entry: AdministrationEntry = {
+        authorityId: authorityId as URI,
+        authorityHandle: authorized[0],
+        roles: [role],
+        permissions: (authorized[1] as unknown[]).filter((value): value is string => typeof value === 'string'),
+        verifiedAt: new Date().toISOString()
+      };
+      await serializePlayer(callerId, async () => {
+        const current = await readPlayer(callerId);
+        if (!current) throw new Error('unknown-local-player');
+        current.administration = { ...(current.administration ?? {}), [authorityId]: entry };
+        await authority.server.store.transaction((store) => {
+          const home = (store.domain.home ??= { players: {} }) as HomeState;
+          home.players[callerId] = current;
+        });
+      });
+      sendJson(200, { entry });
       return true;
     }
     if (request.method === 'GET' && url.pathname === '/local/home/accounts') {

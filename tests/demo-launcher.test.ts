@@ -97,6 +97,8 @@ test('provides deterministic player and governor login without exposing bindings
   assert.ok(application);
   const retainedGovernor = await application.state.read((state) => state.accounts[governor.account.id]);
   assert.ok(retainedGovernor && retainedGovernor.login.status === 'signed-in');
+  const retainedPlayer = await application.state.read((state) => state.accounts[player.account.id]);
+  assert.ok(retainedPlayer && retainedPlayer.login.status === 'signed-in');
   const governorNativeToken = retainedGovernor.login.nativeToken;
   const policyToken = await deriveDiplomaticToken(governorNativeToken, demo.policy.ids.actor);
   const simulationToken = await deriveDiplomaticToken(governorNativeToken, demo.simulation.ids.actor);
@@ -105,7 +107,7 @@ test('provides deterministic player and governor login without exposing bindings
   assert.equal(await application.resolveAdministratorToken(governor.account.id, demo.policy.ids.actor), policyToken);
   assert.equal(await application.resolveAdministratorToken(governor.account.id, demo.simulation.ids.actor), simulationToken);
   assert.equal(await application.resolveAdministratorToken(governor.account.id, demo.authority.ids.actor.registry), authorityToken);
-  await assert.rejects(application.resolveAdministratorToken(player.account.id, demo.policy.ids.actor));
+  assert.equal(await application.resolveAdministratorToken(player.account.id, demo.policy.ids.actor), await deriveDiplomaticToken(retainedPlayer.login.nativeToken, demo.policy.ids.actor));
 
   const playerAccounts = await readAccounts(player.clientToken);
   assert.deepEqual(playerAccounts.accounts.map((account) => ({ id: account.id, handle: account.handle })), [{ id: player.account.id, handle: `@player@${host}` }]);
@@ -190,6 +192,8 @@ test('demo restart preserves admission changes and disabled accounts without rep
     assert.equal(login.status, 200);
     const { account, clientToken } = await login.json() as { account: { id: string }; clientToken: string };
     assert.equal((await post('/api/servers', { origin: fixture.origins.authority }, clientToken)).status, 200);
+    assert.equal((await post('/api/administration/claim', { accountId: account.id, authorityId: fixture.policy.ids.actor }, clientToken)).status, 200);
+    assert.equal((await post('/api/administration/claim', { accountId: account.id, authorityId: fixture.authority.ids.actor.home }, clientToken)).status, 200);
     const admission = await post('/api/administration/controls', {
       accountId: account.id, authorityId: fixture.policy.ids.actor, control: 'admission', inputs: { publicPorts: [fixture.policy.ids.ports[0]] }
     }, clientToken);

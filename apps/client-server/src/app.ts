@@ -15,11 +15,6 @@ import { createObservationService, type ObservationService } from './observation
 import { digestClientToken } from './sessions.js';
 import { openClientState, type ClientApplicationState } from './store.js';
 
-export interface AdministratorBinding {
-  readonly accountId: string;
-  readonly authorityActorIds: readonly string[];
-}
-
 export interface ClientApplication {
   readonly state: ClientApplicationState;
   readonly seedServers: readonly string[];
@@ -38,7 +33,6 @@ export interface CreateClientApplicationOptions {
   storeFile: string;
   seedServers?: readonly string[];
   fetch?: typeof fetch;
-  administratorBindings?: readonly AdministratorBinding[];
   observationTimeoutMs?: number;
   actionTimeoutMs?: number;
   actionHandlers?: Readonly<Record<string, ActionHandler>>;
@@ -366,19 +360,16 @@ export async function createClientApplication(options: CreateClientApplicationOp
   const identities = createIdentityService(state, fetcher, {
     ...(options.observationTimeoutMs === undefined ? {} : { timeoutMs: options.observationTimeoutMs })
   });
-  const bindings = [...(options.administratorBindings ?? [])];
   const resolveAdministratorToken = async (accountId: string, targetActorId: string): Promise<string> => {
     const account = await state.read((current) => current.accounts[accountId]);
     if (!account || account.login.status !== 'signed-in') throw new Error('Account is not signed in');
-    const bound = bindings.some((candidate) => candidate.accountId === accountId && candidate.authorityActorIds.includes(targetActorId));
-    if (!bound && targetActorId !== account.homeAuthority) throw new Error('No administrator binding matches the account and target');
     return deriveDiplomaticToken(account.login.nativeToken, targetActorId);
   };
   const builtInHandlers = createWorkflowActionHandlers(state, fetcher, observations, {
     ...(options.actionTimeoutMs === undefined ? {} : { timeoutMs: options.actionTimeoutMs })
   });
   const administrationHandlers = createAdministrationActionHandlers(state, fetcher, {
-    bindings, resolveToken: resolveAdministratorToken,
+    resolveToken: resolveAdministratorToken,
     ...(options.actionTimeoutMs === undefined ? {} : { timeoutMs: options.actionTimeoutMs })
   });
   const actions = createActionService(state, {
@@ -399,7 +390,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
     ...(options.observationTimeoutMs === undefined ? {} : { timeoutMs: options.observationTimeoutMs })
   });
   const administration = createAdministrationService(state, fetcher, observations, actions, {
-    bindings, resolveToken: resolveAdministratorToken,
+    resolveToken: resolveAdministratorToken,
     ...(options.observationTimeoutMs === undefined ? {} : { timeoutMs: options.observationTimeoutMs })
   });
 
@@ -705,6 +696,15 @@ export async function createClientApplication(options: CreateClientApplicationOp
           const authorityId = optionalBody(body, 'authorityId');
           if (authorityId === undefined) throw new ApiError(400, 'authority-id-required');
           await send(200, await administration.refresh({ accountId, authorityId }));
+          return true;
+        }
+        if (request.method === 'POST' && pathname === '/api/administration/claim') {
+          const body = await readJsonBody(request);
+          const accountId = accountScope(url, body, true)!;
+          await requireClient(state, request, accountId);
+          const authorityId = optionalBody(body, 'authorityId');
+          if (authorityId === undefined) throw new ApiError(400, 'authority-id-required');
+          await send(200, await administration.claim({ accountId, authorityId }));
           return true;
         }
         if (request.method === 'POST' && pathname === '/api/administration/controls') {

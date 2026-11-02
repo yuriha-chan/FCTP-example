@@ -156,7 +156,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
     if (!url.pathname.startsWith('/local/')) return false;
     const send = (status: number, value: unknown): void => { response.writeHead(status, { 'Content-Type': 'application/json', ...(url.pathname === '/local/actions' ? { 'Cache-Control': 'no-store' } : {}) }); response.end(JSON.stringify(value)); };
     if (url.pathname === '/local/info' && request.method === 'GET') {
-      send(200, { kind: 'policy', actor: actorId, ids, endpoints: ['/local/info', '/local/state', '/local/actions', '/local/traverse', '/local/mine', '/local/manufacture', '/local/transfer', '/local/load', '/local/unload', '/local/admin/policy', '/local/admin/admission'], production: { mining: { input: null, output: ore.id }, recipes: [{ id: 'ore-to-metal', input: ore.id, output: metal.id }] } });
+      send(200, { kind: 'policy', actor: actorId, ids, endpoints: ['/local/info', '/local/state', '/local/actions', '/local/traverse', '/local/mine', '/local/manufacture', '/local/transfer', '/local/load', '/local/unload', '/local/territory/permissions', '/local/admin/policy', '/local/admin/admission'], production: { mining: { input: null, output: ore.id }, recipes: [{ id: 'ore-to-metal', input: ore.id, output: metal.id }] } });
       return true;
     }
     if (url.pathname === '/local/actions' && request.method === 'GET') {
@@ -177,6 +177,19 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
       if (!player && !await base.checkAdmin(request, mutableActor)) { send(401, { error: 'unauthorized' }); return true; }
       const ledger = await territory.ledger;
       send(200, { state: ledger.state, admission: ledger.admission, decisions: ledger.decisions });
+      return true;
+    }
+    if (url.pathname === '/local/territory/permissions' && request.method === 'GET') {
+      const header = request.headers.authorization ?? '';
+      const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+      if (!token) { send(401, { error: 'unauthorized' }); return true; }
+      const caller = await host.server.authenticateDiplomaticToken(actorId as URI, token);
+      if (!caller) { send(401, { error: 'unauthorized' }); return true; }
+      const handle = host.actor('territory').webfinger;
+      if (typeof handle !== 'string' || !handle) { send(500, { error: 'actor-handle-unavailable' }); return true; }
+      response.setHeader('Cache-Control', 'no-store');
+      const admin = administrator !== undefined && caller === administrator.actorId;
+      send(200, { [handle]: admin ? ['admin'] : [] });
       return true;
     }
     const adminRoute = url.pathname === '/local/admin/policy' || url.pathname === '/local/admin/admission';

@@ -82,6 +82,15 @@ test('a configured administrator diplomatic token authorizes Policy admin operat
 
   const governorToken = await deriveDiplomaticToken(governorNative, policy.ids.actor);
   const playerToken = await deriveDiplomaticToken(playerNative, policy.ids.actor);
+  const territoryHandle = policy.host.actor('territory').webfinger;
+  assert.equal(typeof territoryHandle, 'string');
+  const governorPermissions = await fetch(`${policyOrigin}/local/territory/permissions`, { headers: bearer(governorToken) });
+  assert.equal(governorPermissions.status, 200);
+  assert.deepEqual(await governorPermissions.json(), { [territoryHandle as string]: ['admin'] });
+  const playerPermissions = await fetch(`${policyOrigin}/local/territory/permissions`, { headers: bearer(playerToken) });
+  assert.equal(playerPermissions.status, 200);
+  assert.deepEqual(await playerPermissions.json(), { [territoryHandle as string]: [] });
+  assert.equal((await fetch(`${policyOrigin}/local/territory/permissions`)).status, 401);
   const admissionBody = JSON.stringify({ reviewMode: 'manual' });
 
   const playerState = await fetch(`${policyOrigin}/local/state`, { headers: bearer(playerToken) });
@@ -134,6 +143,15 @@ test('a configured administrator diplomatic token authorizes Simulation admin op
 
   const governorToken = await deriveDiplomaticToken(governorNative, simulation.ids.actor);
   const playerToken = await deriveDiplomaticToken(playerNative, simulation.ids.actor);
+  const territoryHandle = simulation.host.actor('territory').webfinger;
+  assert.equal(typeof territoryHandle, 'string');
+  const governorPermissions = await fetch(`${simulationOrigin}/local/territory/permissions`, { headers: bearer(governorToken) });
+  assert.equal(governorPermissions.status, 200);
+  assert.deepEqual(await governorPermissions.json(), { [territoryHandle as string]: ['admin'] });
+  const playerPermissions = await fetch(`${simulationOrigin}/local/territory/permissions`, { headers: bearer(playerToken) });
+  assert.equal(playerPermissions.status, 200);
+  assert.deepEqual(await playerPermissions.json(), { [territoryHandle as string]: [] });
+  assert.equal((await fetch(`${simulationOrigin}/local/territory/permissions`)).status, 401);
   const facilitiesBody = JSON.stringify({ mining: { enabled: false, capacity: 5 } });
 
   const playerState = await fetch(`${simulationOrigin}/local/state`, { headers: bearer(playerToken) });

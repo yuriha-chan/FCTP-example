@@ -130,6 +130,18 @@ export function installRegistry(authority: Authority, options: InstallRegistryOp
   authority.server.addRoute(async ({ request, response, url }) => {
     if (!url.pathname.startsWith('/local/registry')) return false;
     const send = (status: number, value?: unknown): void => { response.writeHead(status, { 'Cache-Control': 'no-store', ...(value === undefined ? {} : { 'Content-Type': 'application/json' }) }); response.end(value === undefined ? undefined : JSON.stringify(value)); };
+    if (request.method === 'GET' && url.pathname === '/local/registry/permissions') {
+      const header = request.headers.authorization ?? '';
+      const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+      if (!token) { send(401); return true; }
+      const caller = await authority.server.authenticateDiplomaticToken(registryId, token);
+      if (!caller) { send(401); return true; }
+      const handle = authority.actor('registry').webfinger;
+      if (typeof handle !== 'string' || !handle) { send(500); return true; }
+      const admin = await authority.isAdministrator(request, registryId);
+      send(200, { [handle]: admin ? ['admin'] : [] });
+      return true;
+    }
     if (request.method === 'GET' && url.pathname === '/local/registry/fleet') {
       if (!await admin(request)) { send(403); return true; }
       send(200, await fleet()); return true;

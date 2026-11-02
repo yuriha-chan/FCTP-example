@@ -13,6 +13,7 @@ import { HandleLabel } from './handle-label';
 import type { ResourceReference } from './resource-reader';
 import {
   applyAdministrationControl,
+  claimAdministrationTarget,
   decideAdministrationEntry,
   readAdministration,
   refreshAdministration
@@ -881,6 +882,9 @@ export function Administration(props: AdministrationProps): ReactElement {
   const [results, setResults] = useState<SubmissionResult[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | undefined>(undefined);
+  const [claimAuthority, setClaimAuthority] = useState('');
+  const [claiming, setClaiming] = useState(false);
+  const [claimError, setClaimError] = useState<string | undefined>(undefined);
 
   const accountRef = useRef(accountId);
   accountRef.current = accountId;
@@ -890,19 +894,26 @@ export function Administration(props: AdministrationProps): ReactElement {
   authorityRef.current = selectedAuthority;
   const readGeneration = useRef(0);
   const refreshGeneration = useRef(0);
+  const claimGeneration = useRef(0);
   const refreshLock = useRef(false);
+  const claimLock = useRef(false);
   const resultSequence = useRef(0);
 
   useEffect(() => {
     const generation = ++readGeneration.current;
     refreshGeneration.current += 1;
+    claimGeneration.current += 1;
     refreshLock.current = false;
+    claimLock.current = false;
     authorityRef.current = requestedAuthority.current;
     setSelectedAuthority(requestedAuthority.current);
     setResults([]);
     setRevision(0);
     setRefreshing(false);
     setRefreshError(undefined);
+    setClaimAuthority('');
+    setClaiming(false);
+    setClaimError(undefined);
     if (accountId === undefined) {
       setViewState({});
       return;
@@ -945,6 +956,7 @@ export function Administration(props: AdministrationProps): ReactElement {
   useEffect(() => () => {
     readGeneration.current += 1;
     refreshGeneration.current += 1;
+    claimGeneration.current += 1;
   }, []);
 
   const addResult = (
@@ -1040,6 +1052,40 @@ export function Administration(props: AdministrationProps): ReactElement {
     });
   };
 
+  const claim = (): void => {
+    const account = accountRef.current;
+    const authority = claimAuthority.trim();
+    if (account === undefined || authority === '' || claimLock.current) return;
+    claimLock.current = true;
+    const generation = ++claimGeneration.current;
+    setClaiming(true);
+    setClaimError(undefined);
+    claimAdministrationTarget(account, authority).then(
+      (response) => {
+        if (accountRef.current !== account || claimGeneration.current !== generation) return;
+        const data = response.data;
+        if (!isRecord(data) || !Array.isArray(data.targets)) {
+          setClaiming(false);
+          setClaimError('The claim response was malformed.');
+          return;
+        }
+        setClaiming(false);
+        const selected = data.targets.find((target) => target.authorityId === authority)?.authorityId ?? data.targets[0]?.authorityId;
+        authorityRef.current = selected;
+        setSelectedAuthority(selected);
+        setViewState({ accountId: account, data });
+        setClaimAuthority('');
+      },
+      (error: unknown) => {
+        if (accountRef.current !== account || claimGeneration.current !== generation) return;
+        setClaiming(false);
+        setClaimError(errorText(error));
+      }
+    ).finally(() => {
+      if (claimGeneration.current === generation) claimLock.current = false;
+    });
+  };
+
   const selectTarget = (value: string): void => {
     refreshGeneration.current += 1;
     refreshLock.current = false;
@@ -1084,6 +1130,33 @@ export function Administration(props: AdministrationProps): ReactElement {
           {failure === undefined ? null : (
             <p className={styles.failure} role="alert">Administration unavailable: {failure}</p>
           )}
+
+          <div className={styles.section}>
+            <h3 className={styles.subheading}>Claim administration role</h3>
+            <p className={styles.meta}>Enter a target Authority Actor ID. Home verifies the claim against that target.</p>
+            <label className={styles.field}>
+              Authority Actor ID
+              <input
+                aria-label="Authority Actor ID"
+                value={claimAuthority}
+                onChange={(event) => setClaimAuthority(event.target.value)}
+                placeholder="https://authority.example.org/actors/registry"
+              />
+            </label>
+            <div className={styles.controls}>
+              <Button
+                className={styles.button}
+                onPress={claim}
+                isPending={claiming}
+                isDisabled={claimAuthority.trim() === ''}
+              >
+                Claim
+              </Button>
+            </div>
+            {claimError === undefined ? null : (
+              <p className={styles.failure} role="alert">Claim failed: {claimError}</p>
+            )}
+          </div>
 
           {data === undefined ? null : (
             <div className={styles.section}>

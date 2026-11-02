@@ -189,7 +189,20 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
     }
     if (!url.pathname.startsWith('/local/')) return false;
     if (url.pathname === '/local/info' && request.method === 'GET') {
-      json(response, 200, { kind: 'simulation', actor: actorId, ids, endpoints: ['/local/state', '/local/actions', '/local/mine', '/local/manufacture', '/local/load', '/local/unload', '/local/admin/facilities', '/local/admin/tick'], production: { ore: ids.varieties.ore, metal: ids.varieties.metal, refined: ids.varieties.refined, importedMetal: ids.varieties.importedMetal } });
+      json(response, 200, { kind: 'simulation', actor: actorId, ids, endpoints: ['/local/state', '/local/actions', '/local/mine', '/local/manufacture', '/local/load', '/local/unload', '/local/territory/permissions', '/local/admin/facilities', '/local/admin/tick'], production: { ore: ids.varieties.ore, metal: ids.varieties.metal, refined: ids.varieties.refined, importedMetal: ids.varieties.importedMetal } });
+      return true;
+    }
+    if (url.pathname === '/local/territory/permissions' && request.method === 'GET') {
+      const header = request.headers.authorization ?? '';
+      const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+      if (!token) { json(response, 401, { error: 'unauthorized' }); return true; }
+      const caller = await host.server.authenticateDiplomaticToken(actorId as URI, token);
+      if (!caller) { json(response, 401, { error: 'unauthorized' }); return true; }
+      const handle = host.actor('territory').webfinger;
+      if (typeof handle !== 'string' || !handle) { json(response, 500, { error: 'actor-handle-unavailable' }); return true; }
+      response.setHeader('Cache-Control', 'no-store');
+      const admin = administrator !== undefined && caller === administrator.actorId;
+      json(response, 200, { [handle]: admin ? ['admin'] : [] });
       return true;
     }
     const auth = request.headers.authorization ?? '';

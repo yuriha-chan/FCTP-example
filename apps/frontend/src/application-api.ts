@@ -449,6 +449,10 @@ export function refreshAdministration(accountId: string, authorityId: string): P
   return request('/api/administration/refresh', { method: 'POST', body: JSON.stringify({ accountId, authorityId }) });
 }
 
+export function claimAdministrationTarget(accountId: string, authorityId: string): Promise<AdministrationResponse> {
+  return request('/api/administration/claim', { method: 'POST', body: JSON.stringify({ accountId, authorityId }) });
+}
+
 export function applyAdministrationControl(accountId: string, authorityId: string, control: string, inputs: Record<string, unknown>): Promise<ActionResponse> {
   return request('/api/administration/controls', { method: 'POST', body: JSON.stringify({ accountId, authorityId, control, inputs }) });
 }

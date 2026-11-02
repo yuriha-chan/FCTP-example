@@ -7,6 +7,7 @@
   "adminSecretFile": "/run/secrets/admin-secret",
   "playerNames": ["player", "player-2"],
   "administratorNames": ["governor"],
+  "administrator": "@governor@authority.example.org",
   "vesselNames": {
     "player": "player-vessel",
     "player-2": "player-2-vessel"

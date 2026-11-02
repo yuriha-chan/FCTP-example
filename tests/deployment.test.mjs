@@ -63,6 +63,43 @@ test('authority deployment loads private config and serves persisted account cre
   }
 });
 
+test('deployment config carries the configured administrator for Authority and Territories', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'deployment-administrator-'));
+  const handle = '@governor@authority.example.org';
+  try {
+    await writeFile(join(directory, 'admin-secret'), 'private-admin-secret\n');
+    await writeFile(join(directory, 'passwords.json'), JSON.stringify({ player: 'player-password', governor: 'governor-password' }));
+    await writeFile(join(directory, 'authority.json'), JSON.stringify({
+      origin: 'https://authority.example.org', dataDir: './authority-data',
+      adminSecretFile: './admin-secret', playerNames: ['player'], administratorNames: ['governor'], administrator: handle,
+      vesselNames: { player: 'player-vessel' }, accountPasswordsFile: './passwords.json'
+    }));
+    await writeFile(join(directory, 'policy.json'), JSON.stringify({
+      origin: 'https://west.example.org', dataDir: './policy-data', adminSecretFile: './admin-secret',
+      authorityOrigin: 'https://authority.example.org', peerOrigin: 'https://simulation.example.org',
+      administrator: handle, playerNames: ['player']
+    }));
+    await writeFile(join(directory, 'simulation.json'), JSON.stringify({
+      origin: 'https://simulation.example.org', dataDir: './simulation-data', adminSecretFile: './admin-secret',
+      authorityOrigin: 'https://authority.example.org', peerOrigin: 'https://west.example.org',
+      administrator: handle, playerNames: ['player']
+    }));
+
+    assert.equal((await readDeploymentConfig('authority', join(directory, 'authority.json'))).administrator, handle);
+    assert.equal((await readDeploymentConfig('policy', join(directory, 'policy.json'))).administrator, handle);
+    assert.equal((await readDeploymentConfig('simulation', join(directory, 'simulation.json'))).administrator, handle);
+
+    await writeFile(join(directory, 'invalid-policy.json'), JSON.stringify({
+      origin: 'https://west.example.org', dataDir: './policy-data', adminSecretFile: './admin-secret',
+      authorityOrigin: 'https://authority.example.org', peerOrigin: 'https://simulation.example.org',
+      administrator: 'governor', playerNames: ['player']
+    }));
+    await assert.rejects(readDeploymentConfig('policy', join(directory, 'invalid-policy.json')), /Invalid administrator/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('deployment config rejects non-origin URLs without exposing config values', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'deployment-invalid-'));
   const marker = 'secret-that-must-not-appear';
@@ -82,15 +119,13 @@ test('client deployment serves its API and static application from an isolated s
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
   try {
-    await writeFile(join(directory, 'client-secret'), 'client-admin-secret');
     await writeFile(join(directory, 'config.json'), JSON.stringify({
       origin, port, listenHost: '127.0.0.1', dataDir: './client-data',
-      seedServers: ['https://authority.example.org'],
-      administratorBindings: [{ accountId: '@governor@authority.example.org', authorityActorIds: ['https://authority.example.org/actors/registry'], credentialSource: 'authority' }],
-      administratorCredentialFiles: { authority: './client-secret' }
+      seedServers: ['https://authority.example.org']
     }));
     const config = await readDeploymentConfig('client', join(directory, 'config.json'));
-    assert.equal(config.administratorCredentials.authority, 'client-admin-secret');
+    assert.equal(Object.hasOwn(config, 'administratorBindings'), false);
+    assert.equal(Object.hasOwn(config, 'administratorCredentials'), false);
     const deployment = await startDeployment('client', config);
     try {
       const health = await globalThis.fetch(`${origin}/api/health`);

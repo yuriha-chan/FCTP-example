@@ -130,7 +130,7 @@ interface ActionRecord {
   outcome: { status: string; evidence: unknown[]; error?: string };
 }
 
-type RequestKind = 'read' | 'refresh' | 'control' | 'decision';
+type RequestKind = 'read' | 'refresh' | 'claim' | 'control' | 'decision';
 
 interface AdministrationRequest {
   kind: RequestKind;
@@ -435,6 +435,18 @@ async function openFixture(t: TestContext, config: FixtureConfig): Promise<Opene
         ...(parsedBody === undefined ? {} : { body: parsedBody }),
         headers: request.headers()
       };
+    } else if (url.pathname === '/api/administration/claim' && request.method() === 'POST') {
+      const accountId = typeof body?.accountId === 'string' ? body.accountId : undefined;
+      const authorityId = typeof body?.authorityId === 'string' ? body.authorityId : undefined;
+      recorded = {
+        kind: 'claim',
+        method: request.method(),
+        pathname: url.pathname,
+        ...(accountId === undefined ? {} : { accountId }),
+        ...(authorityId === undefined ? {} : { authorityId }),
+        ...(parsedBody === undefined ? {} : { body: parsedBody }),
+        headers: request.headers()
+      };
     } else if (url.pathname === '/api/administration/controls' && request.method() === 'POST') {
       const accountId = typeof body?.accountId === 'string' ? body.accountId : undefined;
       const authorityId = typeof body?.authorityId === 'string' ? body.authorityId : undefined;
@@ -648,6 +660,32 @@ test('performs one retained read on open and renders target-owned scope without 
   assert.equal(await region.getByRole('button', { name: /Apply facilities/i }).count(), 1);
   assert.equal(await region.getByRole('button', { name: 'Apply policy' }).count(), 0);
   assert.equal(requests.filter((request) => request.kind !== 'read').length, 0, 'target selection must not observe the world');
+  assert.deepEqual(errors, []);
+});
+
+test('claims a target through Home and renders the returned entry', async (t) => {
+  const claimed = makeData(accountA, [
+    makeTarget(authorityRegistry, { name: 'Registry', kind: 'registry', roles: ['registry'], state: 'not-retrieved' })
+  ]);
+  const { page, requests, errors } = await openFixture(t, {
+    accountId: accountA,
+    handler: (request) => {
+      if (request.kind === 'read') return { body: pageOf(makeData(accountA, [])) };
+      if (request.kind === 'claim') return { body: pageOf(claimed) };
+      return { status: 500, body: { error: 'unexpected request' } };
+    }
+  });
+
+  const region = administration(page);
+  await region.getByLabel('Authority Actor ID').fill(authorityRegistry);
+  await region.getByRole('button', { name: 'Claim' }).click();
+  await waitForText(region, 'Registry', 'expected the claimed target');
+
+  const claim = requests.find((request) => request.kind === 'claim');
+  assert.ok(claim, 'expected an explicit Home claim request');
+  assert.equal(claim.method, 'POST');
+  assert.equal(claim.pathname, '/api/administration/claim');
+  assert.deepEqual(claim.body, { accountId: accountA, authorityId: authorityRegistry });
   assert.deepEqual(errors, []);
 });
 

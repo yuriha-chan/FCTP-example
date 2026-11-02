@@ -23,12 +23,18 @@ The rendered client exposes Asset text controls from a loaded public `creations`
 | `POST /local/home/digest-request` | Authority admin | `{ "resourceActor": "<Territory Actor URI>" }` | `202 { "status": "queued" }` |
 | `POST /local/home/revoke` | Authority admin | `{ "resourceActor": "<Territory Actor URI>" }` | `202 { "status": "queued" }` |
 | `GET /local/home/vessels` | Player native token | None | `200 { actor, vessels }`, containing only Registry vessels possessed by the authenticated Player |
+| `GET /local/home/permissions` | Authenticated native or Home diplomatic token | None | `200 { "<home authority handle>": ["admin"] }` for an administrator, otherwise `{ "<home authority handle>": [] }` |
+| `GET /local/home/administration` | Player native token | None | `200 { actor, entries }` containing the account's verified administration entries |
+| `POST /local/home/administration` | Player native token | `{ authorityId }` | `200 { entry }` after Home verifies the target permission map; `403` for a non-administrator |
+| `GET /local/registry/permissions` | Registry diplomatic token | None | `200 { "<registry authority handle>": ["admin"] }` for an administrator, otherwise `{ "<registry authority handle>": [] }` |
 | `GET /local/home/proxy?uri=<URI>&resourceActor=<Actor URI>` | Player native token | Query parameters | `200` resource JSON or upstream authorization/not-found status |
 | `POST /local/registry/entry` | Authority admin | `{ territory, port, route, cargo? }`; cargo is optional `CargoManifest` | `202` created `EntryRequest` |
 | `POST /local/registry/departure` | Authority admin | `{ territory, port, route? }` | `202` created `DepartureRequest` |
 | `POST /local/registry/adoption` | Authority admin | `{ "adoption": boolean }` | `200` empty response |
 
 `POST /local/registry/entry` and departure validate required string IDs; the Registry resolves the destination Actor/Inbox and persists the request with its outgoing delivery. Omitting cargo uses current Registry cargo. The initial demo vessel is `/objects/vessels/demo`.
+
+The permission-map routes require authentication. Missing or invalid credentials return `401`; an authenticated caller without `admin` receives the authority actor key with an empty role list. The key is the authority actor's published handle, which contains the required dot.
 
 ## Territory A — policy (port 4101)
 
@@ -40,6 +46,7 @@ The rendered client exposes Asset text controls from a loaded public `creations`
 | `POST /local/manufacture` | Player diplomatic token | `{ count, recipe: "ore-to-metal" }` | `200` result or `409` domain rejection |
 | `POST /local/transfer` | Player diplomatic token | `{ direction: "to-port" | "to-warehouse", variety, count }` | `200` result or `409` domain rejection |
 | `POST /local/load`, `/local/unload` | Player diplomatic token who possesses the active visit | `{ vessel, variety, count }` | `200` result or `409` domain rejection |
+| `GET /local/territory/permissions` | Territory diplomatic token | None | `200 { "<territory authority handle>": ["admin"] }` for an administrator, otherwise `{ "<territory authority handle>": [] }` |
 | `POST /local/admin/policy` | A admin credential | Persisted policy object with mining permission/quota/reserve, recipe/permits, limits, optional `varietyPortPolicy` and decisions | `200` update result; `400` invalid policy |
 | `POST /local/admin/admission` | A admin credential | Partial admission object; supported fields include `registryAcceptance`, `territoryAcceptance`, `publicPorts`, `mismatchPolicy` | `200 { admission }`; `400` invalid input |
 
@@ -58,6 +65,7 @@ Player credentials identify an enrolled Player; load/unload additionally require
 | `POST /local/mine` | Player diplomatic token | `{ count, duration? }`, duration in local ticks | `200 { job }` |
 | `POST /local/manufacture` | Player diplomatic token | `{ count, recipe: "native" | "imported" }` | `200 { job }` |
 | `POST /local/load`, `/local/unload` | Player diplomatic token matching visit possessor | `{ entryRequest, cargo: { entries: [...] }, duration }` | `200 { job }` |
+| `GET /local/territory/permissions` | Territory diplomatic token | None | `200 { "<territory authority handle>": ["admin"] }` for an administrator, otherwise `{ "<territory authority handle>": [] }` |
 | `POST /local/admin/facilities` | B admin credential | Partial validated facility sections: `mining`, `manufacturing`, `port` | `200 { ok: true }` |
 | `POST /local/admin/tick` | B admin credential | `{}` (body is read for POST) | `200` tick result |
 
@@ -74,3 +82,5 @@ The client server also serves application routes under `/api/` at the client ori
 `POST /api/accounts/login` accepts `{ handle, password }` and returns the public account/login state plus a client session token (`clientToken`, S). The handle determines the destination host and port. Login uses HTTPS by default and HTTP only for loopback hosts (`localhost`, IPv4 `127/8`, and IPv6 `::1`); there is no caller-supplied origin override. The Home-issued native token (T) stays in client web server account state and is never returned to the browser or harness. Account-scoped application requests use `Authorization: Bearer S` for the handle bound to that session. Multiple S sessions may coexist for one account and across accounts.
 
 `GET /api/accounts` requires Bearer S and returns only the authenticated session's own account, never another account or a credential projection. Logout deletes only the current S and, when no S remains for the handle, clears the client login state; it does not revoke T at Home. Client sessions have no implicit expiry, and Home availability changes do not synchronize to existing sessions.
+
+`GET /api/administration?accountId=...` checks the account's Home `/local/home/administration` entries when the Administration tab is opened. The Client does not verify authority roles. `POST /api/administration/claim` with `{ accountId, authorityId }` asks Home to verify and store an administration entry; Home remains the verifier and the target remains authoritative.

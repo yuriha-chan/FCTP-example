@@ -134,15 +134,9 @@ export async function startDemo(options: StartDemoOptions) {
       await policy.host.server.processInbox();
       await simulation.host.server.processInbox();
     }
-    const governorAccountId = `@governor@${new URL(authority.ids.actor.home).host}`;
     application = await createClientApplication({
       storeFile: resolve(dataDir, 'client.store.json'),
-      seedServers: [origins.authority, origins.policy, origins.simulation],
-      administratorBindings: [
-        { accountId: governorAccountId, authorityActorIds: [authority.ids.actor.registry] },
-        { accountId: governorAccountId, authorityActorIds: [policy.ids.actor] },
-        { accountId: governorAccountId, authorityActorIds: [simulation.ids.actor] }
-      ]
+      seedServers: [origins.authority, origins.policy, origins.simulation]
     });
     clientServer = await startClientServer({ port: ports.client, application });
     authority.authority.startWorkers();

@@ -67,16 +67,10 @@ test('standalone client advertises its canonical origin, serves health and JavaS
   const directory = await mkdtemp(join(tmpdir(), 'deployment-runtime-'));
   let process;
   try {
-    const secret = 'runtime-client-admin-secret-93a0';
-    await writeFile(join(directory, 'client-secret'), secret);
-    const configPath = await clientConfig(directory, {
-      administratorBindings: [{ accountId: 'governor', authorityActorIds: ['https://authority.example.test/actors/registry'], credentialSource: 'authority' }],
-      administratorCredentialFiles: { authority: './client-secret' }
-    });
+    const configPath = await clientConfig(directory);
     process = launch('client', configPath);
     const line = await waitFor(() => process.stdout.split(/\r?\n/).find((entry) => entry.startsWith('client ')), 'startup log');
     assert.match(line, /^client https:\/\/client\.example\.test 127\.0\.0\.1:\d+$/);
-    assert.doesNotMatch(`${process.stdout}${process.stderr}`, new RegExp(secret));
     assert.doesNotMatch(`${process.stdout}${process.stderr}`, /secret|password/i);
 
     const address = line.split(' ').at(-1);
@@ -95,7 +89,6 @@ test('standalone client advertises its canonical origin, serves health and JavaS
 
     process.child.kill('SIGTERM');
     assert.equal(await waitForExit(process.child), 0);
-    assert.doesNotMatch(`${process.stdout}${process.stderr}`, new RegExp(secret));
     assert.doesNotMatch(`${process.stdout}${process.stderr}`, /secret|password/i);
   } finally {
     if (process) await stop(process.child);
@@ -116,7 +109,7 @@ test('invalid deployment configurations exit before creating their data director
       service: 'authority', name: 'password mismatch', secretValue: 'authority-secret', passwordFile: { other: 'password' }
     },
     { service: 'unknown-service', name: 'unknown service' },
-    { service: 'client', name: 'missing administrator binding secret', binding: true }
+    { service: 'client', name: 'invalid administrator binding', binding: true }
   ];
   try {
     for (const [index, invalid] of cases.entries()) {
@@ -136,8 +129,7 @@ test('invalid deployment configurations exit before creating their data director
       } else if (invalid.binding) {
         serviceConfig = {
           origin: 'https://client.example.test', listenHost: '127.0.0.1', port: 0, dataDir: './data',
-          administratorBindings: [{ accountId: 'governor', authorityActorIds: ['https://authority.example.test/actors/registry'], credentialSource: 'authority' }],
-          administratorCredentialFiles: { authority: './missing-secret' }
+          administratorBindings: [{ accountId: 'governor', authorityActorIds: [] }]
         };
       } else {
         serviceConfig = { origin: 'https://unknown.example.test', dataDir: './data' };
@@ -146,7 +138,7 @@ test('invalid deployment configurations exit before creating their data director
       const process = launch(invalid.service, configPath);
       try {
         assert.equal(await waitForExit(process.child), 1, invalid.name);
-        assert.match(process.stderr, /secret|password|service/i, invalid.name);
+        assert.match(process.stderr, invalid.binding ? /administrator|binding/i : /secret|password|service/i, invalid.name);
         assert.doesNotMatch(`${process.stdout}${process.stderr}`, /player-password|authority-secret/i);
         await assert.rejects(stat(dataDir), { code: 'ENOENT' });
       } finally {
