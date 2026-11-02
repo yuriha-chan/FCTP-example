@@ -894,13 +894,14 @@ test('requires exactly one valid server discovery input and resolves a matching 
   }
 });
 
-test('resolves administrator credentials only for signed-in explicitly bound accounts and targets', async () => {
+test('resolves administrator tokens only for signed-in explicitly bound accounts and targets', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-client-administrator-'));
   const storeFile = join(directory, 'client.store.json');
-  const fixture = createFixtureFetch(fixtureHomes(), []);
+  const nativeToken = 'Zmlyc3QtbmF0aXZlLXRva2Vu';
+  const fixture = createFixtureFetch([{ ...firstHome, accounts: [{ ...firstLoginAccount, nativeToken }] }], []);
   const registryActor = 'http://harbor.test:4200/actors/registry';
   const otherActor = 'http://other.test:4200/actors/registry';
-  const missingSourceActor = 'http://harbor.test:4200/actors/policy';
+  const unboundActor = 'http://harbor.test:4200/actors/policy';
   let opened = await openFixtureApplication(storeFile, fixture.fetch);
   try {
     const login = await fetch(new URL('/api/accounts/login', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: firstLoginAccount.handle, password: firstLoginAccount.password }) });
@@ -912,29 +913,27 @@ test('resolves administrator credentials only for signed-in explicitly bound acc
     await opened.application.close();
 
     opened = await openFixtureApplication(storeFile, fixture.fetch, {
-      administratorBindings: [
-        { accountId, authorityActorIds: [registryActor], credentialSource: 'registry-administrator' },
-        { accountId, authorityActorIds: [missingSourceActor], credentialSource: 'missing-source' }
-      ],
-      administratorCredentials: { 'registry-administrator': 'registry-administrator-secret' }
+      administratorBindings: [{ accountId, authorityActorIds: [registryActor] }]
     });
     const resolver = opened.application;
-    assert.equal(typeof resolver.resolveAdministratorCredential, 'function');
-    assert.equal(await resolver.resolveAdministratorCredential(accountId, registryActor), 'registry-administrator-secret');
-    await assert.rejects(resolver.resolveAdministratorCredential(accountId, otherActor));
-    await assert.rejects(resolver.resolveAdministratorCredential('account:missing', registryActor));
-    await assert.rejects(resolver.resolveAdministratorCredential(accountId, missingSourceActor));
+    const retained = await resolver.state.read((current) => current.accounts[accountId]);
+    assert.ok(retained && retained.login.status === 'signed-in');
+    const derived = await deriveDiplomaticToken(retained.login.nativeToken, registryActor);
+    assert.equal(typeof resolver.resolveAdministratorToken, 'function');
+    assert.equal(await resolver.resolveAdministratorToken(accountId, registryActor), derived);
+    await assert.rejects(resolver.resolveAdministratorToken(accountId, otherActor));
+    await assert.rejects(resolver.resolveAdministratorToken('account:missing', registryActor));
+    await assert.rejects(resolver.resolveAdministratorToken(accountId, unboundActor));
 
     const accountsText = await (await fetch(new URL('/api/accounts', opened.client.origin), { headers: authorization(loginBody.clientToken) })).text();
     const serversText = await (await fetch(new URL('/api/servers', opened.client.origin))).text();
     for (const text of [accountsText, serversText]) {
-      assert.equal(text.includes('registry-administrator-secret'), false);
-      assert.equal(text.includes('missing-source'), false);
+      assert.equal(text.includes(derived), false);
     }
 
     const logout = await fetch(new URL(`/api/accounts/${encodeURIComponent(accountId)}/logout`, opened.client.origin), { method: 'POST', headers: authorization(loginBody.clientToken) });
     assert.equal(logout.status, 200);
-    await assert.rejects(resolver.resolveAdministratorCredential(accountId, registryActor));
+    await assert.rejects(resolver.resolveAdministratorToken(accountId, registryActor));
   } finally {
     await opened.client.close();
     await opened.application.close();
@@ -1870,6 +1869,7 @@ interface ProductionWorld {
 }
 
 interface ProductionWorldOptions {
+  administrator?: string;
   administratorNames?: string[];
   accountPasswords?: Record<string, string>;
   additionalPolicyRoutes?: (origins: { policyOrigin: string; simulationOrigin: string }) => Route[];
@@ -1885,15 +1885,18 @@ async function startProductionWorld(directory: string, options: ProductionWorldO
   };
   const adminSecret = 'task08-production-admin';
   const playerNames = ['player', 'other'];
+  const administratorName = options.administrator ?? 'player';
+  assert.equal(playerNames.includes(administratorName), true, 'the configured administrator must be a local player');
+  const administratorHandle = `@${administratorName}@${new URL(origins.authority).host}`;
   const additionalPolicyRoutes = options.additionalPolicyRoutes?.({ policyOrigin: origins.policy, simulationOrigin: origins.simulation }) ?? [];
   const additionalSimulationRoutes = options.additionalSimulationRoutes?.({ policyOrigin: origins.policy, simulationOrigin: origins.simulation }) ?? [];
   const authority = await createAuthorityApp({
-    origin: origins.authority, storeFile: join(directory, 'authority.json'), adminSecret, playerNames,
+    origin: origins.authority, storeFile: join(directory, 'authority.json'), adminSecret, playerNames, administrator: administratorHandle,
     ...(options.administratorNames === undefined ? {} : { administratorNames: options.administratorNames }),
     ...(options.accountPasswords === undefined ? {} : { accountPasswords: options.accountPasswords })
   });
-  const policy = await createPolicyApp({ origin: origins.policy, storeFile: join(directory, 'policy.json'), authorityOrigin: origins.authority, playerNames, peerOrigin: origins.simulation, adminSecret, additionalRoutes: additionalPolicyRoutes });
-  const simulation = await createSimulationApp({ origin: origins.simulation, storeFile: join(directory, 'simulation.json'), authorityOrigin: origins.authority, playerNames, peerOrigin: origins.policy, adminSecret, additionalRoutes: additionalSimulationRoutes });
+  const policy = await createPolicyApp({ origin: origins.policy, storeFile: join(directory, 'policy.json'), authorityOrigin: origins.authority, playerNames, administrator: administratorHandle, peerOrigin: origins.simulation, adminSecret, additionalRoutes: additionalPolicyRoutes });
+  const simulation = await createSimulationApp({ origin: origins.simulation, storeFile: join(directory, 'simulation.json'), authorityOrigin: origins.authority, playerNames, administrator: administratorHandle, peerOrigin: origins.policy, adminSecret, additionalRoutes: additionalSimulationRoutes });
   await Promise.all([
     authority.authority.listen(authorityPort, '127.0.0.1'),
     policy.host.listen(policyPort, '127.0.0.1'),
@@ -1942,6 +1945,13 @@ async function startProductionWorld(directory: string, options: ProductionWorldO
       login: { status: 'signed-in', homeServer: new URL(origins.authority).host, nativeToken }
     };
   }
+  const administratorActorId = authority.ids.players[administratorName]!;
+  const registryDigest = await fetch(`${origins.authority}/local/home/digest-request`, {
+    method: 'POST', headers: adminHeaders, body: JSON.stringify({ actor: administratorActorId, resourceActor: authority.ids.actor.registry })
+  });
+  assert.equal(registryDigest.status, 202);
+  assert.equal(await authority.authority.server.processOutbox(), 1);
+  assert.equal(await authority.authority.server.processInbox(), 1);
   return {
     origins, adminSecret, authority, policy, simulation, accounts, nativeTokens,
     ...(governor === undefined ? {} : { governor }),
@@ -3258,12 +3268,10 @@ async function refreshActivityAction(origin: string, accountId: string, actionId
 
 test('administration page retains authorized targets without world IO and refresh isolates a failed source', { timeout: 120_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-task10-admin-page-'));
-  const world = await startProductionWorld(directory, { administratorNames: ['governor'] });
+  const world = await startProductionWorld(directory);
   const opened = await openProductionClient(join(directory, 'client.json'), world, {
-    administratorBindings: [{ accountId: world.accounts.first.id, authorityActorIds: [world.policy.ids.actor, world.simulation.ids.actor, world.authority.ids.actor.registry], credentialSource: 'territory-admin' }],
-    administratorCredentials: { 'territory-admin': world.adminSecret }
+    administratorBindings: [{ accountId: world.accounts.first.id, authorityActorIds: [world.policy.ids.actor, world.simulation.ids.actor, world.authority.ids.actor.registry] }]
   });
-  await opened.application.state.transaction((state) => { if (world.governor) state.accounts[world.governor.id] = world.governor; });
   const accountId = world.accounts.first.id;
   try {
     const readCalls = opened.calls.length;
@@ -3317,14 +3325,12 @@ test('administration page retains authorized targets without world IO and refres
   }
 });
 
-test('administration controls use bound credentials, current values, and governor-native Home availability', { timeout: 180_000 }, async () => {
+test('administration controls use bound login-derived tokens, current values, and administrator Home availability', { timeout: 180_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-task10-admin-controls-'));
-  const world = await startProductionWorld(directory, { administratorNames: ['governor'] });
+  const world = await startProductionWorld(directory);
   const opened = await openProductionClient(join(directory, 'client.json'), world, {
-    administratorBindings: [{ accountId: world.accounts.first.id, authorityActorIds: [world.policy.ids.actor, world.simulation.ids.actor, world.authority.ids.actor.registry], credentialSource: 'territory-admin' }],
-    administratorCredentials: { 'territory-admin': world.adminSecret }
+    administratorBindings: [{ accountId: world.accounts.first.id, authorityActorIds: [world.policy.ids.actor, world.simulation.ids.actor, world.authority.ids.actor.registry] }]
   });
-  await opened.application.state.transaction((state) => { if (world.governor) state.accounts[world.governor.id] = world.governor; });
   const first = world.accounts.first;
   const control = (authorityId: string, name: string, inputs: Record<string, unknown>, accountId = first.id) =>
     administrationControl(opened.client.origin, { accountId, authorityId, control: name, inputs });
@@ -3377,24 +3383,25 @@ test('administration controls use bound credentials, current values, and governo
     assert.equal(otherAdoption.status, 200);
     assert.equal((await world.authority.registry.state(otherVessel)).adoption, false, 'the selected vessel, not the default vessel, receives the adoption change');
 
-    const governor = world.governor!;
-    const governorToken = governor.login.status === 'signed-in' ? governor.login.nativeToken : '';
-    const homeRefresh = await administrationRefresh(opened.client.origin, { accountId: governor.id, authorityId: world.authority.ids.actor.home });
+    const nativeToken = first.login.status === 'signed-in' ? first.login.nativeToken : '';
+    const homeAdminToken = await deriveDiplomaticToken(nativeToken, world.authority.ids.actor.home);
+    const homeRefresh = await administrationRefresh(opened.client.origin, { accountId: first.id, authorityId: world.authority.ids.actor.home });
     assert.equal(homeRefresh.status, 200);
     const homeText = JSON.stringify(homeRefresh.body);
     assert.match(homeText, /availability/i);
     assert.match(homeText, new RegExp(escapeRegExp(`@other@${new URL(world.origins.authority).host}`)));
     const homeCalls = opened.calls.filter((call) => new URL(call.url).origin === world.origins.authority && call.url.includes('/local/home/accounts'));
     assert.ok(homeCalls.length > 0);
-    assert.ok(homeCalls.every((call) => call.authorization === `Bearer ${governorToken}`), 'Home availability uses the governor native token');
+    assert.ok(homeCalls.every((call) => call.authorization === `Bearer ${homeAdminToken}`), 'Home availability uses the administrator login-derived token');
+    assert.equal(homeCalls.some((call) => call.authorization === `Bearer ${nativeToken}`), false, 'Home availability never uses the administrator native token');
     assert.equal(homeCalls.some((call) => call.authorization === `Bearer ${world.adminSecret}`), false, 'Home availability never uses the administrator secret');
 
-    const availability = await control(world.authority.ids.actor.home, 'availability', { handle: `@other@${new URL(world.origins.authority).host}`, available: false }, governor.id);
+    const availability = await control(world.authority.ids.actor.home, 'availability', { handle: `@other@${new URL(world.origins.authority).host}`, available: false });
     assert.equal(availability.status, 200);
     const availabilityAction = actionFromBody(availability.body);
     assert.match(JSON.stringify(availabilityAction.intent), /availability/i);
     assert.match(JSON.stringify(availabilityAction.intent.inputs), /false/);
-    const homeAccounts = await fetch(`${world.origins.authority}/local/home/accounts`, { headers: { Authorization: `Bearer ${governorToken}` } });
+    const homeAccounts = await fetch(`${world.origins.authority}/local/home/accounts`, { headers: { Authorization: `Bearer ${homeAdminToken}` } });
     assert.equal(homeAccounts.status, 200);
     const homeAccountsBody = await homeAccounts.json() as { accounts: Array<{ handle: string; available: boolean }> };
     assert.equal(homeAccountsBody.accounts.find((account) => account.handle === `@other@${new URL(world.origins.authority).host}`)?.available, false);
@@ -3410,7 +3417,7 @@ test('administration controls use bound credentials, current values, and governo
     assert.ok([403, 404].includes(unbound.status), 'an unbound account cannot execute a control');
     assert.equal(opened.calls.length, callsBeforeRejection, 'an unbound account cannot trigger a credentialed request');
 
-    assertNoSecrets([admission.body, facilities.body, tick.body, adoption.body, homeRefresh.body, availability.body], [world.adminSecret, governorToken, ...Object.values(world.nativeTokens)]);
+    assertNoSecrets([admission.body, facilities.body, tick.body, adoption.body, homeRefresh.body, availability.body], [world.adminSecret, homeAdminToken, ...Object.values(world.nativeTokens)]);
   } finally {
     await opened.client.close();
     await opened.application.close();
@@ -3423,8 +3430,7 @@ test('administration approves and rejects manual entry requests with real Regist
   const directory = await mkdtemp(join(tmpdir(), 'fctp-task10-admin-requests-'));
   const world = await startProductionWorld(directory);
   const opened = await openProductionClient(join(directory, 'client.json'), world, {
-    administratorBindings: [{ accountId: world.accounts.first.id, authorityActorIds: [world.policy.ids.actor, world.simulation.ids.actor], credentialSource: 'territory-admin' }],
-    administratorCredentials: { 'territory-admin': world.adminSecret }
+    administratorBindings: [{ accountId: world.accounts.first.id, authorityActorIds: [world.policy.ids.actor, world.simulation.ids.actor] }]
   });
   const accountId = world.accounts.first.id;
   const adminHeaders = { Authorization: `Bearer ${world.adminSecret}`, 'Content-Type': 'application/json' };
@@ -3525,8 +3531,7 @@ test('acknowledged administration control needs observed submitted values before
   const directory = await mkdtemp(join(tmpdir(), 'fctp-admin-unapplied-'));
   const world = await startProductionWorld(directory);
   const opened = await openProductionClient(join(directory, 'client.json'), world, {
-    administratorBindings: [{ accountId: world.accounts.first.id, authorityActorIds: [world.policy.ids.actor], credentialSource: 'policy' }],
-    administratorCredentials: { policy: world.adminSecret },
+    administratorBindings: [{ accountId: world.accounts.first.id, authorityActorIds: [world.policy.ids.actor] }],
     fetch: async (input, init) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       if (url.origin === world.origins.policy && url.pathname === '/local/admin/admission' && init?.method === 'POST') return Response.json({ accepted: true });
@@ -3550,11 +3555,10 @@ test('acknowledged administration control needs observed submitted values before
 
 test('Territory administrator reconciles another Player entry without native Registry access', { timeout: 120_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-admin-other-owner-'));
-  const world = await startProductionWorld(directory);
+  const world = await startProductionWorld(directory, { administrator: 'other' });
   const administrator = world.accounts.second;
   const opened = await openProductionClient(join(directory, 'client.json'), world, {
-    administratorBindings: [{ accountId: administrator.id, authorityActorIds: [world.policy.ids.actor], credentialSource: 'policy' }],
-    administratorCredentials: { policy: world.adminSecret }
+    administratorBindings: [{ accountId: administrator.id, authorityActorIds: [world.policy.ids.actor] }]
   });
   try {
     const configured = await administrationControl(opened.client.origin, { accountId: administrator.id, authorityId: world.policy.ids.actor, control: 'admission', inputs: { reviewMode: 'manual' } });

@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { deriveDiplomaticToken } from '@fctp/auth';
 import type { ActionDescriptor, ActionRecord, PageResponse } from '@fctp/client-sdk';
 import { createAccountService, type LoginInput } from './accounts.js';
 import { createActionService, type ActionHandler, type ActionService } from './actions.js';
@@ -17,7 +18,6 @@ import { openClientState, type ClientApplicationState } from './store.js';
 export interface AdministratorBinding {
   readonly accountId: string;
   readonly authorityActorIds: readonly string[];
-  readonly credentialSource: string;
 }
 
 export interface ClientApplication {
@@ -29,7 +29,7 @@ export interface ClientApplication {
   readonly actions: ActionService;
   readonly authoring: ReturnType<typeof createAuthoringService>;
   readonly administration: AdministrationService;
-  resolveAdministratorCredential(accountId: string, targetActorId: string): Promise<string>;
+  resolveAdministratorToken(accountId: string, targetActorId: string): Promise<string>;
   handle(request: IncomingMessage, response: ServerResponse): Promise<boolean>;
   close(): Promise<void>;
 }
@@ -39,7 +39,6 @@ export interface CreateClientApplicationOptions {
   seedServers?: readonly string[];
   fetch?: typeof fetch;
   administratorBindings?: readonly AdministratorBinding[];
-  administratorCredentials?: Readonly<Record<string, string>>;
   observationTimeoutMs?: number;
   actionTimeoutMs?: number;
   actionHandlers?: Readonly<Record<string, ActionHandler>>;
@@ -368,22 +367,18 @@ export async function createClientApplication(options: CreateClientApplicationOp
     ...(options.observationTimeoutMs === undefined ? {} : { timeoutMs: options.observationTimeoutMs })
   });
   const bindings = [...(options.administratorBindings ?? [])];
-  const credentials = { ...(options.administratorCredentials ?? {}) };
-  const resolveAdministratorCredential = async (accountId: string, targetActorId: string): Promise<string> => {
+  const resolveAdministratorToken = async (accountId: string, targetActorId: string): Promise<string> => {
     const account = await state.read((current) => current.accounts[accountId]);
     if (!account || account.login.status !== 'signed-in') throw new Error('Account is not signed in');
-    const binding = bindings.find((candidate) => candidate.accountId === accountId && candidate.authorityActorIds.includes(targetActorId));
-    if (!binding) throw new Error('No administrator binding matches the account and target');
-    if (!Object.hasOwn(credentials, binding.credentialSource)) throw new Error('Administrator credential source is not configured');
-    const credential = credentials[binding.credentialSource];
-    if (typeof credential !== 'string' || !credential) throw new Error('Administrator credential source is not configured');
-    return credential;
+    const bound = bindings.some((candidate) => candidate.accountId === accountId && candidate.authorityActorIds.includes(targetActorId));
+    if (!bound && targetActorId !== account.homeAuthority) throw new Error('No administrator binding matches the account and target');
+    return deriveDiplomaticToken(account.login.nativeToken, targetActorId);
   };
   const builtInHandlers = createWorkflowActionHandlers(state, fetcher, observations, {
     ...(options.actionTimeoutMs === undefined ? {} : { timeoutMs: options.actionTimeoutMs })
   });
   const administrationHandlers = createAdministrationActionHandlers(state, fetcher, {
-    bindings, resolveCredential: resolveAdministratorCredential,
+    bindings, resolveToken: resolveAdministratorToken,
     ...(options.actionTimeoutMs === undefined ? {} : { timeoutMs: options.actionTimeoutMs })
   });
   const actions = createActionService(state, {
@@ -404,7 +399,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
     ...(options.observationTimeoutMs === undefined ? {} : { timeoutMs: options.observationTimeoutMs })
   });
   const administration = createAdministrationService(state, fetcher, observations, actions, {
-    bindings, resolveCredential: resolveAdministratorCredential,
+    bindings, resolveToken: resolveAdministratorToken,
     ...(options.observationTimeoutMs === undefined ? {} : { timeoutMs: options.observationTimeoutMs })
   });
 
@@ -417,7 +412,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
     actions,
     authoring,
     administration,
-    resolveAdministratorCredential,
+    resolveAdministratorToken,
     async handle(request, response) {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1');
       const pathname = url.pathname;

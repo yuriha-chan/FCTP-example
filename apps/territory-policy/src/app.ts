@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Route, URI, Variety } from '@fctp/protocol';
-import { createHost, type Host } from '@fctp/server-base';
+import { configuredAdministrator, createHost, type Host } from '@fctp/server-base';
 import { ActionDiscoveryError, discoverPolicyActions } from './actions.js';
 import { territoryAProduction, type Policy } from './domain.js';
 import { expectedIssuer, installPolicyTerritory, type PolicyTerritoryLedger } from './territory.js';
@@ -16,6 +16,7 @@ export interface CreatePolicyAppOptions {
   authorityOrigin: string;
   additionalAuthorityOrigins?: string[];
   playerNames?: string[];
+  administrator?: string;
   peerOrigin: string;
   adminSecret: string;
   additionalRoutes?: Route[];
@@ -65,6 +66,8 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
   const enrollments = authorityOrigins.flatMap((authority) => playerNames.map((name) => ({ home: `${authority}/actors/home` as URI, player: `${authority}/actors/${name}` as URI })));
   const homeByPlayer = new Map(enrollments.map(({ home, player }) => [player, home]));
   const playerIds = [...homeByPlayer.keys()];
+  const administrator = options.administrator === undefined ? undefined : configuredAdministrator(options.administrator, authorityOrigins);
+  if (administrator) homeByPlayer.set(administrator.actorId, administrator.homeActorId);
   const playerId = `${authorityOrigins[0]!}/actors/${playerNames[0]!}` as URI;
   const registryIds = authorityOrigins.map((authority) => `${authority}/actors/registry` as URI);
   const portDocuments = ids.ports.map((id, index) => ({
@@ -97,18 +100,26 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
     const ledger = await territory.ledger;
     return expectedIssuer(object, ledger.visits);
   };
+  const hostRef: { current?: Host } = {};
   const host = await createHost({
     origin, storeFile: options.storeFile, ...(options.keyFile ? { keyFile: options.keyFile } : {}),
     actors: [{ name: 'territory', role: 'territory' }],
     nodeInfo: { name: 'fctp-policy' },
     ...(options.fetcher ? { fetcher: options.fetcher } : {}),
     resolveExpectedIssuer: digestIssuer,
-    authorizeAdmin: (request) => matchesSecret(request, options.adminSecret),
+    authorizeAdmin: async (request) => {
+      if (await matchesSecret(request, options.adminSecret)) return true;
+      if (!administrator) return false;
+      const header = request.headers.authorization ?? '';
+      if (!header.startsWith('Bearer ')) return false;
+      return await hostRef.current!.server.authenticateDiplomaticToken(actorId, header.slice(7)) === administrator.actorId;
+    },
     authorizeResource: async (_request, _actor, resourceId, player) => {
       const ledger = await territory.ledger;
       return { allowed: ledger.admission.publicPorts.some((port) => resourceId === port || resourceId.startsWith(`${port}/`)), ...(player && playerIds.includes(player) ? { player } : {}) };
     }
   });
+  hostRef.current = host;
   const mutableActor = host.actor('territory');
   Object.assign(mutableActor, {
     capabilities: ['Core', 'Creative Assets', 'Territory Topology', 'Territory Resources', 'Vessel Federation', 'Remote Client Access'],
@@ -117,6 +128,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
   });
   await host.server.registerActor({ actor: mutableActor });
   for (const { home, player } of enrollments) await host.server.enrollPlayer(player, home);
+  if (administrator) await host.server.enrollPlayer(administrator.actorId, administrator.homeActorId);
   const territory = installPolicyTerritory(host, {
     name: 'territory', portIds: ids.ports, routeIds: ids.routes,
     routes: routes.map((route) => ({ id: route.id as URI, from: route.from as string, to: route.to as string })),

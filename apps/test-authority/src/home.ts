@@ -218,6 +218,24 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
     }
   };
 
+  const administratorActorId = authority.administratorActorId;
+  const isAdministrator = async (request: IncomingMessage): Promise<boolean> => {
+    const header = request.headers.authorization ?? '';
+    if (!header.startsWith('Bearer ')) return false;
+    const token = header.slice(7);
+    if (administratorActorId === undefined) {
+      const callerId = await service.authenticateNativeToken(token);
+      return callerId !== undefined && authority.governors.has(callerId);
+    }
+    if (await service.authenticateNativeToken(token) === administratorActorId) return true;
+    const administrator = await readPlayer(administratorActorId);
+    if (!administrator || administrator.available === false || !administrator.nativeToken) return false;
+    const derived = await deriveDiplomaticToken(administrator.nativeToken, authority.actor('home').id);
+    const supplied = Buffer.from(token);
+    const expected = Buffer.from(derived);
+    return supplied.length === expected.length && timingSafeEqual(supplied, expected);
+  };
+
   authority.server.addRoute(async ({ request, response, url }) => {
     if (!url.pathname.startsWith('/local/home/')) return false;
     const sendJson = (status: number, value: unknown): void => { response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); response.end(JSON.stringify(value)); };
@@ -246,9 +264,7 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
       return true;
     }
     if (request.method === 'GET' && url.pathname === '/local/home/accounts') {
-      const header = request.headers.authorization ?? '';
-      const callerId = header.startsWith('Bearer ') ? await service.authenticateNativeToken(header.slice(7)) : undefined;
-      if (!callerId || !authority.governors.has(callerId)) { sendJson(401, { error: 'unauthorized' }); return true; }
+      if (!await isAdministrator(request)) { sendJson(401, { error: 'unauthorized' }); return true; }
       const host = new URL(authority.actor('home').id).host;
       const states = await authority.server.store.read((store) => (store.domain.home as HomeState | undefined)?.players ?? {});
       const accounts = Object.entries(authority.players).map(([name, player]) => ({ handle: `@${name}@${host}`, actorId: player.id, available: states[player.id]?.available !== false }));
@@ -257,8 +273,9 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
     }
     if (request.method === 'POST' && url.pathname === '/local/home/accounts/availability') {
       const header = request.headers.authorization ?? '';
-      const callerId = header.startsWith('Bearer ') ? await service.authenticateNativeToken(header.slice(7)) : undefined;
-      if (!callerId || !authority.governors.has(callerId)) { sendJson(401, { error: 'unauthorized' }); return true; }
+      const nativeId = header.startsWith('Bearer ') ? await service.authenticateNativeToken(header.slice(7)) : undefined;
+      if (!await isAdministrator(request)) { sendJson(401, { error: 'unauthorized' }); return true; }
+      const callerId = nativeId ?? administratorActorId;
       let body: Record<string, unknown>;
       try {
         body = await readJson(request);

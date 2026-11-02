@@ -4,6 +4,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
+import { deriveDiplomaticToken } from '@fctp/auth';
 import type { ClientApplication } from '../apps/client-server/src/app.js';
 import { startDemo } from '../apps/demo/src/launcher.js';
 
@@ -94,11 +95,17 @@ test('provides deterministic player and governor login without exposing bindings
 
   const application = demo.application;
   assert.ok(application);
-  assert.equal(typeof application.resolveAdministratorCredential, 'function');
-  assert.equal(await application.resolveAdministratorCredential(governor.account.id, demo.policy.ids.actor), 'demo-policy-admin');
-  assert.equal(await application.resolveAdministratorCredential(governor.account.id, demo.simulation.ids.actor), 'demo-sim-admin');
-  assert.equal(await application.resolveAdministratorCredential(governor.account.id, demo.authority.ids.actor.registry), 'demo-authority-admin');
-  await assert.rejects(application.resolveAdministratorCredential(player.account.id, demo.policy.ids.actor));
+  const retainedGovernor = await application.state.read((state) => state.accounts[governor.account.id]);
+  assert.ok(retainedGovernor && retainedGovernor.login.status === 'signed-in');
+  const governorNativeToken = retainedGovernor.login.nativeToken;
+  const policyToken = await deriveDiplomaticToken(governorNativeToken, demo.policy.ids.actor);
+  const simulationToken = await deriveDiplomaticToken(governorNativeToken, demo.simulation.ids.actor);
+  const authorityToken = await deriveDiplomaticToken(governorNativeToken, demo.authority.ids.actor.registry);
+  assert.equal(typeof application.resolveAdministratorToken, 'function');
+  assert.equal(await application.resolveAdministratorToken(governor.account.id, demo.policy.ids.actor), policyToken);
+  assert.equal(await application.resolveAdministratorToken(governor.account.id, demo.simulation.ids.actor), simulationToken);
+  assert.equal(await application.resolveAdministratorToken(governor.account.id, demo.authority.ids.actor.registry), authorityToken);
+  await assert.rejects(application.resolveAdministratorToken(player.account.id, demo.policy.ids.actor));
 
   const playerAccounts = await readAccounts(player.clientToken);
   assert.deepEqual(playerAccounts.accounts.map((account) => ({ id: account.id, handle: account.handle })), [{ id: player.account.id, handle: `@player@${host}` }]);
@@ -106,7 +113,7 @@ test('provides deterministic player and governor login without exposing bindings
   assert.deepEqual(governorAccounts.accounts.map((account) => ({ id: account.id, handle: account.handle })), [{ id: governor.account.id, handle: `@governor@${host}` }]);
 
   const accountsBody = JSON.stringify(playerAccounts);
-  for (const secret of ['demo-player-password', 'demo-governor-password', 'demo-authority-admin', 'demo-policy-admin', 'demo-sim-admin', 'administratorBindings', 'administratorCredentials', player.clientToken, governor.clientToken, `@governor@${host}`]) {
+  for (const secret of ['demo-player-password', 'demo-governor-password', player.clientToken, governor.clientToken, `@governor@${host}`, policyToken, simulationToken, authorityToken]) {
     assert.equal(accountsBody.includes(secret), false, secret);
   }
 });

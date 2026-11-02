@@ -55,6 +55,7 @@ export async function startDemo(options: StartDemoOptions) {
     simulation: options.adminSecrets?.simulation ?? process.env.DEMO_SIM_ADMIN_SECRET ?? 'demo-sim-admin'
   };
   const origin = (port: number): string => `http://127.0.0.1:${port}`;
+  const governorHandle = `@governor@${new URL(origin(ports.authority)).host}`;
   const dataDir = resolve(options.dataDir);
   await mkdir(dataDir, { recursive: true });
   const freshAuthority = !await storeExists(resolve(dataDir, 'authority.store.json'));
@@ -83,6 +84,7 @@ export async function startDemo(options: StartDemoOptions) {
       storeFile: resolve(dataDir, 'authority.store.json'),
       keyFile: resolve(dataDir, 'authority.keys.json'),
       adminSecret: secrets.authority,
+      administrator: governorHandle,
       playerNames: ['player', 'player-2'],
       administratorNames: ['governor'],
       accountPasswords: { player: demoPlayerPassword, 'player-2': demoPlayer2Password, governor: demoGovernorPassword }
@@ -90,13 +92,14 @@ export async function startDemo(options: StartDemoOptions) {
     policy = await createPolicyApp({
       origin: origin(ports.policy), storeFile: resolve(dataDir, 'policy.store.json'), keyFile: resolve(dataDir, 'policy.keys.json'),
       authorityOrigin: origin(ports.authority), peerOrigin: origin(ports.simulation), adminSecret: secrets.policy,
+      administrator: governorHandle,
       playerNames: ['player', 'player-2'],
       additionalRoutes: [{
         id: `${origin(ports.policy)}/objects/routes/outbound`, type: 'Route', name: 'Outbound Passage',
         from: `${origin(ports.policy)}/objects/ports/west`, to: `${origin(ports.simulation)}/objects/boundaries/east`
       }]
     });
-    simulation = await createSimulationApp({ origin: origin(ports.simulation), storeFile: resolve(dataDir, 'simulation.store.json'), keyFile: resolve(dataDir, 'simulation.keys.json'), authorityOrigin: origin(ports.authority), peerOrigin: origin(ports.policy), adminSecret: secrets.simulation, playerNames: ['player', 'player-2'] });
+    simulation = await createSimulationApp({ origin: origin(ports.simulation), storeFile: resolve(dataDir, 'simulation.store.json'), keyFile: resolve(dataDir, 'simulation.keys.json'), authorityOrigin: origin(ports.authority), peerOrigin: origin(ports.policy), adminSecret: secrets.simulation, administrator: governorHandle, playerNames: ['player', 'player-2'] });
 
     await authority.authority.listen(ports.authority, '127.0.0.1');
     await policy.host.listen(ports.policy, '127.0.0.1');
@@ -116,16 +119,18 @@ export async function startDemo(options: StartDemoOptions) {
       if (!admission.ok) throw new Error(`Demo admission fixture failed: HTTP ${admission.status}`);
     }
     if (freshAuthority) {
-      for (const name of ['player', 'player-2']) {
+      for (const name of ['player', 'player-2', 'governor']) {
         const playerId = authority.ids.players[name]!;
         await authority.home.issueNativeToken(playerId);
         for (const territory of [policy, simulation]) {
           await authority.home.requestDigest(playerId, { id: territory.ids.actor, inbox: territory.host.actor('territory').inbox });
         }
       }
+      await authority.home.requestDigest(authority.ids.players.governor!, { id: authority.ids.actor.registry, inbox: authority.authority.actor('registry').inbox as string });
     }
     for (let round = 0; round < 3; round += 1) {
       await authority.authority.server.processOutbox();
+      await authority.authority.server.processInbox();
       await policy.host.server.processInbox();
       await simulation.host.server.processInbox();
     }
@@ -134,15 +139,10 @@ export async function startDemo(options: StartDemoOptions) {
       storeFile: resolve(dataDir, 'client.store.json'),
       seedServers: [origins.authority, origins.policy, origins.simulation],
       administratorBindings: [
-        { accountId: governorAccountId, authorityActorIds: [authority.ids.actor.registry], credentialSource: 'authority-administrator' },
-        { accountId: governorAccountId, authorityActorIds: [policy.ids.actor], credentialSource: 'policy-administrator' },
-        { accountId: governorAccountId, authorityActorIds: [simulation.ids.actor], credentialSource: 'simulation-administrator' }
-      ],
-      administratorCredentials: {
-        'authority-administrator': secrets.authority,
-        'policy-administrator': secrets.policy,
-        'simulation-administrator': secrets.simulation
-      }
+        { accountId: governorAccountId, authorityActorIds: [authority.ids.actor.registry] },
+        { accountId: governorAccountId, authorityActorIds: [policy.ids.actor] },
+        { accountId: governorAccountId, authorityActorIds: [simulation.ids.actor] }
+      ]
     });
     clientServer = await startClientServer({ port: ports.client, application });
     authority.authority.startWorkers();

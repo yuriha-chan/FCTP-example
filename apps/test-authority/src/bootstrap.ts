@@ -1,8 +1,8 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
-import type { FCTPActor } from '@fctp/protocol';
+import type { FCTPActor, URI } from '@fctp/protocol';
 import type { GeneratedActorKey } from '@fctp/identity';
-import { createHost, FctpServer, type ActivityHandler, type FctpServerOptions } from '@fctp/server-base';
+import { configuredAdministrator, createHost, FctpServer, type ActivityHandler, type FctpServerOptions } from '@fctp/server-base';
 
 export type AuthorityRole = 'registry' | 'home' | 'player';
 export type AuthorityActors = Record<AuthorityRole, FCTPActor & Record<string, unknown>> & Record<string, FCTPActor & Record<string, unknown>>;
@@ -12,6 +12,7 @@ export interface CreateAuthorityOptions {
   storeFile: string;
   keyFile?: string;
   adminSecret?: string;
+  administrator?: string;
   playerNames?: string[];
   administratorNames?: string[];
   fetcher?: typeof fetch;
@@ -29,8 +30,10 @@ export interface Authority {
   readonly players: Readonly<Record<string, FCTPActor & Record<string, unknown>>>;
   readonly governors: ReadonlySet<string>;
   readonly primaryPlayerName: string;
+  readonly administratorActorId?: URI;
   actor(role: AuthorityRole): AuthorityActors[AuthorityRole];
   key(role: AuthorityRole): GeneratedActorKey;
+  isAdministrator(request: IncomingMessage, resourceActorId: URI): Promise<boolean>;
   registerActor(name: string, actor: FCTPActor & Record<string, unknown>): Promise<void>;
   listen(port?: number, host?: string): Promise<{ port: number; close: () => Promise<void> }>;
   startWorkers(intervalMs?: number): void;
@@ -49,6 +52,7 @@ export async function createAuthority(options: CreateAuthorityOptions): Promise<
   const primaryPlayerName = playerNames[0]!;
   const accountNames = [...playerNames, ...administratorNames];
   const playerRoles = new Set(accountNames);
+  const administrator = options.administrator === undefined ? undefined : configuredAdministrator(options.administrator, [new URL(options.origin).origin]);
   const descriptors = [...roles.slice(0, 2).map((name) => ({ name, role: name })), ...accountNames.map((name) => ({ name, role: 'player' }))];
   const host = await createHost({
     origin: options.origin,
@@ -66,6 +70,12 @@ export async function createAuthority(options: CreateAuthorityOptions): Promise<
     }
   });
   const actors = host.actors as AuthorityActors;
+  const administratorActorId = administrator?.actorId;
+  if (administratorActorId !== undefined && !accountNames.some((name) => actors[name]!.id === administratorActorId)) {
+    await host.close();
+    throw new TypeError('Configured administrator must be a local account');
+  }
+  for (const name of accountNames) await host.server.enrollPlayer(actors[name]!.id, actors.home!.id);
   const players = Object.fromEntries(accountNames.map((name) => [name, actors[name]!])) as Record<string, FCTPActor & Record<string, unknown>>;
   const governors = new Set(administratorNames.map((name) => actors[name]!.id));
   return {
@@ -75,7 +85,14 @@ export async function createAuthority(options: CreateAuthorityOptions): Promise<
     players,
     governors,
     primaryPlayerName,
+    ...(administratorActorId ? { administratorActorId } : {}),
     actor: (role) => role === 'player' ? actors[primaryPlayerName]! : actors[role],
+    isAdministrator: async (request, resourceActorId) => {
+      if (administratorActorId === undefined) return false;
+      const authorization = request.headers.authorization ?? '';
+      if (!authorization.startsWith('Bearer ')) return false;
+      return await host.server.authenticateDiplomaticToken(resourceActorId, authorization.slice(7)) === administratorActorId;
+    },
     key: (role) => host.key(role),
     registerActor: async (name, actor) => {
       const key = host.keys[name];

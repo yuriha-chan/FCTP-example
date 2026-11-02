@@ -10,6 +10,7 @@ export interface CreateAuthorityAppOptions {
   storeFile: string;
   keyFile?: string;
   adminSecret: string;
+  administrator?: string;
   fetcher?: typeof fetch;
   adoption?: boolean;
   playerNames?: string[];
@@ -40,6 +41,7 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
     storeFile: options.storeFile,
     ...(options.keyFile ? { keyFile: options.keyFile } : {}),
     adminSecret: options.adminSecret,
+    ...(options.administrator ? { administrator: options.administrator } : {}),
     ...(options.playerNames ? { playerNames: options.playerNames } : {}),
     ...(options.administratorNames ? { administratorNames: options.administratorNames } : {}),
     nodeInfo: { name: 'fctp-authority' },

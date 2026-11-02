@@ -35,12 +35,11 @@ export class AdministrationRequestError extends Error {
 export interface AdministrationBinding {
   accountId: string;
   authorityActorIds: readonly string[];
-  credentialSource: string;
 }
 
 export interface AdministrationServiceOptions {
   bindings: readonly AdministrationBinding[];
-  resolveCredential: (accountId: string, authorityId: string) => Promise<string>;
+  resolveToken: (accountId: string, authorityId: string) => Promise<string>;
   timeoutMs?: number;
 }
 
@@ -136,14 +135,9 @@ export function createAdministrationActionHandlers(
     if (!authority) return undefined;
     return { authorityId: authority.actorId, server: authority.server, roles: [...authority.roles], ...(authority.name === undefined ? {} : { name: authority.name }) };
   });
-  const tokenFor = async (accountId: string, authorityId: string, kind: AdministrationTargetKind): Promise<string> => {
-    const account = await accountFor(accountId);
-    if (kind === 'home') {
-      if (account.homeAuthority !== authorityId) throw new Error('Home governance requires the issuing Home authority');
-      if (new URL(authorityId).host !== account.login.homeServer) throw new Error('Home governance requires the issuing Home server');
-      return account.login.nativeToken;
-    }
-    return options.resolveCredential(accountId, authorityId);
+  const tokenFor = async (accountId: string, authorityId: string): Promise<string> => {
+    await accountFor(accountId);
+    return options.resolveToken(accountId, authorityId);
   };
 
   return {
@@ -155,7 +149,7 @@ export function createAdministrationActionHandlers(
         const body = isRecord(input.intent.inputs.inputs) ? input.intent.inputs.inputs : {};
         const path = administrationControlPath(kind, control);
         if (!authorityId || !path) throw new Error('Unsupported administration control');
-        const token = await tokenFor(input.accountId, authorityId, kind);
+        const token = await tokenFor(input.accountId, authorityId);
         let evidenceBaseline: Array<{ source: string; observedAt: string; changes: Record<string, unknown> }> | undefined;
         if (control === 'tick') {
           const target = await targetFor(authorityId);
@@ -173,9 +167,8 @@ export function createAdministrationActionHandlers(
         if (input.action.submission.status !== 'accepted') return { status: 'unverified', error: 'Administration submission was not confirmed' };
         const authorityId = typeof input.intent.inputs.authorityId === 'string' ? input.intent.inputs.authorityId : '';
         const control = typeof input.intent.inputs.control === 'string' ? input.intent.inputs.control : '';
-        const kind = typeof input.intent.inputs.authorityKind === 'string' ? input.intent.inputs.authorityKind as AdministrationTargetKind : 'policy';
         if (!authorityId) return { status: 'unverified', error: 'Administration target is missing' };
-        const token = await tokenFor(input.accountId, authorityId, kind);
+        const token = await tokenFor(input.accountId, authorityId);
         const target = await targetFor(authorityId);
         if (!target) return { status: 'unverified', error: 'Administration target is no longer known' };
         const read = await call((signal) => readAdministrationTarget(fetcher, target, token, signal));
@@ -197,7 +190,7 @@ export function createAdministrationActionHandlers(
         const requestId = typeof input.intent.inputs.requestId === 'string' ? input.intent.inputs.requestId : '';
         const decision = input.intent.inputs.decision === 'reject' ? 'reject' : 'approve';
         if (!authorityId || !requestId) throw new Error('Administration decision scope is missing');
-        const token = await options.resolveCredential(input.accountId, authorityId);
+        const token = await options.resolveToken(input.accountId, authorityId);
         const path = `/local/admin/entry-requests/${encodeURIComponent(requestId)}/${decision}`;
         const reason = typeof input.intent.inputs.reason === 'string' ? input.intent.inputs.reason : undefined;
         const submission = await call((signal) => submitAdministrationPost(fetcher, authorityId, path, token, reason === undefined ? {} : { reason }, signal));
@@ -210,7 +203,7 @@ export function createAdministrationActionHandlers(
         const authorityId = typeof input.intent.inputs.authorityId === 'string' ? input.intent.inputs.authorityId : '';
         const target = await targetFor(authorityId);
         if (!requestId || !target) return { status: 'unverified', error: 'Territory or request reference is missing' };
-        const token = await options.resolveCredential(input.accountId, authorityId);
+        const token = await options.resolveToken(input.accountId, authorityId);
         const read = await call((signal) => readAdministrationTarget(fetcher, target, token, signal));
         const entries = Array.isArray(read.value.requests) ? read.value.requests : [];
         const entry = entries.find((value) => isRecord(value) && (value.requestId === requestId || record(value.request).id === requestId));
@@ -287,15 +280,9 @@ export function createAdministrationService(
     return 'policy';
   };
 
-  const tokenFor = async (account: AccountRecord & { login: { status: 'signed-in'; nativeToken: string } }, target: AdministrationTarget, kind: AdministrationTargetKind): Promise<string> => {
-    if (kind === 'home') {
-      if (account.homeAuthority !== target.authorityId) throw new AdministrationRequestError(403, 'home-authority-mismatch');
-      const targetHost = new URL(target.authorityId).host;
-      if (account.login.homeServer !== targetHost) throw new AdministrationRequestError(403, 'home-origin-mismatch');
-      return account.login.nativeToken;
-    }
+  const tokenFor = async (account: AccountRecord & { login: { status: 'signed-in'; nativeToken: string } }, target: AdministrationTarget): Promise<string> => {
     try {
-      return await options.resolveCredential(account.id, target.authorityId);
+      return await options.resolveToken(account.id, target.authorityId);
     } catch (error) {
       throw new AdministrationRequestError(403, errorMessage(error));
     }
@@ -400,8 +387,7 @@ export function createAdministrationService(
       const targets = await targetsFor(account);
       const target = targets.find((candidate) => candidate.authorityId === input.authorityId);
       if (!target) throw new AdministrationRequestError(403, 'unknown-target');
-      const kind = await kindFor(account.id, target);
-      const token = await tokenFor(account, target, kind);
+      const token = await tokenFor(account, target);
       await observations.refresh<Record<string, unknown>>({
         key: administrationKey(account.id),
         source: target.authorityId,
@@ -418,7 +404,7 @@ export function createAdministrationService(
       const kind = await kindFor(account.id, target, input.control);
       if (!administrationControlPath(kind, input.control)) throw new AdministrationRequestError(400, 'unsupported-control');
       if (input.control === 'adoption' && (typeof input.inputs.vesselId !== 'string' || !input.inputs.vesselId || typeof input.inputs.adoption !== 'boolean')) throw new AdministrationRequestError(400, 'vessel-and-adoption-required');
-      await tokenFor(account, target, kind);
+      await tokenFor(account, target);
       const action = await actions.submit({
         accountId: account.id,
         targetId: target.authorityId,
@@ -446,7 +432,7 @@ export function createAdministrationService(
       const vesselId = typeof vessel.id === 'string' ? vessel.id : '';
       const registryId = typeof vessel.registry === 'string' ? vessel.registry : '';
       if (!vesselId || !registryId) throw new AdministrationRequestError(400, 'request-scope-missing');
-      await tokenFor(account, target, kind);
+      await tokenFor(account, target);
       const action = await actions.submit({
         accountId: account.id,
         targetId: target.authorityId,

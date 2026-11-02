@@ -67,6 +67,11 @@ export function installRegistry(authority: Authority, options: InstallRegistryOp
   const resolveExpectedIssuer = async (sender: URI, object: unknown): Promise<URI | undefined> => {
     if (!object || typeof object !== 'object') return undefined;
     const event = object as Record<string, unknown>;
+    if ('tokenDigest' in event || 'tokenRevoke' in event) {
+      const declared = typeof event.actor === 'string' ? event.actor : undefined;
+      if (!declared || !Object.values(authority.players).some((player) => player.id === declared)) return undefined;
+      return authority.actor('home').id;
+    }
     const collection = await readCollection();
     const vesselId = typeof event.vessel === 'string' ? event.vessel : undefined;
     const exact = event.type === 'EntryRejected' && typeof event.request === 'string'
@@ -169,7 +174,10 @@ export function installRegistry(authority: Authority, options: InstallRegistryOp
     send(404); return true;
   });
 
-  async function admin(request: IncomingMessage): Promise<boolean> { return options.adminAuthorized ? options.adminAuthorized(request) : authority.server.checkAdmin(request, authority.actor('registry')); }
+  async function admin(request: IncomingMessage): Promise<boolean> {
+    return (options.adminAuthorized ? await options.adminAuthorized(request) : await authority.server.checkAdmin(request, authority.actor('registry')))
+      || await authority.isAdministrator(request, registryId);
+  }
   async function playerAccess(request: IncomingMessage, vesselId?: URI): Promise<{ allowed: boolean; status: number; vessel?: URI }> {
     if (await admin(request)) return { allowed: true, status: 200 };
     const possessor = options.authenticatePlayer ? await options.authenticatePlayer(request) : undefined;

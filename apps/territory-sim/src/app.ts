@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { validateModel, type Area, type Asset, type CargoManifest, type Listing, type Production, type Route, type URI, type Variety, type Vessel } from '@fctp/protocol';
-import { createHost, type FctpServerOptions } from '@fctp/server-base';
+import { configuredAdministrator, createHost, type FctpServerOptions } from '@fctp/server-base';
 import { discoverSimulationActions } from './actions.js';
 import { installSimulationTerritory, simulationExpectedIssuer, type SimulationTerritory } from './territory.js';
 
@@ -12,6 +12,7 @@ export interface CreateSimulationAppOptions {
   authorityOrigin: string;
   additionalAuthorityOrigins?: string[];
   playerNames?: string[];
+  administrator?: string;
   peerOrigin: string;
   adminSecret: string;
   additionalRoutes?: Route[];
@@ -70,6 +71,8 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
   const enrollments = authorityOrigins.flatMap((authorityOrigin) => playerNames.map((name) => ({ home: `${authorityOrigin}/actors/home` as URI, player: `${authorityOrigin}/actors/${name}` as URI })));
   const homeByPlayer = new Map(enrollments.map(({ home, player }) => [player, home]));
   const playerIds = [...homeByPlayer.keys()];
+  const administrator = options.administrator === undefined ? undefined : configuredAdministrator(options.administrator, authorityOrigins);
+  if (administrator) homeByPlayer.set(administrator.actorId, administrator.homeActorId);
   const playerId = `${authorityOrigins[0]!}/actors/${playerNames[0]!}` as URI;
   const registryIds = authorityOrigins.map((authorityOrigin) => `${authorityOrigin}/actors/registry` as URI);
   const areas: Area[] = [
@@ -107,7 +110,13 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
     actors: [{ name: 'territory', role: 'territory' }],
     nodeInfo: { name: 'fctp-simulation' },
     ...(options.fetcher ? { fetcher: options.fetcher } : {}),
-    authorizeAdmin: async (request) => safeSecret(request, options.adminSecret),
+    authorizeAdmin: async (request) => {
+      if (safeSecret(request, options.adminSecret)) return true;
+      if (!administrator) return false;
+      const header = request.headers.authorization ?? '';
+      if (!header.startsWith('Bearer ')) return false;
+      return await hostRef.current!.server.authenticateDiplomaticToken(actorId, header.slice(7)) === administrator.actorId;
+    },
     authorizeResource: resourceAuth,
     resolveExpectedIssuer: async (_local, sender, activity) => {
       if (activity.object && typeof activity.object === 'object' && ('tokenDigest' in activity.object || 'tokenRevoke' in activity.object)) {
@@ -134,6 +143,7 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
   });
   hostRef.current = host;
   for (const { home, player } of enrollments) await host.server.enrollPlayer(player, home);
+  if (administrator) await host.server.enrollPlayer(administrator.actorId, administrator.homeActorId);
   const territory = installSimulationTerritory(host, {
     port: mainPort, route: routeId,
     config: {
@@ -185,7 +195,7 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
     const auth = request.headers.authorization ?? '';
     const player = auth.startsWith('Bearer ') ? await host.server.authenticateDiplomaticToken(actorId, auth.slice(7)) : undefined;
     const isPlayer = Boolean(player && playerIds.includes(player));
-    const isAdmin = await safeSecret(request, options.adminSecret);
+    const isAdmin = await host.server.checkAdmin(request, host.actor('territory'));
     if (url.pathname === '/local/actions' && request.method === 'GET') {
       response.setHeader('Cache-Control', 'no-store');
       if (!isPlayer) { json(response, player || isAdmin ? 403 : 401, { error: player || isAdmin ? 'forbidden' : 'unauthorized' }); return true; }
