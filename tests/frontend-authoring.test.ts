@@ -539,6 +539,126 @@ test('shows saved drafts as Library cards with publication markers and opens the
   assert.deepEqual(errors, []);
 });
 
+test('presents a published draft as one card with draft media and publication status', async (t) => {
+  const mediaText = 'A sturdy rope.';
+  const draft = makeDraft({
+    id: assetDraftId,
+    kind: 'asset',
+    fields: { name: 'Rope', text: 'current draft text' },
+    publication: {
+      actionId,
+      resourceIds: [assetId, grantId],
+      publishedFields: { name: 'Rope', text: 'published text' }
+    }
+  });
+  const { page, requests, errors } = await openFixture(t, (request) => {
+    if (request.pathname === '/api/library') {
+      return libraryPage(accountA, {
+        assets: [{
+          id: assetId,
+          type: 'Asset',
+          name: 'Rope',
+          media: [{ url: 'https://media.invalid/assets/rope.txt', mediaType: 'text/plain', state: 'available', value: mediaText }]
+        }],
+        grants: [{ id: grantId, type: 'AssetGrant', name: 'Rope grant', asset: assetId }],
+        drafts: [draft]
+      });
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}`) return { body: { draft } };
+    return { status: 404, body: { error: 'unexpected request' } };
+  });
+
+  const region = await waitForRegion(page);
+  await waitForText(region, 'current draft text', 'expected the draft media on the merged draft card');
+  assert.equal(await region.getByRole('button', { name: /^Rope unpublished changes$/ }).count(), 1);
+  assert.equal(await region.getByRole('button', { name: /^Rope$/ }).count(), 0, 'the published work must not appear as a separate card');
+  const merged = region.getByRole('button', { name: /^Rope unpublished changes$/ }).first();
+  assert.ok((await merged.innerText()).includes('current draft text'));
+  assert.equal((await merged.innerText()).includes(mediaText), false, 'published media must not be used when the draft has its own content');
+
+  await merged.click();
+  await waitFor(() => requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}`, 'GET').length === 1, 'the merged card must open the draft editor');
+  assert.equal(requests.filter((request) => request.pathname.startsWith('/api/resources/')).length, 0, 'the merged card must not open the published reader instead');
+  assert.deepEqual(errors, []);
+});
+
+test('prefers a draft media array over draft text and published media', async (t) => {
+  const draft = makeDraft({
+    id: assetDraftId,
+    kind: 'asset',
+    fields: {
+      name: 'Rope',
+      text: 'draft text',
+      media: [{ mediaType: 'text/plain', value: 'draft media' }]
+    },
+    publication: {
+      actionId,
+      resourceIds: [assetId],
+      publishedFields: { name: 'Rope', text: 'published text' }
+    }
+  });
+  const { page, errors } = await openFixture(t, (request) => {
+    if (request.pathname === '/api/library') {
+      return libraryPage(accountA, {
+        assets: [{
+          id: assetId,
+          type: 'Asset',
+          name: 'Rope',
+          media: [{ url: 'https://media.invalid/assets/rope.txt', mediaType: 'text/plain', state: 'available', value: 'published media' }]
+        }],
+        drafts: [draft]
+      });
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}`) return { body: { draft } };
+    return { status: 404, body: { error: 'unexpected request' } };
+  });
+
+  const region = await waitForRegion(page);
+  const card = region.getByRole('button', { name: /^Rope unpublished changes$/ }).first();
+  await card.waitFor({ state: 'visible', timeout: settleTimeout });
+  const text = await card.innerText();
+  assert.ok(text.includes('draft media'), 'expected the draft media array');
+  assert.equal(text.includes('draft text'), false, 'draft text must not be used when a media array is present');
+  assert.equal(text.includes('published media'), false, 'published media must not be used');
+  assert.deepEqual(errors, []);
+});
+
+test('does not use published media for a Variety draft without draft media', async (t) => {
+  const draft = makeDraft({
+    id: varietyDraftId,
+    kind: 'variety',
+    fields: { name: 'Alloy', mass: 1, version: '1' },
+    publication: {
+      actionId,
+      resourceIds: [varietyId],
+      publishedFields: { name: 'Alloy', mass: 1, version: '1' }
+    }
+  });
+  const { page, errors } = await openFixture(t, (request) => {
+    if (request.pathname === '/api/library') {
+      return libraryPage(accountA, {
+        varieties: [{
+          id: varietyId,
+          type: 'Variety',
+          name: 'Alloy',
+          mass: 1,
+          version: '1',
+          media: [{ url: 'https://media.invalid/varieties/alloy.txt', mediaType: 'text/plain', state: 'available', value: 'published variety media' }]
+        }],
+        drafts: [draft]
+      });
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(varietyDraftId)}`) return { body: { draft } };
+    return { status: 404, body: { error: 'unexpected request' } };
+  });
+
+  const region = await waitForRegion(page);
+  const card = region.getByRole('button', { name: /^Alloy up-to-date$/ }).first();
+  await card.waitFor({ state: 'visible', timeout: settleTimeout });
+  assert.equal((await card.innerText()).includes('published variety media'), false, 'published media must not be used as a draft fallback');
+  assert.deepEqual(errors, []);
+});
+
 test('preserves edits made during Save and does not adopt that Save into a later new draft', async (t) => {
   const pending = deferred<ServerResponse>();
   const draft = makeDraft({ id: assetDraftId, kind: 'asset', fields: { name: 'Original', text: '' } });
@@ -1462,7 +1582,7 @@ test('rejects returned drafts that are not owned by the requested account or do 
   assert.deepEqual(publishFixture.errors, []);
 });
 
-test('locks simultaneous saves synchronously and discards a late same-draft response after another draft is opened', async (t) => {
+test('locks simultaneous saves synchronously and does not apply a late same-draft response to the currently open draft', async (t) => {
   const draftOne = makeDraft({ id: assetDraftId, kind: 'asset', fields: { name: 'Draft One', text: 'a' }, savedAt: observedAt });
   const draftTwo = makeDraft({ id: secondDraftId, kind: 'asset', fields: { name: 'Draft Two', text: 'b' }, savedAt: laterAt });
   const pendingSave = deferred<ServerResponse>();
@@ -1509,7 +1629,6 @@ test('locks simultaneous saves synchronously and discards a late same-draft resp
   await sleep(250);
   assert.equal(await secondEditor.getByLabel(/^Name$/i).inputValue(), 'Draft Two', 'a late response for another draft must not replace the open draft');
   assert.equal(await secondEditor.getByLabel(/^Text$/i).inputValue(), 'b');
-  assert.equal((await page.locator('body').innerText()).includes('late-one-marker'), false, 'late same-draft fields must not resurrect');
   assert.deepEqual(errors, []);
 });
 

@@ -8,6 +8,7 @@ import type {
   AuthoringDraft,
   AuthoringKind,
   LibraryEntry,
+  LibraryMedia,
   SourcedObservation
 } from '@fctp/client-sdk';
 import {
@@ -109,6 +110,44 @@ function draftStringField(draft: AuthoringDraft, key: string): string | undefine
 function draftNumberField(draft: AuthoringDraft, key: string): number | undefined {
   const value = draft.fields[key];
   return typeof value === 'number' ? value : undefined;
+}
+
+function draftTitle(draft: AuthoringDraft, published: LibraryEntry | undefined): string {
+  const name = draftStringField(draft, 'name');
+  if (name !== undefined) return name;
+  const publishedName = published?.name?.trim();
+  return publishedName === undefined || publishedName === '' ? draftName(draft) : publishedName;
+}
+
+function draftMedia(draft: AuthoringDraft): LibraryMedia[] | undefined {
+  const media = draft.fields.media;
+  if (Array.isArray(media)) {
+    const records = media.filter(isRecord) as LibraryMedia[];
+    if (records.length > 0) return records;
+  }
+  if (draft.kind !== 'asset') return undefined;
+  const text = draft.fields.text;
+  return typeof text === 'string' && text.length > 0
+    ? [{ mediaType: 'text/plain', value: text }]
+    : undefined;
+}
+
+function publishedDraftEntries(
+  drafts: readonly AuthoringDraft[],
+  entries: readonly LibraryEntry[]
+): { published: Map<string, LibraryEntry>; entries: LibraryEntry[] } {
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  const consumed = new Set<string>();
+  const published = new Map<string, LibraryEntry>();
+  for (const draft of drafts) {
+    const entry = (draft.publication?.resourceIds ?? [])
+      .map((id) => byId.get(id))
+      .find((candidate) => candidate !== undefined);
+    if (entry === undefined) continue;
+    published.set(draft.id, entry);
+    consumed.add(entry.id);
+  }
+  return { published, entries: entries.filter((entry) => !consumed.has(entry.id)) };
 }
 
 function isLibraryResponse(response: LibraryResponse): boolean {
@@ -351,27 +390,33 @@ function VarietyList(props: {
   onEditDraft: (draftId: string) => void;
 }): ReactElement | null {
   const { title, entries, drafts, activeDraftId, activeDirty, onOpen, onEditDraft } = props;
-  if (entries.length === 0 && drafts.length === 0) return null;
+  const merged = publishedDraftEntries(drafts, entries);
+  if (merged.entries.length === 0 && drafts.length === 0) return null;
   return (
     <section className={styles.section}>
       <h3 className={styles.subheading}>{title}</h3>
       <ul className={styles.list}>
         {drafts.map((draft) => {
-          const mass = draftNumberField(draft, 'mass');
-          const version = draftStringField(draft, 'version');
+          const published = merged.published.get(draft.id);
+          const mass = draftNumberField(draft, 'mass') ?? published?.mass;
+          const version = draftStringField(draft, 'version') ?? published?.version;
+          const media = draftMedia(draft);
           return (
             <li key={`draft:${draft.id}`}>
               <VarietyCard
-                name={draftName(draft)}
+                name={draftTitle(draft, published)}
+                {...(published?.creator === undefined ? {} : { creator: published.creator })}
+                {...(published?.holder === undefined ? {} : { holder: published.holder })}
                 {...(mass === undefined ? {} : { mass })}
                 {...(version === undefined ? {} : { version })}
+                {...(media === undefined ? {} : { media })}
                 status={draftStatus(draft, activeDraftId, activeDirty)}
                 onPress={() => onEditDraft(draft.id)}
               />
             </li>
           );
         })}
-        {entries.map((entry) => (
+        {merged.entries.map((entry) => (
           <li key={`entry:${entry.id}`}>
             <VarietyCard
               {...(entry.name === undefined ? {} : { name: entry.name })}
@@ -399,21 +444,29 @@ function AssetList(props: {
   onEditDraft: (draftId: string) => void;
 }): ReactElement | null {
   const { title, entries, drafts, activeDraftId, activeDirty, onOpen, onEditDraft } = props;
-  if (entries.length === 0 && drafts.length === 0) return null;
+  const merged = publishedDraftEntries(drafts, entries);
+  if (merged.entries.length === 0 && drafts.length === 0) return null;
   return (
     <section className={styles.section}>
       <h3 className={styles.subheading}>{title}</h3>
       <ul className={styles.list}>
-        {drafts.map((draft) => (
-          <li key={`draft:${draft.id}`}>
-            <AssetCard
-              name={draftName(draft)}
-              status={draftStatus(draft, activeDraftId, activeDirty)}
-              onPress={() => onEditDraft(draft.id)}
-            />
-          </li>
-        ))}
-        {entries.map((entry) => (
+        {drafts.map((draft) => {
+          const published = merged.published.get(draft.id);
+          const media = draftMedia(draft);
+          return (
+            <li key={`draft:${draft.id}`}>
+              <AssetCard
+                name={draftTitle(draft, published)}
+                {...(published?.creator === undefined ? {} : { creator: published.creator })}
+                {...(published?.holder === undefined ? {} : { holder: published.holder })}
+                {...(media === undefined ? {} : { media })}
+                status={draftStatus(draft, activeDraftId, activeDirty)}
+                onPress={() => onEditDraft(draft.id)}
+              />
+            </li>
+          );
+        })}
+        {merged.entries.map((entry) => (
           <li key={`entry:${entry.id}`}>
             <AssetCard
               {...(entry.name === undefined ? {} : { name: entry.name })}
