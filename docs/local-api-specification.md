@@ -195,7 +195,7 @@ Territory cargo endpoints MUST identify the Player from D and MUST require the a
 
 Unless a route explicitly states that it observes an external resource, a `GET` route returns the server's retained local state. A `GET` route MUST NOT advance simulation time.
 
-Only the optional simulation tick endpoint `POST /local/admin/tick`, when a Territory server provides it, advances the simulation tick.
+Only the optional simulation tick endpoint `POST /local/territory/admin/tick`, when a Territory server provides it, advances the simulation tick.
 
 ### 6.2 Accepted requests
 
@@ -363,7 +363,7 @@ A `RegistryEvent` is an FCTP event recorded by the Registry for the vessel, incl
 
 ### 7.9 Policy state view
 
-The policy state endpoint (`GET /local/state`) returns:
+The policy state endpoint (`GET /local/territory/state`) returns:
 
 ```ts
 interface PolicyStateView {
@@ -429,7 +429,7 @@ interface TerritoryState {
 
 ### 7.10 Simulation state view
 
-The simulation state endpoint (`GET /local/state`) returns a `SimulationTerritoryState` containing at least:
+The simulation state endpoint (`GET /local/territory/state`) returns a `SimulationTerritoryState` containing at least:
 
 - `simulation`: the simulation state, including tick, stock, facilities, jobs, and vessels;
 - `visits`: admitted local visits keyed by entry request;
@@ -642,21 +642,21 @@ The following policy endpoints are optional. A Territory server MAY implement an
 
 | Method and path | Authorization | Request | Success |
 |---|---|---|---|
-| `GET /local/info` | None | None | `200` with kind, Actor, IDs, endpoints, production |
+| `GET /local/territory/info` | None | None | `200` with kind, Actor, IDs, endpoints, production |
 | `GET /local/territory/permissions` | Territory diplomatic token | None | `200 { "<territory-handle>": string[] }` |
-| `GET /local/actions?vessel=<URI>` | Player diplomatic token | Required query | `200` with `LocalActionDiscovery` |
-| `GET /local/state` | Player diplomatic token or Territory administrator | None | `200` with `PolicyStateView` |
-| `POST /local/traverse` | Player diplomatic token | `{ vessel: string, route: string }` | `200 { success: true, event: VoyageEvent }` or a domain-failure result |
-| `POST /local/mine` | Player diplomatic token | `{ count: integer, variety?: string }` | `200` with `OperationResult` |
-| `POST /local/manufacture` | Player diplomatic token | `{ count: integer, recipe: "ore-to-metal" }` | `200` with `OperationResult` |
-| `POST /local/transfer` | Player diplomatic token | `{ count, variety, direction }` | `200` with `OperationResult` |
-| `POST /local/load` | Player diplomatic token and active visit possessor | `{ vessel, variety, count }` | `200` with `OperationResult` |
-| `POST /local/unload` | Player diplomatic token and active visit possessor | `{ vessel, variety, count }` | `200` with `OperationResult` |
-| `POST /local/admin/policy` | Territory administrator | Full policy object | `200` with `OperationResult`, or `400` for invalid policy |
-| `POST /local/admin/admission` | Territory administrator | Partial admission object | `200 { admission }` |
-| `GET /local/admin/entry-requests` | Territory administrator | None | `200 { requests }` |
-| `POST /local/admin/entry-requests/:requestId/approve` | Territory administrator | Optional `{ reason?: string }` | `200` with decision result |
-| `POST /local/admin/entry-requests/:requestId/reject` | Territory administrator | Optional `{ reason?: string }` | `200` with decision result |
+| `GET /local/territory/actions?vessel=<URI>` | Player diplomatic token | Required query | `200` with `LocalActionDiscovery` |
+| `GET /local/territory/state` | Player diplomatic token or Territory administrator | None | `200` with `PolicyStateView` |
+| `POST /local/territory/traverse` | Player diplomatic token | `{ vessel: string, route: string }` | `200 { success: true, event: VoyageEvent }` or a domain-failure result |
+| `POST /local/territory/mine` | Player diplomatic token | `{ count: integer, variety?: string }` | `200` with `OperationResult` |
+| `POST /local/territory/manufacture` | Player diplomatic token | `{ count: integer, recipe: "ore-to-metal" }` | `200` with `OperationResult` |
+| `POST /local/territory/transfer` | Player diplomatic token | `{ count, variety, direction }` | `200` with `OperationResult` |
+| `POST /local/territory/load` | Player diplomatic token and active visit possessor | `{ vessel, variety, count }` | `200` with `OperationResult` |
+| `POST /local/territory/unload` | Player diplomatic token and active visit possessor | `{ vessel, variety, count }` | `200` with `OperationResult` |
+| `POST /local/territory/admin/policy` | Territory administrator | Full policy object | `200` with `OperationResult`, or `400` for invalid policy |
+| `POST /local/territory/admin/admission` | Territory administrator | Partial admission object | `200 { admission }` |
+| `GET /local/territory/admin/entry-requests` | Territory administrator | None | `200 { requests }` |
+| `POST /local/territory/admin/entry-requests/:requestId/approve` | Territory administrator | Optional `{ reason?: string }` | `200` with decision result |
+| `POST /local/territory/admin/entry-requests/:requestId/reject` | Territory administrator | Optional `{ reason?: string }` | `200` with decision result |
 
 ### 11.1 Permission map
 
@@ -664,7 +664,7 @@ The following policy endpoints are optional. A Territory server MAY implement an
 
 ### 11.2 Action discovery
 
-`GET /local/actions` MUST require a diplomatic Player token and a parseable `vessel` URI.
+`GET /local/territory/actions` MUST require a diplomatic Player token and a parseable `vessel` URI.
 
 If the vessel has no retained local visit, the Territory server MUST fetch the vessel document and MUST require:
 
@@ -687,11 +687,11 @@ Errors:
 
 ### 11.3 Policy state
 
-`GET /local/state` MUST return `PolicyStateView` from retained Policy state. It MUST NOT advance time or observe remote state.
+`GET /local/territory/state` MUST return `PolicyStateView` from retained Policy state. It MUST NOT advance time or observe remote state.
 
 ### 11.4 Local traversal
 
-`POST /local/traverse` MUST accept `vessel` and `route` as required strings. It MUST move a persisted local visit to the route destination and record an authoritative local `VoyageEvent`.
+`POST /local/territory/traverse` MUST accept `vessel` and `route` as required strings. It MUST move a persisted local visit to the route destination and record an authoritative local `VoyageEvent`.
 
 Errors:
 
@@ -717,7 +717,7 @@ Successful `load` and `unload` MUST queue a `CargoOperationEvent` for the Regist
 
 ### 11.6 Policy administration
 
-`POST /local/admin/policy` MUST accept the full Policy object. The server MUST require:
+`POST /local/territory/admin/policy` MUST accept the full Policy object. The server MUST require:
 
 - a `recipes` array with unique nonempty IDs, configured output Varieties, positive output counts, and positive configured ingredient counts;
 - a boolean `miningPermitted`;
@@ -728,9 +728,9 @@ Successful `load` and `unload` MUST queue a `CargoOperationEvent` for the Regist
 
 Invalid policy MUST return `400 { "error": "invalid-input" }` or a `400` `OperationResult` depending on whether validation or domain update rejected it.
 
-`POST /local/admin/admission` MUST accept a partial admission object. Allowed keys are the four admission lists plus `mismatchPolicy`, `reviewMode`, and `publicPorts`. Unknown keys MUST be rejected. Success MUST return the resulting admission policy.
+`POST /local/territory/admin/admission` MUST accept a partial admission object. Allowed keys are the four admission lists plus `mismatchPolicy`, `reviewMode`, and `publicPorts`. Unknown keys MUST be rejected. Success MUST return the resulting admission policy.
 
-`GET /local/admin/entry-requests` MUST return retained entry-request records. Decision routes MUST apply to the exact request ID and return a decision result containing `requestId`, `accepted`, and any available `reason`, `decision`, `event`, and `decidedAt`.
+`GET /local/territory/admin/entry-requests` MUST return retained entry-request records. Decision routes MUST apply to the exact request ID and return a decision result containing `requestId`, `accepted`, and any available `reason`, `decision`, `event`, and `decidedAt`.
 
 A terminal decision MUST be returned again without reversal or a second event. An unknown request MUST return `404 { "error": "not-found" }`.
 
@@ -744,20 +744,20 @@ The following simulation endpoints are optional. A Territory server MAY implemen
 
 | Method and path | Authorization | Request | Success |
 |---|---|---|---|
-| `GET /local/info` | None | None | `200` with kind, Actor, IDs, endpoints, production |
+| `GET /local/territory/info` | None | None | `200` with kind, Actor, IDs, endpoints, production |
 | `GET /local/territory/permissions` | Territory diplomatic token | None | `200 { "<territory-handle>": string[] }` |
-| `GET /local/actions?vessel=<URI>` | Player diplomatic token | Required query | `200` with `LocalActionDiscovery` |
-| `GET /local/state` | Player diplomatic token or Territory administrator | None | `200` with `SimulationTerritoryState` |
-| `POST /local/mine` | Player diplomatic token | `{ count, duration? }` | `200 { job: number }` |
-| `POST /local/manufacture` | Player diplomatic token | `{ count, recipe: "native" | "imported" }` | `200 { job: number }` |
-| `POST /local/load` | Player diplomatic token and visit possessor | `{ entryRequest, cargo, duration }` | `200 { job: number }` |
-| `POST /local/unload` | Player diplomatic token and visit possessor | `{ entryRequest, cargo, duration }` | `200 { job: number }` |
-| `POST /local/admin/facilities` | Territory administrator | Partial facility sections | `200 { ok: true }` |
-| `POST /local/admin/tick` | Territory administrator | No required body; any body ignored | `200` with `SimulationTerritoryState` |
-| `POST /local/admin/admission` | Territory administrator | Partial admission object | `200 { admission }` |
-| `GET /local/admin/entry-requests` | Territory administrator | None | `200 { requests }` |
-| `POST /local/admin/entry-requests/:requestId/approve` | Territory administrator | Optional `{ reason?: string }` | `200` with decision result |
-| `POST /local/admin/entry-requests/:requestId/reject` | Territory administrator | Optional `{ reason?: string }` | `200` with decision result |
+| `GET /local/territory/actions?vessel=<URI>` | Player diplomatic token | Required query | `200` with `LocalActionDiscovery` |
+| `GET /local/territory/state` | Player diplomatic token or Territory administrator | None | `200` with `SimulationTerritoryState` |
+| `POST /local/territory/mine` | Player diplomatic token | `{ count, duration? }` | `200 { job: number }` |
+| `POST /local/territory/manufacture` | Player diplomatic token | `{ count, recipe: "native" | "imported" }` | `200 { job: number }` |
+| `POST /local/territory/load` | Player diplomatic token and visit possessor | `{ entryRequest, cargo, duration }` | `200 { job: number }` |
+| `POST /local/territory/unload` | Player diplomatic token and visit possessor | `{ entryRequest, cargo, duration }` | `200 { job: number }` |
+| `POST /local/territory/admin/facilities` | Territory administrator | Partial facility sections | `200 { ok: true }` |
+| `POST /local/territory/admin/tick` | Territory administrator | No required body; any body ignored | `200` with `SimulationTerritoryState` |
+| `POST /local/territory/admin/admission` | Territory administrator | Partial admission object | `200 { admission }` |
+| `GET /local/territory/admin/entry-requests` | Territory administrator | None | `200 { requests }` |
+| `POST /local/territory/admin/entry-requests/:requestId/approve` | Territory administrator | Optional `{ reason?: string }` | `200` with decision result |
+| `POST /local/territory/admin/entry-requests/:requestId/reject` | Territory administrator | Optional `{ reason?: string }` | `200` with decision result |
 
 ### 12.1 Permission map
 
@@ -765,7 +765,7 @@ The following simulation endpoints are optional. A Territory server MAY implemen
 
 ### 12.2 Action discovery
 
-`GET /local/actions` MUST require a Player diplomatic token and a vessel query. An administrator credential alone MUST NOT be sufficient.
+`GET /local/territory/actions` MUST require a Player diplomatic token and a vessel query. An administrator credential alone MUST NOT be sufficient.
 
 If the vessel has an active local visit, the server MUST use that visit and MUST require the visit possessor to equal the Player. Otherwise the server MUST fetch the vessel document and MUST require:
 
@@ -787,7 +787,7 @@ Errors:
 
 ### 12.3 Simulation state
 
-`GET /local/state` MUST return the retained `SimulationTerritoryState`, including simulation state, visits, decisions, evidence, admission, and requests. It MUST NOT advance a tick.
+`GET /local/territory/state` MUST return the retained `SimulationTerritoryState`, including simulation state, visits, decisions, evidence, admission, and requests. It MUST NOT advance a tick.
 
 ### 12.4 Player operations
 
@@ -814,7 +814,7 @@ Invalid operation shape MUST return `400 { "error": "invalid-operation-input" }`
 
 ### 12.5 Simulation administration
 
-`POST /local/admin/facilities` MUST accept any subset of:
+`POST /local/territory/admin/facilities` MUST accept any subset of:
 
 ```json
 {
@@ -826,11 +826,11 @@ Invalid operation shape MUST return `400 { "error": "invalid-operation-input" }`
 
 A supplied section MUST contain all of its fields. `mining.capacity` and `manufacturing.slots`/`time` MUST be positive safe integers; `port.capacity` and `port.berths` MUST be nonnegative safe integers. Invalid input MUST return `400 { "error": "invalid-operation-input" }`. Domain configuration failures MUST be surfaced as `400`.
 
-`POST /local/admin/tick` MUST ignore any request body and MUST advance the simulation by one tick. It MUST return the resulting state. It MAY produce berthing, departure, cargo, or production effects according to the current state.
+`POST /local/territory/admin/tick` MUST ignore any request body and MUST advance the simulation by one tick. It MUST return the resulting state. It MAY produce berthing, departure, cargo, or production effects according to the current state.
 
-`POST /local/admin/admission` MUST accept the four admission lists plus `reviewMode`, `manifestPolicy`, and `requireExitEvidence`. Unknown keys MUST be rejected. Invalid input MUST return `400 { "error": "invalid-admission" }`.
+`POST /local/territory/admin/admission` MUST accept the four admission lists plus `reviewMode`, `manifestPolicy`, and `requireExitEvidence`. Unknown keys MUST be rejected. Invalid input MUST return `400 { "error": "invalid-admission" }`.
 
-`GET /local/admin/entry-requests` MUST return retained entry-request records. Decision routes MUST apply to the exact request ID and return a decision result containing `requestId`, `accepted`, and any available `reason`, `decision`, `event`, and `decidedAt`.
+`GET /local/territory/admin/entry-requests` MUST return retained entry-request records. Decision routes MUST apply to the exact request ID and return a decision result containing `requestId`, `accepted`, and any available `reason`, `decision`, `event`, and `decidedAt`.
 
 A rejected request MUST produce an `EntryRejected` event. An approved request MAY remain pending until a later tick produces the `BerthingEvent`; the decision response MUST NOT by itself prove berthing. Terminal decisions MUST be returned again without reversal.
 
@@ -838,7 +838,7 @@ A rejected request MUST produce an `EntryRejected` event. An approved request MA
 
 ### 13.1 Discovery payloads
 
-A Territory server that provides `/local/info` MUST return at least `kind`, `actor`, `ids`, and `endpoints`, and MAY include `production`:
+A Territory server that provides `/local/territory/info` MUST return at least `kind`, `actor`, `ids`, and `endpoints`, and MAY include `production`:
 
 ```json
 {
