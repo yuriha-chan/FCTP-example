@@ -195,7 +195,7 @@ Build the corresponding browser page/form as each backend slice becomes usable. 
 
 **Files:** backend authoring/resource services and authority adapter; frontend Library, authoring, and resource-reader views.
 
-1. Adapt `GET /local/authoring`, `POST /local/authoring/assets`, `POST /local/authoring/varieties`, and the player's creations collection.
+1. Adapt `GET /local/repository/authoring`, `POST /local/repository/authoring/assets`, `POST /local/repository/authoring/varieties`, and the player's creations collection.
 2. Persist drafts with readable fields and repeatable production ingredients/yields, location, tool, duration, and resource references supported by the existing authoring model.
 3. List published resources and open known resources for reading and ingredient/reference selection.
 4. Preserve authority-side validation, signing, and Asset-grant behavior when publishing Varieties that reference owned Assets.

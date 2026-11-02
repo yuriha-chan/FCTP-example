@@ -16,41 +16,41 @@ test('Player authoring publishes signed private catalogs and inert media with du
     const tokens = new Map<string, string>();
     for (const name of ['player', 'p2', 'p3', 'p4', 'p5']) tokens.set(name, await app.home.issueNativeToken(app.ids.players[name]!));
     const auth = (name: string) => ({ Authorization: `Bearer ${tokens.get(name)!}`, 'Content-Type': 'application/json' });
-    assert.equal((await fetch(`${origin}/local/authoring`)).status, 401);
+    assert.equal((await fetch(`${origin}/local/repository/authoring`)).status, 401);
     for (const credential of ['invalid-token', 'admin', 'diplomatic-credential']) {
-      assert.equal((await fetch(`${origin}/local/authoring`, { headers: { Authorization: `Bearer ${credential}` } })).status, 401);
+      assert.equal((await fetch(`${origin}/local/repository/authoring`, { headers: { Authorization: `Bearer ${credential}` } })).status, 401);
     }
     for (const name of ['player', 'p3', 'p4', 'p5']) {
-      const privateCatalog = await fetch(`${origin}/local/authoring`, { headers: auth(name) }).then((response) => response.json()) as { assets: unknown[]; varieties: unknown[]; grants: unknown[] };
+      const privateCatalog = await fetch(`${origin}/local/repository/authoring`, { headers: auth(name) }).then((response) => response.json()) as { assets: unknown[]; varieties: unknown[]; grants: unknown[] };
       assert.deepEqual([privateCatalog.assets, privateCatalog.varieties, privateCatalog.grants], [[], [], []]);
     }
-    const foreignAttempt = await fetch(`${origin}/local/authoring/assets`, { method: 'POST', headers: auth('p2'), body: JSON.stringify({ name: 'spoof', text: 'x', holder: app.ids.players.player }) });
+    const foreignAttempt = await fetch(`${origin}/local/repository/authoring/assets`, { method: 'POST', headers: auth('p2'), body: JSON.stringify({ name: 'spoof', text: 'x', holder: app.ids.players.player }) });
     assert.equal(foreignAttempt.status, 400);
     const before = await app.authority.server.store.read((state) => state.domain.authoring);
     assert.equal(before, undefined);
     const unchanged = () => app.authority.server.store.read((state) => ({ authoring: state.domain.authoring, objects: state.objects, outboxArchive: state.outboxArchive }));
     const initialState = await unchanged();
-    const malformed = await fetch(`${origin}/local/authoring/assets`, { method: 'POST', headers: auth('p2'), body: '{' });
+    const malformed = await fetch(`${origin}/local/repository/authoring/assets`, { method: 'POST', headers: auth('p2'), body: '{' });
     assert.equal(malformed.status, 400);
-    const invalidProduction = await fetch(`${origin}/local/authoring/varieties`, { method: 'POST', headers: auth('p2'), body: JSON.stringify({ name: 'Invalid', mass: 1, version: '1', production: [{ type: 'manufacture', duration: 1, yield: [], location: [{ id: 'https://example.test/area' }] }] }) });
+    const invalidProduction = await fetch(`${origin}/local/repository/authoring/varieties`, { method: 'POST', headers: auth('p2'), body: JSON.stringify({ name: 'Invalid', mass: 1, version: '1', production: [{ type: 'manufacture', duration: 1, yield: [], location: [{ id: 'https://example.test/area' }] }] }) });
     assert.equal(invalidProduction.status, 400);
-    const spoofVariety = await fetch(`${origin}/local/authoring/varieties`, { method: 'POST', headers: auth('p2'), body: JSON.stringify({ name: 'Spoof', mass: 1, version: '1', holder: app.ids.players.player }) });
+    const spoofVariety = await fetch(`${origin}/local/repository/authoring/varieties`, { method: 'POST', headers: auth('p2'), body: JSON.stringify({ name: 'Spoof', mass: 1, version: '1', holder: app.ids.players.player }) });
     assert.equal(spoofVariety.status, 400);
     assert.deepEqual(await unchanged(), initialState);
-    const assetResponse = await fetch(`${origin}/local/authoring/assets`, { method: 'POST', headers: auth('p2'), body: JSON.stringify({ name: 'Text', text: '<b>inert\ntext</b>' }) });
+    const assetResponse = await fetch(`${origin}/local/repository/authoring/assets`, { method: 'POST', headers: auth('p2'), body: JSON.stringify({ name: 'Text', text: '<b>inert\ntext</b>' }) });
     assert.equal(assetResponse.status, 201);
     const { asset, activity } = await assetResponse.json() as { asset: Record<string, unknown>; activity: Record<string, unknown> };
     const media = (asset.media as Array<{ url: string }>)[0]!;
     const mediaResponse = await fetch(media.url);
     assert.equal(mediaResponse.headers.get('content-type'), 'text/plain; charset=utf-8');
     assert.equal(await mediaResponse.text(), '<b>inert\ntext</b>');
-    assert.equal((await fetch(`${origin}/local/authoring`, { headers: auth('player') })).status, 200);
-    assert.equal(((await (await fetch(`${origin}/local/authoring`, { headers: auth('p2') })).json()) as { assets: unknown[] }).assets.length, 1);
+    assert.equal((await fetch(`${origin}/local/repository/authoring`, { headers: auth('player') })).status, 200);
+    assert.equal(((await (await fetch(`${origin}/local/repository/authoring`, { headers: auth('p2') })).json()) as { assets: unknown[] }).assets.length, 1);
     const playerThreeBeforeForeignLink = await unchanged();
-    const foreignLink = await fetch(`${origin}/local/authoring/varieties`, { method: 'POST', headers: auth('p3'), body: JSON.stringify({ name: 'Foreign', mass: 1, version: '1', asset: asset.id }) });
+    const foreignLink = await fetch(`${origin}/local/repository/authoring/varieties`, { method: 'POST', headers: auth('p3'), body: JSON.stringify({ name: 'Foreign', mass: 1, version: '1', asset: asset.id }) });
     assert.equal(foreignLink.status, 403);
     assert.deepEqual(await unchanged(), playerThreeBeforeForeignLink);
-    const varietyResponse = await fetch(`${origin}/local/authoring/varieties`, { method: 'POST', headers: auth('p2'), body: JSON.stringify({ name: 'Ore', mass: 2.5, version: '1', asset: asset.id, production: [{ type: 'manufacture', duration: 2, ingredients: [{ variety: 'https://example.test/raw', count: 3, data: { grade: 'a' } }], location: [{ id: 'https://example.test/area', name: 'Area', territory: 'https://example.test/territory', extension: 'kept' }], yield: [{ probability: 0.75, count: 2, data: { nested: { tag: 'kept' } }, extra: true }], custom: { arbitrary: [1, 'x'] } }] }) });
+    const varietyResponse = await fetch(`${origin}/local/repository/authoring/varieties`, { method: 'POST', headers: auth('p2'), body: JSON.stringify({ name: 'Ore', mass: 2.5, version: '1', asset: asset.id, production: [{ type: 'manufacture', duration: 2, ingredients: [{ variety: 'https://example.test/raw', count: 3, data: { grade: 'a' } }], location: [{ id: 'https://example.test/area', name: 'Area', territory: 'https://example.test/territory', extension: 'kept' }], yield: [{ probability: 0.75, count: 2, data: { nested: { tag: 'kept' } }, extra: true }], custom: { arbitrary: [1, 'x'] } }] }) });
     assert.equal(varietyResponse.status, 201);
     const result = await varietyResponse.json() as { variety: Record<string, unknown>; activity: Record<string, unknown>; grant: Record<string, unknown> };
     assert.equal((result.grant as { grantee: string }).grantee, app.ids.players.p2);
@@ -84,10 +84,10 @@ test('Player authoring publishes signed private catalogs and inert media with du
     app = await createAuthorityApp({ origin, storeFile, adminSecret: 'admin', playerNames: ['player', 'p2', 'p3', 'p4', 'p5'] });
     await app.authority.listen(port);
     assert.equal((await fetch(media.url)).status, 200);
-    assert.equal(((await (await fetch(`${origin}/local/authoring`, { headers: auth('p2') })).json()) as { varieties: unknown[] }).varieties.length, 1);
-    const concurrent = await Promise.all(Array.from({ length: 5 }, (_, index) => fetch(`${origin}/local/authoring/assets`, { method: 'POST', headers: auth('p3'), body: JSON.stringify({ name: `Asset ${index}`, text: `${index}` }) })));
+    assert.equal(((await (await fetch(`${origin}/local/repository/authoring`, { headers: auth('p2') })).json()) as { varieties: unknown[] }).varieties.length, 1);
+    const concurrent = await Promise.all(Array.from({ length: 5 }, (_, index) => fetch(`${origin}/local/repository/authoring/assets`, { method: 'POST', headers: auth('p3'), body: JSON.stringify({ name: `Asset ${index}`, text: `${index}` }) })));
     assert.ok(concurrent.every((response) => response.status === 201));
-    const playerThree = await fetch(`${origin}/local/authoring`, { headers: auth('p3') }).then((response) => response.json()) as { assets: Array<{ id: string }> };
+    const playerThree = await fetch(`${origin}/local/repository/authoring`, { headers: auth('p3') }).then((response) => response.json()) as { assets: Array<{ id: string }> };
     assert.equal(new Set(playerThree.assets.map((item) => item.id)).size, 5);
   } finally { await app.authority.close(); await rm(directory, { recursive: true, force: true }); }
 });

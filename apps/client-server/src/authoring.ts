@@ -66,7 +66,7 @@ function creationsKey(accountId: string): string {
 }
 
 function catalogSource(account: AccountRecord): string {
-  return new URL('/local/authoring', publicationEndpoint(account, 'asset')).href;
+  return new URL('/local/repository/authoring', publicationEndpoint(account, 'asset')).href;
 }
 
 function draftFromStored(value: Record<string, unknown> | undefined): AuthoringDraft | undefined {

@@ -113,9 +113,9 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
       vessels: ids.vessels,
       endpoints: [
         { method: 'GET', path: '/local/info', authentication: 'none' },
-        { method: 'GET', path: '/local/authoring', authentication: 'native Player' },
-        { method: 'POST', path: '/local/authoring/assets', authentication: 'native Player' },
-        { method: 'POST', path: '/local/authoring/varieties', authentication: 'native Player' },
+        { method: 'GET', path: '/local/repository/authoring', authentication: 'native Player' },
+        { method: 'POST', path: '/local/repository/authoring/assets', authentication: 'native Player' },
+        { method: 'POST', path: '/local/repository/authoring/varieties', authentication: 'native Player' },
         { method: 'GET', path: '/local/home/endpoints', authentication: 'none' },
         { method: 'GET', path: '/local/home/accounts', authentication: 'native Home governor' },
         { method: 'GET', path: '/local/home/permissions', authentication: 'authenticated account' },

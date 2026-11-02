@@ -551,9 +551,9 @@ A Repository server MUST implement the following authoring routes.
 
 | Method and path | Required permission | Request | Success |
 |---|---|---|---|
-| `GET /local/authoring` | player | None | `200 { actor, assets, varieties, grants }` for the authenticated Player only |
-| `POST /local/authoring/assets` | player | `{ name: string, text: string }` | `201 { asset, activity }` |
-| `POST /local/authoring/varieties` | player | `{ name, mass, version, asset?, production? }` | `201 { variety, activity, grant? }` |
+| `GET /local/repository/authoring` | player | None | `200 { actor, assets, varieties, grants }` for the authenticated Player only |
+| `POST /local/repository/authoring/assets` | player | `{ name: string, text: string }` | `201 { asset, activity }` |
+| `POST /local/repository/authoring/varieties` | player | `{ name, mass, version, asset?, production? }` | `201 { variety, activity, grant? }` |
 
 ### 10.1 Asset authoring
 

@@ -2046,7 +2046,7 @@ async function getJson(url: URL): Promise<{ status: number; body: unknown }> {
 }
 
 async function seedAuthorityAsset(world: ProductionWorld, nativeToken: string, name: string, text: string): Promise<Record<string, unknown>> {
-  const response = await fetch(`${world.origins.authority}/local/authoring/assets`, {
+  const response = await fetch(`${world.origins.authority}/local/repository/authoring/assets`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${nativeToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, text })
@@ -2850,7 +2850,7 @@ test('library and drafts retain scoped incomplete authoring fields without world
       text: '<b>inert notice</b>',
       accountId: second.id,
       holder: 'https://foreign.test/actors/evil',
-      endpoint: 'https://foreign.test/local/authoring/assets'
+      endpoint: 'https://foreign.test/local/repository/authoring/assets'
     };
     const createdAsset = await postJson(new URL('/api/drafts', opened.client.origin), { accountId: first.id, kind: 'asset', fields: assetFields });
     assert.ok([200, 201].includes(createdAsset.status), `creating a draft returned ${createdAsset.status}`);
@@ -2970,7 +2970,7 @@ test('draft publication creates signed Asset and multi-entry Variety evidence, t
     const attackerFields = {
       accountId: second.id,
       holder: 'https://foreign.test/actors/evil',
-      endpoint: 'https://foreign.test/local/authoring/assets',
+      endpoint: 'https://foreign.test/local/repository/authoring/assets',
       target: 'https://foreign.test/actors/target'
     };
     const createdAsset = await postJson(new URL('/api/drafts', origin), {
@@ -3101,7 +3101,7 @@ test('draft publication creates signed Asset and multi-entry Variety evidence, t
     assert.equal(libraryRecords(secondAfter.body, 'varieties').length, secondVarietyCount);
     assert.equal(libraryRecords(secondAfter.body, 'varieties').some((record) => record.name === 'Foreign Alloy'), false);
 
-    const assetPosts = opened.calls.filter((call) => call.method === 'POST' && new URL(call.url).pathname === '/local/authoring/assets').length;
+    const assetPosts = opened.calls.filter((call) => call.method === 'POST' && new URL(call.url).pathname === '/local/repository/authoring/assets').length;
     assert.equal(assetPosts, 1);
     control.fail = (url) => url.pathname.includes('/objects/');
     const failedRead = await postJson(new URL(`/api/resources/${encodeURIComponent(assetRef.id)}/refresh`, origin), { accountId: first.id });
@@ -3109,7 +3109,7 @@ test('draft publication creates signed Asset and multi-entry Variety evidence, t
     const failedObservation = observationRecords(failedRead.body).find((record) => record.source === assetRef.id && (record.state === 'unavailable' || record.state === 'stale'));
     assert.ok(failedObservation, 'a failed read-back is a separate observation');
     assert.equal(typeof failedObservation.error, 'string');
-    assert.equal(opened.calls.filter((call) => call.method === 'POST' && new URL(call.url).pathname === '/local/authoring/assets').length, 1, 'publication is not retried after a read-back failure');
+    assert.equal(opened.calls.filter((call) => call.method === 'POST' && new URL(call.url).pathname === '/local/repository/authoring/assets').length, 1, 'publication is not retried after a read-back failure');
     const retainedAction = await getJson(new URL(`/api/activity/${encodeURIComponent(assetAction.id)}?accountId=${encodeURIComponent(first.id)}`, origin));
     assert.equal(retainedAction.status, 200);
     const retained = findRecord(retainedAction.body, (record) => record.id === assetAction.id && isRecord(record.submission)) as unknown as ActionRecord;
@@ -3162,7 +3162,7 @@ test('publication reconciliation observes resources without resubmission and aut
     const published = await postJson(url(`/api/drafts/${encodeURIComponent(draftId)}/publish`), { accountId });
     const action = actionFromBody(published.body);
     assert.equal(action.submission.status, 'accepted');
-    const postCount = () => opened.calls.filter((call) => call.method === 'POST' && new URL(call.url).pathname === '/local/authoring/assets').length;
+    const postCount = () => opened.calls.filter((call) => call.method === 'POST' && new URL(call.url).pathname === '/local/repository/authoring/assets').length;
     assert.equal(postCount(), 1);
     const reconciled = await postJson(url(`/api/activity/${encodeURIComponent(action.id)}/refresh`), { accountId });
     const completed = findRecord(reconciled.body, (record) => record.id === action.id && isRecord(record.submission)) as unknown as ActionRecord;
@@ -3226,15 +3226,15 @@ test('library refresh isolates two account catalogs and retains stale evidence w
     for (const call of opened.calls.filter((candidate) => candidate.authorization !== '')) {
       assert.equal(new URL(call.url).origin, world.origins.authority, 'catalog credentials only go to the issuing Home origin');
     }
-    const catalogAuthCalls = opened.calls.filter((call) => call.authorization !== '' && new URL(call.url).pathname === '/local/authoring');
-    assert.ok(catalogAuthCalls.length > 0, 'the catalog refresh authenticates only against /local/authoring');
+    const catalogAuthCalls = opened.calls.filter((call) => call.authorization !== '' && new URL(call.url).pathname === '/local/repository/authoring');
+    assert.ok(catalogAuthCalls.length > 0, 'the catalog refresh authenticates only against /local/repository/authoring');
 
-    control.fail = (url) => url.pathname === '/local/authoring' || url.pathname.includes('/creations');
+    control.fail = (url) => url.pathname === '/local/repository/authoring' || url.pathname.includes('/creations');
     const failed = await refresh(first.id);
     assert.equal(failed.status, 200, 'a failed catalog source does not erase the retained page');
     assert.match(JSON.stringify(failed.body), new RegExp(escapeRegExp(String(firstAsset.id))));
     assert.match(JSON.stringify(failed.body), /First Island Chart/);
-    const stale = observationRecords(failed.body).find((record) => typeof record.source === 'string' && record.source.includes('/local/authoring'));
+    const stale = observationRecords(failed.body).find((record) => typeof record.source === 'string' && record.source.includes('/local/repository/authoring'));
     assert.ok(stale, 'the failed catalog source keeps its observation');
     assert.equal(stale.state, 'stale', 'retained catalog evidence is stale rather than discarded');
     assert.equal(typeof stale.error, 'string');
@@ -3244,7 +3244,7 @@ test('library refresh isolates two account catalogs and retains stale evidence w
     const recovered = await refresh(first.id);
     assert.equal(recovered.status, 200);
     assert.ok(libraryRecords(recovered.body, 'assets').some((asset) => asset.id === firstAsset.id));
-    const recoveredObservation = observationRecords(recovered.body).find((record) => typeof record.source === 'string' && record.source.includes('/local/authoring'));
+    const recoveredObservation = observationRecords(recovered.body).find((record) => typeof record.source === 'string' && record.source.includes('/local/repository/authoring'));
     assert.equal(recoveredObservation?.state, 'available');
 
     assertNoSecrets([firstLibrary.body, secondLibrary.body, firstDrafts.body, failed.body, recovered.body], Object.values(world.nativeTokens));

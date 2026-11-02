@@ -748,7 +748,7 @@ async function selectCandidate(dialog: Locator, name: string): Promise<void> {
 }
 
 test('retains one Library snapshot, keeps independent source states, and refreshes only when requested', async (t) => {
-  const catalogSource = 'https://authority.invalid/local/authoring';
+  const catalogSource = 'https://authority.invalid/local/repository/authoring';
   const creationsSource = 'https://actor.invalid/actors/player/creations';
   let refreshCalls = 0;
   const { page, requests, errors } = await openFixture(t, (request) => {

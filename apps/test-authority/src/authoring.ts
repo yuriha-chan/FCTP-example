@@ -41,12 +41,12 @@ export function installAuthoring(authority: Authority, home: HomeService, origin
       send(200, { '@context': 'https://www.w3.org/ns/activitystreams', id: url.href, type: 'OrderedCollection', totalItems: catalog.assets.length + catalog.varieties.length + catalog.grants.length, orderedItems: [...catalog.assets, ...catalog.varieties, ...catalog.grants] });
       return true;
     }
-    if (!url.pathname.startsWith('/local/authoring')) return false;
+    if (!url.pathname.startsWith('/local/repository/authoring')) return false;
     if (request.method !== 'GET' && request.method !== 'POST') { send(404, { error: 'not-found' }); return true; }
     const playerId = await authenticate(request, home);
     if (!playerId) { send(401, { error: 'unauthorized' }); return true; }
-    if (request.method === 'GET' && url.pathname === '/local/authoring') { send(200, await service.catalog(playerId)); return true; }
-    if (request.method !== 'POST' || !['/local/authoring/assets', '/local/authoring/varieties'].includes(url.pathname)) { send(404, { error: 'not-found' }); return true; }
+    if (request.method === 'GET' && url.pathname === '/local/repository/authoring') { send(200, await service.catalog(playerId)); return true; }
+    if (request.method !== 'POST' || !['/local/repository/authoring/assets', '/local/repository/authoring/varieties'].includes(url.pathname)) { send(404, { error: 'not-found' }); return true; }
     try {
       const body = await readObject(request);
       const name = requiredString(body, 'name');

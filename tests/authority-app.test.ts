@@ -337,7 +337,7 @@ test('configured Home governor logs in as a Player Actor distinct from the Home 
     assert.equal(typeof aliceVessel, 'string');
     assert.equal((await fetch(aliceVessel!)).status, 200);
 
-    const assetResponse = await fetch(`${origin}/local/authoring/assets`, {
+    const assetResponse = await fetch(`${origin}/local/repository/authoring/assets`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${governor.nativeToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'Governor asset', text: 'governed text' })

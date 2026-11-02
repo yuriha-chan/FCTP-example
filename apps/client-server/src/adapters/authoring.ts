@@ -21,7 +21,7 @@ export function authoringOrigin(account: AccountRecord): string {
 }
 
 export function publicationPath(kind: AuthoringKind): string {
-  return kind === 'asset' ? '/local/authoring/assets' : '/local/authoring/varieties';
+  return kind === 'asset' ? '/local/repository/authoring/assets' : '/local/repository/authoring/varieties';
 }
 
 export function publicationEndpoint(account: AccountRecord, kind: AuthoringKind): string {
