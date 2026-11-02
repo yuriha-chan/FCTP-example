@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { deriveDiplomaticToken } from '@fctp/auth';
-import type { LocalActionDiscovery } from '@fctp/server-base';
+import { DEFAULT_ADMISSION, type LocalActionDiscovery } from '@fctp/server-base';
 import { createAuthorityApp } from '../apps/test-authority/src/app.js';
 import { createPolicyApp } from '../apps/territory-policy/src/app.js';
 import { createTerritoryState } from '../apps/territory-policy/src/domain.js';
@@ -35,7 +35,7 @@ test('policy action discovery previews exact local rules without exposing or mut
   live.portInventory[ore.id] = 1;
   live.vessels[vessel] = { capacity: 1, manifest: { entries: [] } };
   const ledger: PolicyTerritoryLedger = {
-    state: live, admission: { registryAcceptance: [registry], territoryAcceptance: [], mismatchPolicy: 'reject', publicPorts: [] },
+    state: live, admission: { ...structuredClone(DEFAULT_ADMISSION), trustedRegistry: { mode: 'allowlist', allowlist: [registry], denylist: [] }, mismatchPolicy: 'reject', publicPorts: [] },
     visits: { [vessel]: { vessel, possessor: player, registry, entryRequest: `${origin}/entry/1`, port: `${origin}/objects/ports/east`, route: `${origin}/objects/routes/approach`, departed: false, cargo: { entries: [] } } },
     decisions: {}, processed: []
   };
@@ -73,7 +73,7 @@ test('policy action previews honor a denied canonical Variety and remain read-on
   live.portInventory[metal.id] = 1;
   live.vessels[vessel] = { capacity: 5, manifest: { entries: [{ variety: metal.id, count: 1, data: {} }] } };
   const ledger: PolicyTerritoryLedger = {
-    state: live, admission: { registryAcceptance: [registry], territoryAcceptance: [], mismatchPolicy: 'reject', publicPorts: [] },
+    state: live, admission: { ...structuredClone(DEFAULT_ADMISSION), trustedRegistry: { mode: 'allowlist', allowlist: [registry], denylist: [] }, mismatchPolicy: 'reject', publicPorts: [] },
     visits: { [vessel]: { vessel, possessor: player, registry, entryRequest: `${origin}/entry/1`, port: `${origin}/objects/ports/east`, route: `${origin}/objects/routes/approach`, departed: false, cargo: { entries: [{ variety: metal.id, count: 1, data: {} }] } } },
     decisions: {}, processed: []
   };
@@ -98,9 +98,10 @@ test('policy HTTP action examples execute through an authenticated Player and re
   const territoryOrigin = `http://127.0.0.1:${await freePort()}`;
   const admin = 'policy-actions-admin';
   const authority = await createAuthorityApp({ origin: authorityOrigin, storeFile: join(directory, 'authority.json'), adminSecret: admin, playerNames: ['player', 'other'] });
-  const territory = await createPolicyApp({ origin: territoryOrigin, storeFile: join(directory, 'territory.json'), authorityOrigin, peerOrigin: 'https://peer.example', adminSecret: admin, playerNames: ['player', 'other'] });
+  const territory = await createPolicyApp({ origin: territoryOrigin, storeFile: join(directory, 'territory.json'), adminSecret: admin });
   await authority.authority.listen(Number(new URL(authorityOrigin).port));
   await territory.host.listen(Number(new URL(territoryOrigin).port));
+  await territory.territory.updateAdmissionPolicy({ trustedRegistry: { mode: 'allowlist', allowlist: [authority.ids.actor.registry!], denylist: [] } });
   t.after(async () => {
     await territory.host.close();
     await authority.authority.close();

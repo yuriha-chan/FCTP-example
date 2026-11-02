@@ -48,7 +48,7 @@ test('policy Territory accepts a signed Registry entry, produces and loads cargo
       name: 'territory', portIds: ['https://example.test/port/1'], routeIds: ['https://example.test/route/1'],
       commodities: [{ variety: territoryAProduction.ore, mass: 2 }, { variety: territoryAProduction.metal, mass: 1 }],
       initialPolicy: { miningPermitted: true, miningQuota: 10, oreReserve: 10, manufacturePermits: ['ore-to-metal'], recipes: territoryAProduction.recipes, warehouseLimits: {}, portLimits: {}, decisions: {} },
-      registryAcceptance: [registry], fetcher: options.fetcher
+      trustedRegistry: { mode: 'allowlist', allowlist: [registry], denylist: [] }, fetcher: options.fetcher
     });
     const request = {
       id: 'https://registry.test/entry/1', type: 'EntryRequest',
@@ -85,7 +85,7 @@ test('policy Territory accepts a signed Registry entry, produces and loads cargo
     assert.equal((await policy.state).vessels[request.vessel.id], undefined);
     assert.deepEqual((await policy.ledger).visits[request.vessel.id]?.cargo, exit?.cargo);
 
-    await policy.updateAdmissionPolicy({ mismatchPolicy: 'evidence', territoryAcceptance: ['http://policy.test/actors/territory'] });
+    await policy.updateAdmissionPolicy({ mismatchPolicy: 'evidence', acceptedTerritory: { mode: 'allowlist', allowlist: ['http://policy.test/actors/territory'], denylist: [] } });
     assert.equal((await policy.ledger).admission.mismatchPolicy, 'evidence');
     const returning = { ...request, id: 'https://registry.test/entry/return', cargo: exit?.cargo as { entries: [] }, journey: { events: [], exitEvidence: String(exit?.id) } };
     const returnActivity = await host.sign('registry', { '@context': ['https://www.w3.org/ns/activitystreams', 'https://fctp.example/context'], id: 'https://registry.test/activities/entry/return', type: 'Create', actor: registry, object: returning, to: [territoryId] } as never);
@@ -122,7 +122,7 @@ test('verified business rejection is delivered and admission policy changes affe
       name: 'territory', portIds: ['https://example.test/port/1'], routeIds: ['https://example.test/route/1'],
       commodities: [{ variety: territoryAProduction.ore, mass: 2 }],
       initialPolicy: { miningPermitted: true, miningQuota: 10, oreReserve: 10, manufacturePermits: [], recipes: [], warehouseLimits: {}, portLimits: {}, decisions: {} },
-      registryAcceptance: [], fetcher
+      fetcher
     });
     const request = { id: 'https://registry.test/entry/rejected', type: 'EntryRequest', vessel: { id: 'https://registry.test/vessels/returning', registry, possessor: 'https://registry.test/players/1', capacity: 20 }, cargo: { entries: [] }, journey: { events: [] }, destination: { territory: territoryId, port: 'https://example.test/port/1', route: 'https://example.test/route/1' } };
     const activity = await host.sign('registry', { '@context': ['https://www.w3.org/ns/activitystreams', 'https://fctp.example/context'], id: 'https://registry.test/activities/entry/rejected', type: 'Create', actor: registry, object: request, to: [territoryId] } as never);
@@ -133,7 +133,7 @@ test('verified business rejection is delivered and admission policy changes affe
     assert.equal(rejected.type, 'EntryRejected');
     assert.equal(rejected.request, request.id);
 
-    await policy.updateAdmissionPolicy({ registryAcceptance: [registry] });
+    await policy.updateAdmissionPolicy({ trustedRegistry: { mode: 'allowlist', allowlist: [registry], denylist: [] } });
     const allowed = { ...request, id: 'https://registry.test/entry/allowed' };
     const allowedActivity = await host.sign('registry', { '@context': ['https://www.w3.org/ns/activitystreams', 'https://fctp.example/context'], id: 'https://registry.test/activities/entry/allowed', type: 'Create', actor: registry, object: allowed, to: [territoryId] } as never);
     await host.server.receive(territoryId, allowedActivity);

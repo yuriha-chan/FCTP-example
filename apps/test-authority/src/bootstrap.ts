@@ -52,7 +52,7 @@ export async function createAuthority(options: CreateAuthorityOptions): Promise<
   const primaryPlayerName = playerNames[0]!;
   const accountNames = [...playerNames, ...administratorNames];
   const playerRoles = new Set(accountNames);
-  const administrator = options.administrator === undefined ? undefined : configuredAdministrator(options.administrator, [new URL(options.origin).origin]);
+  const administrator = options.administrator === undefined ? undefined : configuredAdministrator(options.administrator);
   const descriptors = [...roles.slice(0, 2).map((name) => ({ name, role: name })), ...accountNames.map((name) => ({ name, role: 'player' }))];
   const host = await createHost({
     origin: options.origin,

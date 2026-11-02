@@ -1,6 +1,6 @@
 import type { URI } from '@fctp/protocol';
 import { validateModel, type Vessel } from '@fctp/protocol';
-import type { LocalAction, LocalActionDiscovery } from '@fctp/server-base';
+import { entryAdmissionAllows, type LocalAction, type LocalActionDiscovery } from '@fctp/server-base';
 import { loadCargo, manufacture, mineOre, transferPortToWarehouse, transferWarehouseToPort, unloadCargo, type TerritoryState } from './domain.js';
 import type { PolicyAppIds } from './app.js';
 import type { installPolicyTerritory } from './territory.js';
@@ -23,7 +23,7 @@ export async function discoverPolicyActions(input: {
     if (!result.success || result.data.id !== input.vessel) throw new ActionDiscoveryError(400, 'invalid-vessel');
     vessel = result.data;
     if (vessel.possessor !== input.player) throw new ActionDiscoveryError(403, 'forbidden');
-    if (!ledger.admission.registryAcceptance.includes(vessel.registry)) throw new ActionDiscoveryError(403, 'registry-not-accepted');
+    if (!entryAdmissionAllows(ledger.admission, vessel.registry).allowed) throw new ActionDiscoveryError(403, 'registry-not-accepted');
   }
 
   const state = ledger.state;

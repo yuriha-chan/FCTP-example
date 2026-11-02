@@ -18,17 +18,15 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
-test('Territory factories enroll five independent authorities and enforce their Player identities over HTTP', async (t) => {
+test('Territory factories accept independent authorities and enforce their Player identities over HTTP', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-multiplayer-'));
   const origins = await Promise.all(Array.from({ length: 6 }, async () => `http://127.0.0.1:${await freePort()}`));
-  const [primary, ...rest] = origins;
-  const allowedOrigins = rest.slice(0, 4);
   const policyOrigin = `http://127.0.0.1:${await freePort()}`;
   const simulationOrigin = `http://127.0.0.1:${await freePort()}`;
   const admin = 'multiplayer-test-admin';
   const authorities = await Promise.all(origins.map((origin, index) => createAuthorityApp({ origin, storeFile: join(directory, `authority-${index}.json`), adminSecret: admin })));
-  const policy = await createPolicyApp({ origin: policyOrigin, storeFile: join(directory, 'policy.json'), authorityOrigin: primary!, additionalAuthorityOrigins: allowedOrigins, peerOrigin: simulationOrigin, adminSecret: admin });
-  const simulation = await createSimulationApp({ origin: simulationOrigin, storeFile: join(directory, 'simulation.json'), authorityOrigin: primary!, additionalAuthorityOrigins: allowedOrigins, peerOrigin: policyOrigin, adminSecret: admin });
+  const policy = await createPolicyApp({ origin: policyOrigin, storeFile: join(directory, 'policy.json'), adminSecret: admin });
+  const simulation = await createSimulationApp({ origin: simulationOrigin, storeFile: join(directory, 'simulation.json'), peerOrigin: policyOrigin, adminSecret: admin });
   const apps = [policy, simulation];
   const close = async () => {
     await Promise.all(apps.map((app) => app.host.close()));
@@ -39,27 +37,23 @@ test('Territory factories enroll five independent authorities and enforce their 
   for (let index = 0; index < authorities.length; index++) await authorities[index]!.authority.listen(Number(new URL(origins[index]!).port));
   await policy.host.listen(Number(new URL(policyOrigin).port));
   await simulation.host.listen(Number(new URL(simulationOrigin).port));
+  await policy.territory.updateAdmissionPolicy({ trustedRegistry: { mode: 'allowlist', allowlist: [authorities[0]!.authority.actor('registry').id], denylist: [] } });
+  await simulation.territory.updateAdmission({ trustedRegistry: { mode: 'allowlist', allowlist: [authorities[0]!.authority.actor('registry').id], denylist: [] } });
 
   const headers = { Authorization: `Bearer ${admin}`, 'Content-Type': 'application/json' };
   const nativeTokens: string[] = [];
-  for (const [authorityIndex, authority] of authorities.entries()) {
+  for (const authority of authorities) {
     const issueResponse = await fetch(`${new URL(authority.ids.actor.home).origin}/local/home/issue`, { method: 'POST', headers, body: '{}' });
     assert.equal(issueResponse.status, 200);
     const { nativeToken } = await issueResponse.json() as { nativeToken: string };
     nativeTokens.push(nativeToken);
     const resourceTokens = await Promise.all(apps.map(async (app) => deriveDiplomaticToken(nativeToken, app.ids.actor)));
     for (const app of apps) {
-      if (authorityIndex === 5 && app !== apps[0]) continue;
       const authorityOrigin = new URL(authority.ids.actor.home).origin;
       const digestResponse = await fetch(`${authorityOrigin}/local/home/digest-request`, { method: 'POST', headers, body: JSON.stringify({ resourceActor: app.ids.actor }) });
       assert.equal(digestResponse.status, 202);
       assert.equal(await authority.authority.server.processOutbox(), 1);
-      if (authorityIndex < 5) assert.equal(await app.host.server.processInbox(), 1);
-      else {
-        await assert.rejects(app.host.server.processInbox(), /Inbox processing failed/);
-        const diagnostic = await app.host.server.store.read((state) => state.inboxQueue.at(-1)?.diagnostic);
-        assert.equal(diagnostic, 'Token declaration Activity verification failed', 'unlisted Home token declaration is rejected');
-      }
+      assert.equal(await app.host.server.processInbox(), 1, 'every namespace-valid Home declaration is accepted');
     }
     assert.ok(resourceTokens[1]);
   }
@@ -72,8 +66,8 @@ test('Territory factories enroll five independent authorities and enforce their 
       assert.equal((await fetch(`${origin}/local/mine`, { method: 'POST', headers: authorization, body: JSON.stringify({ count: 1 }) })).status, 200);
       assert.equal((await fetch(`${origin}/local/state`, { headers: authorization })).status, 200);
     }
-    const unlistedToken = await deriveDiplomaticToken(nativeTokens[5]!, app.ids.actor);
-    assert.equal((await fetch(`${origin}/local/mine`, { method: 'POST', headers: { Authorization: `Bearer ${unlistedToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 1 }) })).status, 401);
+    const sixthAuthorityToken = await deriveDiplomaticToken(nativeTokens[5]!, app.ids.actor);
+    assert.equal((await fetch(`${origin}/local/mine`, { method: 'POST', headers: { Authorization: `Bearer ${sixthAuthorityToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 1 }) })).status, 200);
   }
 
   for (const [index, app] of apps.entries()) {

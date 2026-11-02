@@ -190,7 +190,7 @@ test('resource-server tokens are Home-enrolled, persistent and required for prot
     await server.enrollPlayer(playerId, homeId);
     const token = await deriveDiplomaticTokenForTest(nativeToken, resourceActor.id);
     const declaration = await createTokenDigest(playerId, 1, token);
-    await assert.rejects(server.applyTokenDeclaration(resourceActor.id, 'https://other.test/actors/home', declaration), /not the enrolled Home/);
+    await assert.rejects(server.applyTokenDeclaration(resourceActor.id, 'https://other.test/actors/home', declaration), /not the Player Home namespace/);
     await server.applyTokenDeclaration(resourceActor.id, homeId, declaration);
     server.registerResource('http://127.0.0.1/objects/listing', { id: 'http://127.0.0.1/objects/listing', type: 'Listing' }, { public: false, actorId: resourceActor.id });
     const listening = await server.listen();

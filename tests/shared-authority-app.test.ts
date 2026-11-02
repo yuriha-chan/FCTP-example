@@ -27,8 +27,8 @@ test('one shared Authority serves five Players and a vessel-isolated Registry to
   const simulationOrigin = `http://127.0.0.1:${await freePort()}`;
   const admin = 'shared-authority-admin';
   const authority = await createAuthorityApp({ origin: authorityOrigin, storeFile: join(directory, 'authority.json'), adminSecret: admin, playerNames: players });
-  const policy = await createPolicyApp({ origin: policyOrigin, storeFile: join(directory, 'policy.json'), authorityOrigin, playerNames: players, peerOrigin: simulationOrigin, adminSecret: admin });
-  const simulation = await createSimulationApp({ origin: simulationOrigin, storeFile: join(directory, 'simulation.json'), authorityOrigin, playerNames: players, peerOrigin: policyOrigin, adminSecret: admin });
+  const policy = await createPolicyApp({ origin: policyOrigin, storeFile: join(directory, 'policy.json'), adminSecret: admin });
+  const simulation = await createSimulationApp({ origin: simulationOrigin, storeFile: join(directory, 'simulation.json'), peerOrigin: policyOrigin, adminSecret: admin });
   t.after(async () => {
     await simulation.host.close();
     await policy.host.close();
@@ -38,6 +38,8 @@ test('one shared Authority serves five Players and a vessel-isolated Registry to
   await authority.authority.listen(Number(new URL(authorityOrigin).port));
   await policy.host.listen(Number(new URL(policyOrigin).port));
   await simulation.host.listen(Number(new URL(simulationOrigin).port));
+  await policy.territory.updateAdmissionPolicy({ trustedRegistry: { mode: 'allowlist', allowlist: [authority.ids.actor.registry], denylist: [] } });
+  await simulation.territory.updateAdmission({ trustedRegistry: { mode: 'allowlist', allowlist: [authority.ids.actor.registry], denylist: [] } });
 
   assert.deepEqual(Object.keys(authority.ids.players), players);
   assert.deepEqual(Object.keys(authority.ids.vessels), players);

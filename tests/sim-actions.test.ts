@@ -27,7 +27,7 @@ test('simulation action discovery authorizes owned vessels and previews without 
   const origin = `http://127.0.0.1:${await port()}`;
   const authority = await createHost({ origin: authorityOrigin, storeFile: join(directory, 'authority.json'), actors: [{ name: 'registry', role: 'registry' }, { name: 'home', role: 'home' }, { name: 'player', role: 'player' }] });
   let owned!: Vessel;
-  const app = await createSimulationApp({ origin, storeFile: join(directory, 'simulation.json'), authorityOrigin, peerOrigin: 'https://policy.example', adminSecret: 'admin', fetcher: async (input, init) => {
+  const app = await createSimulationApp({ origin, storeFile: join(directory, 'simulation.json'), peerOrigin: 'https://policy.example', adminSecret: 'admin', fetcher: async (input, init) => {
     if (String(input) === owned.id) return new Response(JSON.stringify(owned), { status: 200, headers: { 'Content-Type': 'application/json' } });
     return fetch(input, init);
   } });
@@ -37,6 +37,7 @@ test('simulation action discovery authorizes owned vessels and previews without 
   try {
     await authority.listen(Number(new URL(authorityOrigin).port));
     await app.host.listen(Number(new URL(origin).port));
+    await app.territory.updateAdmission({ trustedRegistry: { mode: 'allowlist', allowlist: [authority.actor('registry').id as URI], denylist: [] } });
     const digest = await createTokenDigest(player, 1, token);
     const declaration = await authority.sign('home', { '@context': ['https://www.w3.org/ns/activitystreams', 'https://fctp.example/context'], id: `${authority.actor('home').id}/token-digest/1`, type: 'Create', actor: authority.actor('home').id, to: [app.ids.actor], object: digest } as never);
     await app.host.server.receive(app.ids.actor, declaration);

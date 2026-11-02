@@ -51,7 +51,7 @@ function bearer(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 }
 
-test('a configured administrator diplomatic token authorizes Policy admin operations without making it a player', async (t) => {
+test('a configured administrator diplomatic token authorizes Policy admin operations as an ordinary account', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-admin-diplomatic-policy-'));
   const authorityOrigin = `http://127.0.0.1:${await freePort()}`;
   const policyOrigin = `http://127.0.0.1:${await freePort()}`;
@@ -61,9 +61,7 @@ test('a configured administrator diplomatic token authorizes Policy admin operat
     playerNames: ['player'], administratorNames: ['governor']
   });
   const policy = await createPolicyApp({
-    origin: policyOrigin, storeFile: join(directory, 'policy.json'), authorityOrigin,
-    administrator: `@governor@${new URL(authorityOrigin).host}`,
-    playerNames: ['player'], peerOrigin: 'https://peer.example', adminSecret
+    origin: policyOrigin, storeFile: join(directory, 'policy.json'), administrator: `@governor@${new URL(authorityOrigin).host}`, adminSecret
   });
   t.after(async () => {
     await policy.host.close();
@@ -107,12 +105,12 @@ test('a configured administrator diplomatic token authorizes Policy admin operat
   assert.equal(randomSecretAdmission.status, 401, 'an arbitrary secret is not accepted as a Policy administrator');
 
   const governorMine = await fetch(`${policyOrigin}/local/mine`, { method: 'POST', headers: bearer(governorToken), body: JSON.stringify({ count: 1 }) });
-  assert.equal(governorMine.status, 401, 'the configured administrator is not enrolled as a player');
+  assert.equal(governorMine.status, 200, 'the configured administrator is also an ordinary authenticated account');
 
   assert.equal(declarationError, undefined, 'the configured administrator token declaration is accepted by Policy');
 });
 
-test('a configured administrator diplomatic token authorizes Simulation admin operations without making it a player', async (t) => {
+test('a configured administrator diplomatic token authorizes Simulation admin operations as an ordinary account', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-admin-diplomatic-simulation-'));
   const authorityOrigin = `http://127.0.0.1:${await freePort()}`;
   const simulationOrigin = `http://127.0.0.1:${await freePort()}`;
@@ -122,9 +120,7 @@ test('a configured administrator diplomatic token authorizes Simulation admin op
     playerNames: ['player'], administratorNames: ['governor']
   });
   const simulation = await createSimulationApp({
-    origin: simulationOrigin, storeFile: join(directory, 'simulation.json'), authorityOrigin,
-    administrator: `@governor@${new URL(authorityOrigin).host}`,
-    playerNames: ['player'], peerOrigin: 'https://peer.example', adminSecret
+    origin: simulationOrigin, storeFile: join(directory, 'simulation.json'), administrator: `@governor@${new URL(authorityOrigin).host}`, peerOrigin: 'https://peer.example', adminSecret
   });
   t.after(async () => {
     await simulation.host.close();
@@ -152,7 +148,7 @@ test('a configured administrator diplomatic token authorizes Simulation admin op
   assert.equal(playerPermissions.status, 200);
   assert.deepEqual(await playerPermissions.json(), { [territoryHandle as string]: [] });
   assert.equal((await fetch(`${simulationOrigin}/local/territory/permissions`)).status, 401);
-  const facilitiesBody = JSON.stringify({ mining: { enabled: false, capacity: 5 } });
+  const facilitiesBody = JSON.stringify({ mining: { enabled: true, capacity: 5 } });
 
   const playerState = await fetch(`${simulationOrigin}/local/state`, { headers: bearer(playerToken) });
   assert.equal(playerState.status, 200, 'the ordinary player diplomatic token is valid for player access');
@@ -160,7 +156,7 @@ test('a configured administrator diplomatic token authorizes Simulation admin op
   const governorFacilities = await fetch(`${simulationOrigin}/local/admin/facilities`, { method: 'POST', headers: bearer(governorToken), body: facilitiesBody });
   assert.equal(governorFacilities.status, 200, 'the configured administrator diplomatic token authorizes a Simulation Admin-tab operation');
   const facilities = (await simulation.territory.state()).simulation.config;
-  assert.equal(facilities.miningEnabled, false, 'the authorized Simulation operation takes effect');
+  assert.equal(facilities.miningEnabled, true, 'the authorized Simulation operation takes effect');
   assert.equal(facilities.miningCapacity, 5, 'the authorized Simulation operation applies its values');
 
   const playerFacilities = await fetch(`${simulationOrigin}/local/admin/facilities`, { method: 'POST', headers: bearer(playerToken), body: facilitiesBody });
@@ -170,26 +166,24 @@ test('a configured administrator diplomatic token authorizes Simulation admin op
   assert.equal(randomSecretFacilities.status, 401, 'an arbitrary secret is not accepted as a Simulation administrator');
 
   const governorMine = await fetch(`${simulationOrigin}/local/mine`, { method: 'POST', headers: bearer(governorToken), body: JSON.stringify({ count: 1 }) });
-  assert.ok(governorMine.status === 401 || governorMine.status === 403, 'the configured administrator is not enrolled as a player');
+  assert.equal(governorMine.status, 200, 'the configured administrator is also an ordinary authenticated account');
 
   assert.equal(declarationError, undefined, 'the configured administrator token declaration is accepted by Simulation');
 });
 
 const invalidAdministrators: Array<{ label: string; handle: (authorityHost: string) => string }> = [
-  { label: 'an authority-role handle', handle: (authorityHost) => `@home.home@${authorityHost}` },
-  { label: 'an account on an untrusted server', handle: () => '@governor@untrusted.example' }
+  { label: 'an authority-role handle', handle: (authorityHost) => `@home.home@${authorityHost}` }
 ];
 
 async function expectPolicyConstructionRejects(label: string, administrator: string): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-admin-diplomatic-invalid-policy-'));
   const origin = `http://127.0.0.1:${await freePort()}`;
-  const authorityOrigin = `http://127.0.0.1:${await freePort()}`;
   try {
     let policy: Awaited<ReturnType<typeof createPolicyApp>> | undefined;
     try {
       policy = await createPolicyApp({
-        origin, storeFile: join(directory, 'policy.json'), authorityOrigin, administrator,
-        peerOrigin: 'https://peer.example', adminSecret: 'policy-admin-secret'
+        origin, storeFile: join(directory, 'policy.json'), administrator,
+        adminSecret: 'policy-admin-secret'
       });
     } catch (error) {
       assert.ok(error instanceof TypeError, `${label} administrator configuration throws TypeError`);
@@ -205,12 +199,11 @@ async function expectPolicyConstructionRejects(label: string, administrator: str
 async function expectSimulationConstructionRejects(label: string, administrator: string): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-admin-diplomatic-invalid-simulation-'));
   const origin = `http://127.0.0.1:${await freePort()}`;
-  const authorityOrigin = `http://127.0.0.1:${await freePort()}`;
   try {
     let simulation: Awaited<ReturnType<typeof createSimulationApp>> | undefined;
     try {
       simulation = await createSimulationApp({
-        origin, storeFile: join(directory, 'simulation.json'), authorityOrigin, administrator,
+        origin, storeFile: join(directory, 'simulation.json'), administrator,
         peerOrigin: 'https://peer.example', adminSecret: 'simulation-admin-secret'
       });
     } catch (error) {

@@ -76,13 +76,13 @@ test('deployment config carries the configured administrator for Authority and T
     }));
     await writeFile(join(directory, 'policy.json'), JSON.stringify({
       origin: 'https://west.example.org', dataDir: './policy-data', adminSecretFile: './admin-secret',
-      authorityOrigin: 'https://authority.example.org', peerOrigin: 'https://simulation.example.org',
-      administrator: handle, playerNames: ['player']
+      peerOrigin: 'https://simulation.example.org',
+      administrator: handle
     }));
     await writeFile(join(directory, 'simulation.json'), JSON.stringify({
       origin: 'https://simulation.example.org', dataDir: './simulation-data', adminSecretFile: './admin-secret',
-      authorityOrigin: 'https://authority.example.org', peerOrigin: 'https://west.example.org',
-      administrator: handle, playerNames: ['player']
+      peerOrigin: 'https://west.example.org',
+      administrator: handle
     }));
 
     assert.equal((await readDeploymentConfig('authority', join(directory, 'authority.json'))).administrator, handle);
@@ -147,14 +147,13 @@ test('territory deployments preserve peer defaults and do not automatically tick
   const directory = await mkdtemp(join(tmpdir(), 'deployment-territories-'));
   const policyPort = await freePort();
   const simulationPort = await freePort();
-  const authorityOrigin = 'https://authority.example.org';
   const policyOrigin = `http://127.0.0.1:${policyPort}`;
   const simulationOrigin = `http://127.0.0.1:${simulationPort}`;
   let policy;
   let simulation;
   try {
     await writeFile(join(directory, 'admin-secret'), 'territory-admin');
-    const shared = { listenHost: '127.0.0.1', workerIntervalMs: 5, dataDir: './policy-data', adminSecretFile: './admin-secret', authorityOrigin, playerNames: ['player'] };
+    const shared = { listenHost: '127.0.0.1', workerIntervalMs: 5, dataDir: './policy-data', adminSecretFile: './admin-secret' };
     await writeFile(join(directory, 'policy.json'), JSON.stringify({ ...shared, origin: policyOrigin, port: policyPort, peerOrigin: simulationOrigin }));
     await writeFile(join(directory, 'simulation.json'), JSON.stringify({ ...shared, dataDir: './simulation-data', origin: simulationOrigin, port: simulationPort, peerOrigin: policyOrigin }));
     const policyConfig = await readDeploymentConfig('policy', join(directory, 'policy.json'));
@@ -168,8 +167,12 @@ test('territory deployments preserve peer defaults and do not automatically tick
     assert.equal(policyInfo.actor, `${policyOrigin}/actors/territory`);
     const policyStateResponse = await globalThis.fetch(`${policyOrigin}/local/state`, { headers: { authorization: 'Bearer territory-admin' } });
     const policyState = await policyStateResponse.json();
-    assert.deepEqual(policyState.admission.registryAcceptance, [`${authorityOrigin}/actors/registry`]);
-    assert.deepEqual(policyState.admission.territoryAcceptance, [`${simulationOrigin}/actors/territory`]);
+    assert.deepEqual(policyState.admission.trustedRegistry, { mode: 'allowlist', allowlist: [], denylist: [] });
+    assert.deepEqual(policyState.admission.acceptedRegistry, { mode: 'denylist', allowlist: [], denylist: [] });
+    assert.deepEqual(policyState.admission.acceptedTerritory, { mode: 'allowlist', allowlist: [], denylist: [] });
+    assert.deepEqual(policyState.admission.vesselBuildingRegistry, { mode: 'allowlist', allowlist: [], denylist: [] });
+    assert.equal('registryAcceptance' in policyState.admission, false);
+    assert.equal('territoryAcceptance' in policyState.admission, false);
 
     const simulationStateUrl = `${simulationOrigin}/local/state`;
     const readSimulation = async () => (await globalThis.fetch(simulationStateUrl, { headers: { authorization: 'Bearer territory-admin' } })).json();

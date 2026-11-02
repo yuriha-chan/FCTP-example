@@ -145,7 +145,6 @@ test('authority app publishes NodeInfo with its configured canonical origin', { 
       storeFile: join(directory, 'authority.json'),
       keyFile: join(directory, 'authority.keys.json'),
       adminSecret: 'authority-admin-secret',
-      playerNames: ['player'],
       vesselNames: { player: 'demo' }
     });
     const port = await freePort();
@@ -169,10 +168,8 @@ test('policy app publishes NodeInfo with its configured canonical origin', { tim
       origin: 'https://policy.test',
       storeFile: join(directory, 'policy.json'),
       keyFile: join(directory, 'policy.keys.json'),
-      authorityOrigin: 'https://authority.test',
-      peerOrigin: 'https://simulation.test',
+
       adminSecret: 'policy-admin-secret',
-      playerNames: ['player']
     });
     const port = await freePort();
     await app.host.listen(port);
@@ -195,10 +192,8 @@ test('simulation app publishes NodeInfo with its configured canonical origin', {
       origin: 'https://simulation.test',
       storeFile: join(directory, 'simulation.json'),
       keyFile: join(directory, 'simulation.keys.json'),
-      authorityOrigin: 'https://authority.test',
       peerOrigin: 'https://policy.test',
       adminSecret: 'simulation-admin-secret',
-      playerNames: ['player']
     });
     const port = await freePort();
     await app.host.listen(port);

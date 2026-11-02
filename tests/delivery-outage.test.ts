@@ -49,11 +49,12 @@ test('completed Territory load survives Registry outage and its durable signed d
 
   authority = await createAuthorityApp({ origin: authorityOrigin, storeFile: authorityStore, keyFile: authorityKeys, adminSecret: admin });
   policy = await createPolicyApp({
-    origin: policyOrigin, storeFile: policyStore, authorityOrigin, peerOrigin: policyOrigin,
+    origin: policyOrigin, storeFile: policyStore,
     adminSecret: admin, fetcher: captureTransport
   });
   await authority.authority.listen(Number(new URL(authorityOrigin).port));
   await policy.host.listen(Number(new URL(policyOrigin).port));
+  await policy.territory.updateAdmissionPolicy({ trustedRegistry: { mode: 'allowlist', allowlist: [authority.ids.actor.registry], denylist: [] } });
 
   const registryAuth = { Authorization: `Bearer ${admin}`, 'Content-Type': 'application/json' };
   const { nativeToken } = await json<{ nativeToken: string }>(await fetch(`${authorityOrigin}/local/home/issue`, {
@@ -142,7 +143,7 @@ test('completed Territory load survives Registry outage and its durable signed d
   assert.deepEqual(territoryAfterRestart.state.vessels[`${authorityOrigin}/objects/vessels/demo`]!.manifest.entries, completedLoad.state.vessels[`${authorityOrigin}/objects/vessels/demo`]!.manifest.entries);
   await policy.host.close();
   policy = await createPolicyApp({
-    origin: policyOrigin, storeFile: policyStore, authorityOrigin, peerOrigin: policyOrigin,
+    origin: policyOrigin, storeFile: policyStore,
     adminSecret: admin, fetcher: captureTransport
   });
   await policy.host.listen(Number(new URL(policyOrigin).port));

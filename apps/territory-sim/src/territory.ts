@@ -10,7 +10,7 @@ import {
   type ExitEvent,
   type URI,
 } from '@fctp/protocol';
-import type { HandlerContext, Host } from '@fctp/server-base';
+import { DEFAULT_ADMISSION, entryAdmissionAllows, type AdmissionList, type AdmissionPolicy, type HandlerContext, type Host } from '@fctp/server-base';
 import { resolveExitEvidence } from '@fctp/server-base';
 import {
   advanceTick,
@@ -35,8 +35,10 @@ export interface SimulationTerritoryOptions {
   port: URI;
   route: URI;
   config: SimulationConfig;
-  acceptedRegistries: URI[];
-  acceptedTerritories: URI[];
+  trustedRegistry?: AdmissionList;
+  acceptedRegistry?: AdmissionList;
+  acceptedTerritory?: AdmissionList;
+  vesselBuildingRegistry?: AdmissionList;
   manifestPolicy?: ManifestPolicy;
   requireExitEvidence?: boolean;
   fetcher?: typeof fetch;
@@ -61,13 +63,11 @@ export interface SimulationVisit {
   exited: boolean;
 }
 
-export interface SimulationAdmission {
+export type SimulationAdmission = AdmissionPolicy & {
   reviewMode: 'automatic' | 'manual';
-  acceptedRegistries: URI[];
-  acceptedTerritories: URI[];
   manifestPolicy: ManifestPolicy;
   requireExitEvidence: boolean;
-}
+};
 
 export interface SimulationEntryRecord {
   request: EntryRequest;
@@ -133,7 +133,12 @@ export function installSimulationTerritory(host: Host, options: SimulationTerrit
   const initial: SimulationTerritoryState = {
     simulation: createSimulationState(options.config), visits: {}, handledIds: {}, decisions: [], evidence: {},
     admission: {
-      reviewMode: 'automatic', acceptedRegistries: [...options.acceptedRegistries], acceptedTerritories: [...options.acceptedTerritories],
+      ...structuredClone(DEFAULT_ADMISSION),
+      ...(options.trustedRegistry ? { trustedRegistry: structuredClone(options.trustedRegistry) } : {}),
+      ...(options.acceptedRegistry ? { acceptedRegistry: structuredClone(options.acceptedRegistry) } : {}),
+      ...(options.acceptedTerritory ? { acceptedTerritory: structuredClone(options.acceptedTerritory) } : {}),
+      ...(options.vesselBuildingRegistry ? { vesselBuildingRegistry: structuredClone(options.vesselBuildingRegistry) } : {}),
+      reviewMode: 'automatic',
       manifestPolicy, requireExitEvidence: options.requireExitEvidence === true
     },
     requests: {}
@@ -181,7 +186,7 @@ export function installSimulationTerritory(host: Host, options: SimulationTerrit
     evidenceBinding: { bound: boolean } | undefined
   ): { accepted: boolean; reason: string } => {
     const admission = state.admission;
-    if (request.destination.territory !== actorId || !admission.acceptedRegistries.includes(request.vessel.registry)) {
+    if (request.destination.territory !== actorId) {
       return { accepted: false, reason: 'registry-or-destination-not-accepted' };
     }
     if (request.destination.port !== options.port || request.destination.route !== options.route) {
@@ -193,10 +198,10 @@ export function installSimulationTerritory(host: Host, options: SimulationTerrit
       if (!verification?.cryptographic?.verified || !verification.attribution?.attributed || !verification.expectedIssuer?.matches || !evidenceBinding?.bound) {
         return { accepted: false, reason: 'exit-evidence-invalid-or-unbound' };
       }
-      if (!admission.acceptedTerritories.includes(evidence.territory)) {
-        return { accepted: false, reason: 'prior-territory-not-accepted' };
-      }
-    } else if (admission.requireExitEvidence) {
+    }
+    const allowed = entryAdmissionAllows(admission, request.vessel.registry, evidence?.territory);
+    if (!allowed.allowed) return { accepted: false, reason: allowed.reason ?? 'registry-or-destination-not-accepted' };
+    if (!evidence && admission.requireExitEvidence) {
       return { accepted: false, reason: 'exit-evidence-required' };
     }
     const manifestSource = evidence && admission.manifestPolicy === 'evidence' ? 'evidence' : 'request';

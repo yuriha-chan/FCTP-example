@@ -60,6 +60,7 @@ export async function startDemo(options: StartDemoOptions) {
   await mkdir(dataDir, { recursive: true });
   const freshAuthority = !await storeExists(resolve(dataDir, 'authority.store.json'));
   const freshPolicy = !await storeExists(resolve(dataDir, 'policy.store.json'));
+  const freshSimulation = !await storeExists(resolve(dataDir, 'simulation.store.json'));
   let authority: Awaited<ReturnType<typeof createAuthorityApp>> | undefined;
   let policy: Awaited<ReturnType<typeof createPolicyApp>> | undefined;
   let simulation: Awaited<ReturnType<typeof createSimulationApp>> | undefined;
@@ -91,15 +92,14 @@ export async function startDemo(options: StartDemoOptions) {
     });
     policy = await createPolicyApp({
       origin: origin(ports.policy), storeFile: resolve(dataDir, 'policy.store.json'), keyFile: resolve(dataDir, 'policy.keys.json'),
-      authorityOrigin: origin(ports.authority), peerOrigin: origin(ports.simulation), adminSecret: secrets.policy,
+      adminSecret: secrets.policy,
       administrator: governorHandle,
-      playerNames: ['player', 'player-2'],
       additionalRoutes: [{
         id: `${origin(ports.policy)}/objects/routes/outbound`, type: 'Route', name: 'Outbound Passage',
         from: `${origin(ports.policy)}/objects/ports/west`, to: `${origin(ports.simulation)}/objects/boundaries/east`
       }]
     });
-    simulation = await createSimulationApp({ origin: origin(ports.simulation), storeFile: resolve(dataDir, 'simulation.store.json'), keyFile: resolve(dataDir, 'simulation.keys.json'), authorityOrigin: origin(ports.authority), peerOrigin: origin(ports.policy), adminSecret: secrets.simulation, administrator: governorHandle, playerNames: ['player', 'player-2'] });
+    simulation = await createSimulationApp({ origin: origin(ports.simulation), storeFile: resolve(dataDir, 'simulation.store.json'), keyFile: resolve(dataDir, 'simulation.keys.json'), peerOrigin: origin(ports.policy), adminSecret: secrets.simulation, administrator: governorHandle });
 
     await authority.authority.listen(ports.authority, '127.0.0.1');
     await policy.host.listen(ports.policy, '127.0.0.1');
@@ -110,18 +110,34 @@ export async function startDemo(options: StartDemoOptions) {
       policy: origin(ports.policy),
       simulation: origin(ports.simulation)
     };
+    const admissionFixture = {
+      trustedRegistry: { mode: 'allowlist', allowlist: [authority.ids.actor.registry], denylist: [] },
+      acceptedRegistry: { mode: 'allowlist', allowlist: [authority.ids.actor.registry], denylist: [] },
+      acceptedTerritory: { mode: 'allowlist', allowlist: [policy.ids.actor, simulation.ids.actor], denylist: [] },
+      vesselBuildingRegistry: { mode: 'allowlist', allowlist: [authority.ids.actor.registry], denylist: [] }
+    };
     if (freshPolicy) {
       const admission = await fetch(new URL('/local/admin/admission', origins.policy), {
         method: 'POST',
         headers: { Authorization: `Bearer ${secrets.policy}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ publicPorts: policy.ids.ports })
+        body: JSON.stringify({ ...admissionFixture, publicPorts: policy.ids.ports })
       });
       if (!admission.ok) throw new Error(`Demo admission fixture failed: HTTP ${admission.status}`);
     }
+    if (freshSimulation) {
+      const admission = await fetch(new URL('/local/admin/admission', origins.simulation), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${secrets.simulation}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(admissionFixture)
+      });
+      if (!admission.ok) throw new Error(`Demo admission fixture failed: HTTP ${admission.status}`);
+    }
+    let governorNative: string | undefined;
     if (freshAuthority) {
       for (const name of ['player', 'player-2', 'governor']) {
         const playerId = authority.ids.players[name]!;
-        await authority.home.issueNativeToken(playerId);
+        const nativeToken = await authority.home.issueNativeToken(playerId);
+        if (name === 'governor') governorNative = nativeToken;
         for (const territory of [policy, simulation]) {
           await authority.home.requestDigest(playerId, { id: territory.ids.actor, inbox: territory.host.actor('territory').inbox });
         }
@@ -133,6 +149,16 @@ export async function startDemo(options: StartDemoOptions) {
       await authority.authority.server.processInbox();
       await policy.host.server.processInbox();
       await simulation.host.server.processInbox();
+    }
+    if (governorNative !== undefined) {
+      for (const authorityId of [authority.ids.actor.home, authority.ids.actor.registry, policy.ids.actor, simulation.ids.actor]) {
+        const claimed = await fetch(new URL('/local/home/administration', origins.authority), {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${governorNative}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ authorityId })
+        });
+        if (!claimed.ok) throw new Error(`Demo administration claim failed: HTTP ${claimed.status}`);
+      }
     }
     application = await createClientApplication({
       storeFile: resolve(dataDir, 'client.store.json'),

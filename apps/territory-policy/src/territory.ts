@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { compareCargo, validateModel, type BerthingEvent, type CargoManifest, type CargoOperationEvent, type DepartureEvent, type DepartureRequest, type EntryRejected, type EntryRequest, type ExitEvent, type URI, type VoyageEvent } from '@fctp/protocol';
 import { resolveExitEvidence, type ExitEvidenceResult } from '@fctp/server-base';
-import type { Host, VerificationReport } from '@fctp/server-base';
+import { DEFAULT_ADMISSION, entryAdmissionAllows, type AdmissionList, type AdmissionPolicy, type Host, type VerificationReport } from '@fctp/server-base';
 import {
   changePolicy, exitVessel, loadCargo, manufacture, mineOre, prepareVessel, transferPortToWarehouse, transferWarehouseToPort, unloadCargo,
   type Commodity, type OperationResult, type Policy, type TerritoryState
@@ -15,8 +15,10 @@ export interface PolicyTerritoryOptions {
   routes?: Array<{ id: URI; from: string; to: string }>;
   commodities: Commodity[];
   initialPolicy: Policy;
-  registryAcceptance?: URI[];
-  territoryAcceptance?: URI[];
+  trustedRegistry?: AdmissionList;
+  acceptedRegistry?: AdmissionList;
+  acceptedTerritory?: AdmissionList;
+  vesselBuildingRegistry?: AdmissionList;
   mismatchPolicy?: EvidenceMismatchPolicy;
   publicPorts?: URI[];
   fetcher?: typeof fetch;
@@ -38,7 +40,7 @@ export interface EntryDecision {
   accepted: boolean;
   verification: VerificationReport;
   reason?: string;
-  policy: Policy;
+  policy: Policy & { admission: AdmissionPolicy };
   evidence?: { verification: ExitEvidenceResult['verification']; binding: ExitEvidenceResult['binding']; difference: ReturnType<typeof compareCargo> };
 }
 export interface PolicyEntryEvidence {
@@ -63,7 +65,7 @@ export interface PolicyEntryRequestRecord {
 }
 export interface PolicyTerritoryLedger {
   state: TerritoryState;
-  admission: { registryAcceptance: URI[]; territoryAcceptance: URI[]; mismatchPolicy: EvidenceMismatchPolicy; publicPorts: URI[]; reviewMode?: 'automatic' | 'manual' };
+  admission: AdmissionPolicy & { mismatchPolicy: EvidenceMismatchPolicy; publicPorts: URI[]; reviewMode?: 'automatic' | 'manual' };
   visits: Record<URI, VesselVisit>;
   decisions: Record<URI, EntryDecision>;
   requests?: Record<URI, PolicyEntryRequestRecord>;
@@ -96,7 +98,17 @@ export function installPolicyTerritory(host: Host, options: PolicyTerritoryOptio
     tail.promise = result.then(() => undefined, () => undefined);
     return result;
   };
-  const initial: PolicyTerritoryLedger = { state: createState(options), admission: { registryAcceptance: options.registryAcceptance ?? [], territoryAcceptance: options.territoryAcceptance ?? [], mismatchPolicy: options.mismatchPolicy ?? 'reject', publicPorts: options.publicPorts ?? [], reviewMode: 'automatic' }, visits: {}, decisions: {}, requests: {}, movements: [], processed: [] };
+  const admission: PolicyTerritoryLedger['admission'] = {
+    ...structuredClone(DEFAULT_ADMISSION),
+    ...(options.trustedRegistry ? { trustedRegistry: structuredClone(options.trustedRegistry) } : {}),
+    ...(options.acceptedRegistry ? { acceptedRegistry: structuredClone(options.acceptedRegistry) } : {}),
+    ...(options.acceptedTerritory ? { acceptedTerritory: structuredClone(options.acceptedTerritory) } : {}),
+    ...(options.vesselBuildingRegistry ? { vesselBuildingRegistry: structuredClone(options.vesselBuildingRegistry) } : {}),
+    mismatchPolicy: options.mismatchPolicy ?? 'reject',
+    publicPorts: options.publicPorts ?? [],
+    reviewMode: 'automatic'
+  };
+  const initial: PolicyTerritoryLedger = { state: createState(options), admission, visits: {}, decisions: {}, requests: {}, movements: [], processed: [] };
   const routeEndpoints = new Map((options.routes ?? []).map((route) => [route.id, route]));
   const policyObjects = `${new URL(territory).origin}/objects/policy`;
   host.server.registerResource(`${policyObjects}/public-ports`, { id: `${policyObjects}/public-ports`, type: 'PublicPorts', territory, publicPorts: initial.admission.publicPorts });
@@ -136,20 +148,29 @@ export function installPolicyTerritory(host: Host, options: PolicyTerritoryOptio
     const policy = structuredClone(ledger.state.policy);
     const { admission } = ledger;
     const evidence = resolved?.exit;
-    const declaredAllowed = admission.registryAcceptance.includes(request.vessel.registry) && (!evidence || admission.territoryAcceptance.includes(evidence.territory));
-    let accepted = declaredAllowed && policy.decisions.entry !== 'deny';
+    const validEvidence = resolved !== undefined && evidence !== undefined && positive(resolved.verification) && resolved.binding.bound;
+    let accepted = policy.decisions.entry !== 'deny';
     let reason: string | undefined = accepted ? undefined : 'entry-policy-rejected';
-    if (resolved) {
-      const validEvidence = positive(resolved.verification) && resolved.binding.bound;
+    if (resolved || admission.mismatchPolicy === 'evidence') {
       if (!validEvidence) {
         accepted = false;
         reason = 'exit-evidence-invalid-or-unbound';
-      } else if (resolved.difference.leftOnly.length || resolved.difference.rightOnly.length) {
-        if (admission.mismatchPolicy === 'reject') { accepted = false; reason = 'cargo-mismatch'; }
-        if (admission.mismatchPolicy === 'evidence') accepted = admission.registryAcceptance.includes(request.vessel.registry) && admission.territoryAcceptance.includes(evidence?.territory ?? '') && policy.decisions.entry !== 'deny';
+      } else {
+        const allowed = entryAdmissionAllows(admission, request.vessel.registry, evidence.territory);
+        if (!allowed.allowed) {
+          accepted = false;
+          reason = allowed.reason ?? 'entry-admission-rejected';
+        } else if (resolved.difference.leftOnly.length || resolved.difference.rightOnly.length) {
+          if (admission.mismatchPolicy === 'reject') { accepted = false; reason = 'cargo-mismatch'; }
+        }
+      }
+    } else {
+      const allowed = entryAdmissionAllows(admission, request.vessel.registry);
+      if (!allowed.allowed) {
+        accepted = false;
+        reason = allowed.reason ?? 'entry-admission-rejected';
       }
     }
-    if (admission.mismatchPolicy === 'evidence' && !resolved) { accepted = false; reason = 'exit-evidence-required'; }
     const decision: EntryDecision = { request: request.id, accepted, verification: structuredClone(verification), ...(reason ? { reason } : {}), policy: { ...policy, admission: structuredClone(admission) }, ...(resolved ? { evidence: { verification: resolved.verification, binding: resolved.binding, difference: resolved.difference } } : {}) };
     if (accepted) {
       const manifest = admission.mismatchPolicy === 'evidence' ? resolved!.exit!.cargo : request.cargo;

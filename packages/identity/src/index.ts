@@ -147,6 +147,19 @@ export type ParsedHandle =
   | { handle: string; localName: string; server: string; kind: 'account' }
   | { handle: string; localName: string; server: string; kind: 'authority'; role: string };
 
+export function expectedHomeActor(playerActorId: string): URI | undefined {
+  let url: URL;
+  try {
+    url = new URL(playerActorId);
+  } catch {
+    return undefined;
+  }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) return undefined;
+  const segments = url.pathname.split('/').filter(Boolean);
+  if (segments.length !== 2 || segments[0] !== 'actors' || !segments[1]) return undefined;
+  return `${url.origin}/actors/home` as URI;
+}
+
 export function parseHandle(handle: string): ParsedHandle {
   const match = /^@([a-zA-Z0-9-]+)(?:\.([a-zA-Z0-9-]+))?@(\[[0-9A-Fa-f:.]+\]|[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*)(?::([0-9]+))?$/.exec(handle);
   if (!match) throw new TypeError('Expected @name@server or @name.role@server');
@@ -241,6 +254,11 @@ export function isLoopbackHostname(hostname: string): boolean {
 
 function isLoopbackServer(server: string): boolean {
   return isLoopbackHostname(new URL(`http://${server}`).hostname);
+}
+
+export function originForServer(server: string): string {
+  const protocol = isLoopbackServer(server) ? 'http:' : 'https:';
+  return new URL(`${protocol}//${server}`).origin;
 }
 
 export async function resolveActor(uri: URI, fetcher: typeof fetch = fetch): Promise<ActorResolution> {

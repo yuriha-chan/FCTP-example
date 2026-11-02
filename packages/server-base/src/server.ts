@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { URL } from 'node:url';
 import { createActivity, parseActivity, type Activity } from '@fctp/federation';
-import { parseWebFingerAddress, resolveActor } from '@fctp/identity';
+import { expectedHomeActor, parseWebFingerAddress, resolveActor } from '@fctp/identity';
 import { TokenCredentialStore, digestDiplomaticToken, type CredentialState } from '@fctp/auth';
 import { validateModel, type FCTPActor, type TokenDeclaration, type URI } from '@fctp/protocol';
 import { JsonSnapshotStore, type StoreState } from './store.js';
@@ -99,7 +99,8 @@ export class FctpServer {
 
   async applyTokenDeclaration(resourceServerId: URI, senderHomeId: URI, declaration: TokenDeclaration): Promise<'applied' | 'stale' | 'duplicate' | 'conflict'> {
     return this.store.transaction((state) => {
-      if (state.enrollments[declaration.actor] !== senderHomeId) throw new Error('Token declaration sender is not the enrolled Home');
+      const expectedHome = state.enrollments[declaration.actor] ?? expectedHomeActor(declaration.actor);
+      if (expectedHome === undefined || expectedHome !== senderHomeId) throw new Error('Token declaration sender is not the Player Home namespace');
       const key = `${resourceServerId}\u0000${declaration.actor}`;
       const current = state.credentials[key] as CredentialState | undefined;
       const store = createCredentialStoreFromSnapshot(current ? { [declaration.actor]: current } : {});

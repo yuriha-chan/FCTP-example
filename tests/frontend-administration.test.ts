@@ -244,8 +244,10 @@ function policyState(options: {
     },
     admission: {
       reviewMode: 'automatic',
-      registryAcceptance: [registryA],
-      territoryAcceptance: [territoryA],
+      trustedRegistry: { mode: 'allowlist', allowlist: [registryA], denylist: [] },
+      acceptedRegistry: { mode: 'denylist', allowlist: [], denylist: [] },
+      acceptedTerritory: { mode: 'allowlist', allowlist: [territoryA], denylist: [] },
+      vesselBuildingRegistry: { mode: 'allowlist', allowlist: [registryA], denylist: [] },
       mismatchPolicy: 'reject',
       publicPorts: [portA],
       ...(options.admission ?? {})
@@ -263,8 +265,10 @@ function simulationState(options: {
     kind: 'simulation',
     admission: {
       reviewMode: 'manual',
-      acceptedRegistries: [registryA],
-      acceptedTerritories: [territoryA],
+      trustedRegistry: { mode: 'allowlist', allowlist: [registryA], denylist: [] },
+      acceptedRegistry: { mode: 'denylist', allowlist: [], denylist: [] },
+      acceptedTerritory: { mode: 'allowlist', allowlist: [territoryA], denylist: [] },
+      vesselBuildingRegistry: { mode: 'allowlist', allowlist: [registryA], denylist: [] },
       manifestPolicy: 'request',
       requireExitEvidence: true,
       ...(options.admission ?? {})
@@ -574,17 +578,21 @@ async function waitForFixtureActions(page: Page, expected: number): Promise<void
 const policyControl = control('policy', authorityPolicy, 'Policy', [
   { name: 'policy', label: 'Policy values (JSON)', type: 'json', required: true }
 ]);
+const admissionListInputs: ControlInput[] = [
+  { name: 'trustedRegistry', label: 'Trusted registry', type: 'json' },
+  { name: 'acceptedRegistry', label: 'Accepted registry', type: 'json' },
+  { name: 'acceptedTerritory', label: 'Accepted territory', type: 'json' },
+  { name: 'vesselBuildingRegistry', label: 'Vessel building registry', type: 'json' }
+];
 const policyAdmissionControl = control('admission', authorityPolicy, 'Admission', [
   { name: 'reviewMode', label: 'Review mode', type: 'choice', choices: ['automatic', 'manual'] },
-  { name: 'registryAcceptance', label: 'Accepted Registries (comma separated)', type: 'text' },
-  { name: 'territoryAcceptance', label: 'Accepted Territories (comma separated)', type: 'text' },
+  ...admissionListInputs,
   { name: 'mismatchPolicy', label: 'Mismatch policy', type: 'choice', choices: ['declared', 'evidence', 'reject'] },
   { name: 'publicPorts', label: 'Public ports (comma separated)', type: 'text' }
 ]);
 const simulationAdmissionControl = control('admission', authoritySimulation, 'Admission', [
   { name: 'reviewMode', label: 'Review mode', type: 'choice', choices: ['automatic', 'manual'] },
-  { name: 'acceptedRegistries', label: 'Accepted Registries (comma separated)', type: 'text' },
-  { name: 'acceptedTerritories', label: 'Accepted Territories (comma separated)', type: 'text' },
+  ...admissionListInputs,
   { name: 'manifestPolicy', label: 'Manifest policy', type: 'choice', choices: ['request', 'evidence', 'reject-difference'] },
   { name: 'requireExitEvidence', label: 'Require exit evidence', type: 'boolean' }
 ]);
@@ -666,11 +674,11 @@ test('performs one retained read on open and renders target-owned scope without 
 test('claims a target through Home and renders the returned entry', async (t) => {
   const claimed = makeData(accountA, [
     makeTarget(authorityRegistry, { name: 'Registry', kind: 'registry', roles: ['registry'], state: 'not-retrieved' })
-  ]);
+  ], []);
   const { page, requests, errors } = await openFixture(t, {
     accountId: accountA,
     handler: (request) => {
-      if (request.kind === 'read') return { body: pageOf(makeData(accountA, [])) };
+      if (request.kind === 'read') return { body: pageOf(makeData(accountA, [], [])) };
       if (request.kind === 'claim') return { body: pageOf(claimed) };
       return { status: 500, body: { error: 'unexpected request' } };
     }
@@ -862,7 +870,7 @@ test('submits flattened policy fields with advanced extensions and rejects inval
   assert.deepEqual(errors, []);
 });
 
-test('submits admission with comma-separated lists converted to string arrays', async (t) => {
+test('submits admission lists as structured JSON objects', async (t) => {
   const target = makeTarget(authoritySimulation, { name: 'Beta Territory', kind: 'simulation', observedAt });
   const data = makeData(
     accountA,
@@ -885,8 +893,8 @@ test('submits admission with comma-separated lists converted to string arrays', 
   await waitForText(region, 'Alpha Territory', 'expected the initial administration target');
   await region.getByLabel('Administration target').selectOption(authoritySimulation);
   await waitForText(region, 'Beta Territory', 'expected the simulation target');
-  await region.getByLabel('Accepted Registries (comma separated)').fill('https://reg.one, https://reg.two');
-  await region.getByLabel('Accepted Territories (comma separated)').fill('https://territory.one,https://territory.two');
+  await region.getByLabel('Trusted registry').fill(JSON.stringify({ mode: 'allowlist', allowlist: ['https://reg.one', 'https://reg.two'], denylist: [] }));
+  await region.getByLabel('Accepted territory').fill(JSON.stringify({ mode: 'allowlist', allowlist: ['https://territory.one'], denylist: [] }));
   await region.getByRole('button', { name: 'Apply admission' }).click();
 
   await waitFor(() => requests.some((request) => request.kind === 'control'), 'expected an admission submission');
@@ -894,8 +902,10 @@ test('submits admission with comma-separated lists converted to string arrays', 
   assert.equal(submitted.control, 'admission');
   assert.deepEqual(submitted.inputs, {
     reviewMode: 'manual',
-    acceptedRegistries: ['https://reg.one', 'https://reg.two'],
-    acceptedTerritories: ['https://territory.one', 'https://territory.two'],
+    trustedRegistry: { mode: 'allowlist', allowlist: ['https://reg.one', 'https://reg.two'], denylist: [] },
+    acceptedRegistry: { mode: 'denylist', allowlist: [], denylist: [] },
+    acceptedTerritory: { mode: 'allowlist', allowlist: ['https://territory.one'], denylist: [] },
+    vesselBuildingRegistry: { mode: 'allowlist', allowlist: [registryA], denylist: [] },
     manifestPolicy: 'request',
     requireExitEvidence: true
   });

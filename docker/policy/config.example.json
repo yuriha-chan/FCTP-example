@@ -5,8 +5,5 @@
   "origin": "https://west.example.org",
   "workerIntervalMs": 1000,
   "adminSecretFile": "/run/secrets/admin-secret",
-  "authorityOrigin": "https://authority.example.org",
-  "peerOrigin": "https://simulation.example.org",
-  "administrator": "@governor@authority.example.org",
-  "playerNames": ["player", "player-2"]
+  "administrator": "@governor@authority.example.org"
 }

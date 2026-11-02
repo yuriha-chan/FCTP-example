@@ -100,14 +100,11 @@ export async function readDeploymentConfig(service, path) {
   }
 
   if (service === 'policy' || service === 'simulation') {
-    const playerNames = validateNames(input.playerNames, 'player names');
-    const authorityOrigin = canonicalOrigin(input.authorityOrigin, 'authority origin');
-    const peerOrigin = canonicalOrigin(input.peerOrigin, 'peer origin');
     const administrator = validateAdministrator(input.administrator);
     const adminSecret = await readSecret(resolveFile(input.adminSecretFile, base));
-    const additionalAuthorityOrigins = input.additionalAuthorityOrigins === undefined ? [] : validateStringOrigins(input.additionalAuthorityOrigins, 'additional authority origin');
+    const peerOrigin = service === 'simulation' ? canonicalOrigin(input.peerOrigin, 'peer origin') : undefined;
     const additionalRoutes = input.additionalRoutes === undefined ? [] : validateRoutes(input.additionalRoutes, origin, service);
-    Object.assign(config, { playerNames, authorityOrigin, peerOrigin, ...(administrator === undefined ? {} : { administrator }), adminSecret, additionalAuthorityOrigins, additionalRoutes });
+    Object.assign(config, { ...(peerOrigin === undefined ? {} : { peerOrigin }), ...(administrator === undefined ? {} : { administrator }), adminSecret, additionalRoutes });
   }
 
   if (service === 'client') {
@@ -146,11 +143,11 @@ export async function startDeployment(service, config) {
     }
     if (service === 'policy') {
       const { createPolicyApp } = await import('../apps/territory-policy/dist/app.js');
-      app = await createPolicyApp({ origin: config.origin, storeFile, keyFile, authorityOrigin: config.authorityOrigin, additionalAuthorityOrigins: config.additionalAuthorityOrigins, playerNames: config.playerNames, peerOrigin: config.peerOrigin, ...(config.administrator === undefined ? {} : { administrator: config.administrator }), adminSecret: config.adminSecret, additionalRoutes: config.additionalRoutes });
+      app = await createPolicyApp({ origin: config.origin, storeFile, keyFile, ...(config.administrator === undefined ? {} : { administrator: config.administrator }), adminSecret: config.adminSecret, additionalRoutes: config.additionalRoutes });
     }
     if (service === 'simulation') {
       const { createSimulationApp } = await import('../apps/territory-sim/dist/app.js');
-      app = await createSimulationApp({ origin: config.origin, storeFile, keyFile, authorityOrigin: config.authorityOrigin, additionalAuthorityOrigins: config.additionalAuthorityOrigins, playerNames: config.playerNames, peerOrigin: config.peerOrigin, ...(config.administrator === undefined ? {} : { administrator: config.administrator }), adminSecret: config.adminSecret, additionalRoutes: config.additionalRoutes });
+      app = await createSimulationApp({ origin: config.origin, storeFile, keyFile, peerOrigin: config.peerOrigin, ...(config.administrator === undefined ? {} : { administrator: config.administrator }), adminSecret: config.adminSecret, additionalRoutes: config.additionalRoutes });
     }
     if (service === 'client') {
       const { createClientApplication } = await import('../apps/client-server/dist/app.js');

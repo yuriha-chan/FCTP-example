@@ -33,11 +33,15 @@ test('actual HTTP circulation keeps Territory decisions, Registry adoption, and 
   const policyOrigin = `http://127.0.0.1:${await freePort()}`;
   const simOrigin = `http://127.0.0.1:${await freePort()}`;
   const authority = await createAuthorityApp({ origin: authorityOrigin, storeFile: join(directory, 'authority.json'), adminSecret: admin });
-  const policy = await createPolicyApp({ origin: policyOrigin, storeFile: join(directory, 'policy.json'), authorityOrigin, peerOrigin: simOrigin, adminSecret: admin });
-  const simulation = await createSimulationApp({ origin: simOrigin, storeFile: join(directory, 'simulation.json'), authorityOrigin, peerOrigin: policyOrigin, adminSecret: admin });
+  const policy = await createPolicyApp({ origin: policyOrigin, storeFile: join(directory, 'policy.json'), adminSecret: admin });
+  const simulation = await createSimulationApp({ origin: simOrigin, storeFile: join(directory, 'simulation.json'), peerOrigin: policyOrigin, adminSecret: admin });
   await authority.authority.listen(Number(new URL(authorityOrigin).port));
   await policy.host.listen(Number(new URL(policyOrigin).port));
   await simulation.host.listen(Number(new URL(simOrigin).port));
+  const admission = { trustedRegistry: { mode: 'allowlist' as const, allowlist: [authority.ids.actor.registry], denylist: [] } };
+  const acceptedTerritory = { mode: 'allowlist' as const, allowlist: [policy.ids.actor, simulation.ids.actor], denylist: [] };
+  await policy.territory.updateAdmissionPolicy({ ...admission, acceptedTerritory });
+  await simulation.territory.updateAdmission({ ...admission, acceptedTerritory });
   t.after(async () => {
     await simulation.host.close();
     await policy.host.close();

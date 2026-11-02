@@ -362,16 +362,20 @@ export function createAdministrationService(
       add('policy', 'Policy', [{ name: 'policy', label: 'Policy values (JSON)', type: 'json', required: true }]);
       add('admission', 'Admission', [
         { name: 'reviewMode', label: 'Review mode', type: 'choice', choices: ['automatic', 'manual'] },
-        { name: 'registryAcceptance', label: 'Accepted Registries (comma separated)', type: 'text' },
-        { name: 'territoryAcceptance', label: 'Accepted Territories (comma separated)', type: 'text' },
+        { name: 'trustedRegistry', label: 'Trusted registry', type: 'json' },
+        { name: 'acceptedRegistry', label: 'Accepted registry', type: 'json' },
+        { name: 'acceptedTerritory', label: 'Accepted territory', type: 'json' },
+        { name: 'vesselBuildingRegistry', label: 'Vessel building registry', type: 'json' },
         { name: 'mismatchPolicy', label: 'Mismatch policy', type: 'choice', choices: ['declared', 'evidence', 'reject'] },
         { name: 'publicPorts', label: 'Public ports (comma separated)', type: 'text' }
       ]);
     } else if (kind === 'simulation') {
       add('admission', 'Admission', [
         { name: 'reviewMode', label: 'Review mode', type: 'choice', choices: ['automatic', 'manual'] },
-        { name: 'acceptedRegistries', label: 'Accepted Registries (comma separated)', type: 'text' },
-        { name: 'acceptedTerritories', label: 'Accepted Territories (comma separated)', type: 'text' },
+        { name: 'trustedRegistry', label: 'Trusted registry', type: 'json' },
+        { name: 'acceptedRegistry', label: 'Accepted registry', type: 'json' },
+        { name: 'acceptedTerritory', label: 'Accepted territory', type: 'json' },
+        { name: 'vesselBuildingRegistry', label: 'Vessel building registry', type: 'json' },
         { name: 'manifestPolicy', label: 'Manifest policy', type: 'choice', choices: ['request', 'evidence', 'reject-difference'] },
         { name: 'requireExitEvidence', label: 'Require exit evidence', type: 'boolean' }
       ]);

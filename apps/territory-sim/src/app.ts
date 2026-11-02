@@ -1,7 +1,8 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { validateModel, type Area, type Asset, type CargoManifest, type Listing, type Production, type Route, type URI, type Variety, type Vessel } from '@fctp/protocol';
-import { configuredAdministrator, createHost, type FctpServerOptions } from '@fctp/server-base';
+import { expectedHomeActor } from '@fctp/identity';
+import { ADMISSION_FIELDS, configuredAdministrator, createHost, entryAdmissionAllows, isAdmissionList, type FctpServerOptions } from '@fctp/server-base';
 import { discoverSimulationActions } from './actions.js';
 import { installSimulationTerritory, simulationExpectedIssuer, type SimulationTerritory } from './territory.js';
 
@@ -9,9 +10,6 @@ export interface CreateSimulationAppOptions {
   origin: string;
   storeFile: string;
   keyFile?: string;
-  authorityOrigin: string;
-  additionalAuthorityOrigins?: string[];
-  playerNames?: string[];
   administrator?: string;
   peerOrigin: string;
   adminSecret: string;
@@ -64,17 +62,9 @@ async function body(request: IncomingMessage): Promise<Record<string, unknown>> 
 
 export async function createSimulationApp(options: CreateSimulationAppOptions): Promise<SimulationApp> {
   const origin = new URL(options.origin).origin;
-  const authorityOrigins = canonicalAuthorityOrigins(options.authorityOrigin, options.additionalAuthorityOrigins);
-  const playerNames = canonicalPlayerNames(options.playerNames);
   const peer = new URL(options.peerOrigin).origin;
   const actorId = `${origin}/actors/territory` as URI;
-  const enrollments = authorityOrigins.flatMap((authorityOrigin) => playerNames.map((name) => ({ home: `${authorityOrigin}/actors/home` as URI, player: `${authorityOrigin}/actors/${name}` as URI })));
-  const homeByPlayer = new Map(enrollments.map(({ home, player }) => [player, home]));
-  const playerIds = [...homeByPlayer.keys()];
-  const administrator = options.administrator === undefined ? undefined : configuredAdministrator(options.administrator, authorityOrigins);
-  if (administrator) homeByPlayer.set(administrator.actorId, administrator.homeActorId);
-  const playerId = `${authorityOrigins[0]!}/actors/${playerNames[0]!}` as URI;
-  const registryIds = authorityOrigins.map((authorityOrigin) => `${authorityOrigin}/actors/registry` as URI);
+  const administrator = options.administrator === undefined ? undefined : configuredAdministrator(options.administrator);
   const areas: Area[] = [
     { id: `${origin}/objects/areas/harbor`, name: 'Harbor District', territory: actorId },
     { id: `${origin}/objects/areas/highlands`, name: 'Ore Highlands', territory: actorId },
@@ -101,7 +91,7 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
      assets: [`${origin}/objects/assets/ore`, `${origin}/objects/assets/metal`, `${origin}/objects/assets/refined`],
   };
   const resourceAuth: NonNullable<FctpServerOptions['authorizeResource']> = async (_request, _actor, _resourceId, player) => ({
-    allowed: player !== undefined && playerIds.includes(player),
+    allowed: player !== undefined,
     ...(player ? { player } : {}),
   });
   const hostRef: { current?: Awaited<ReturnType<typeof createHost>> } = {};
@@ -124,8 +114,8 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
         const declaredPlayer = typeof declaration.actor === 'string' ? declaration.actor : undefined;
         const recipient = Array.isArray(activity.to) && activity.to.includes(actorId);
         if (!declaredPlayer || !recipient) return undefined;
-        const enrolledHome = homeByPlayer.get(declaredPlayer);
-        return enrolledHome === sender ? enrolledHome : undefined;
+        const expectedHome = expectedHomeActor(declaredPlayer);
+        return expectedHome === sender ? expectedHome : undefined;
       }
       const object = activity.object as Record<string, unknown>;
       let knownRegistry: URI | undefined;
@@ -142,7 +132,6 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
     },
   });
   hostRef.current = host;
-  for (const { home, player } of enrollments) await host.server.enrollPlayer(player, home);
   if (administrator) await host.server.enrollPlayer(administrator.actorId, administrator.homeActorId);
   const territory = installSimulationTerritory(host, {
     port: mainPort, route: routeId,
@@ -151,12 +140,11 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
       commodityMasses: { [ids.varieties.ore]: 1, [ids.varieties.metal]: 2, [ids.varieties.importedMetal]: 2, [ids.varieties.refined]: 3 },
       depositAmount: 100, miningCapacity: 10, miningEnabled: true, manufacturingSlots: 2, manufacturingTime: 2, portCapacity: 200, berthCapacity: 1,
     },
-    acceptedRegistries: registryIds, acceptedTerritories: [`${peer}/actors/territory`],
     ...(options.fetcher ? { fetcher: options.fetcher } : {}),
   });
 
   const variety = (id: URI, name: string, mass: number, asset?: URI, production?: Production[]): Variety => ({ id, name, holder: actorId, mass, version: '1', ...(asset ? { asset } : {}), ...(production ? { production } : {}) });
-  const asset = (id: URI, name: string): Asset => ({ id, name, creator: [playerId], holder: actorId, media: [{ url: `${origin}/objects/text/${name}`, mediaType: 'text/plain' }] });
+  const asset = (id: URI, name: string): Asset => ({ id, name, creator: [actorId], holder: actorId, media: [{ url: `${origin}/objects/text/${name}`, mediaType: 'text/plain' }] });
   const productionOre: Production = { type: 'mine', duration: 1, location: [areas[1]!], yield: [{ probability: 1, count: 1, data: {} }] };
   const nativeProduction: Production = { type: 'manufacture', duration: 2, ingredients: [{ variety: ids.varieties.ore, count: 1, data: {} }], yield: [{ probability: 1, count: 1, data: {} }] };
   const importedProduction: Production = { type: 'manufacture', duration: 2, ingredients: [{ variety: ids.varieties.importedMetal, count: 1, data: {} }], yield: [{ probability: 1, count: 1, data: {} }] };
@@ -180,8 +168,6 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
       const tokenHeader = request.headers.authorization ?? '';
       const resourcePlayer = tokenHeader.startsWith('Bearer ') ? await host.server.authenticateDiplomaticToken(actorId, tokenHeader.slice(7)) : undefined;
       if (!resourcePlayer) { json(response, 401, { error: 'unauthorized' }); return true; }
-      const enrolled = playerIds.includes(resourcePlayer);
-      if (!enrolled) { json(response, 403, { error: 'forbidden' }); return true; }
       const content = url.pathname === '/objects/maps/territory/ascii' ? '~~~~~\n~H..~\n~..M~\n~~~~~' : `${url.pathname.split('/').at(-1)} production asset`;
       response.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'private, no-store' });
       response.end(content);
@@ -207,7 +193,7 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
     }
     const auth = request.headers.authorization ?? '';
     const player = auth.startsWith('Bearer ') ? await host.server.authenticateDiplomaticToken(actorId, auth.slice(7)) : undefined;
-    const isPlayer = Boolean(player && playerIds.includes(player));
+    const isPlayer = Boolean(player);
     const isAdmin = await host.server.checkAdmin(request, host.actor('territory'));
     if (url.pathname === '/local/actions' && request.method === 'GET') {
       response.setHeader('Cache-Control', 'no-store');
@@ -230,7 +216,7 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
         if (!checked.success || checked.data.id !== vesselId) { json(response, 400, { error: 'invalid-vessel-metadata' }); return true; }
         vessel = checked.data;
         if (vessel.possessor !== player) { json(response, 403, { error: 'forbidden' }); return true; }
-        if (!registryIds.includes(vessel.registry)) { json(response, 403, { error: 'registry-not-accepted' }); return true; }
+        if (!entryAdmissionAllows(state.admission, vessel.registry).allowed) { json(response, 403, { error: 'registry-not-accepted' }); return true; }
       }
       const activeVisit = [...ownVisits].reverse().find((visit) => !visit.exited);
       json(response, 200, discoverSimulationActions({ simulation: state.simulation, actor: actorId, player, vesselId: vesselId as URI, vessel, origin, ...(activeVisit ? { visit: activeVisit } : {}) }));
@@ -301,22 +287,6 @@ function canonicalAdditionalRoutes(values: Route[] | undefined, origin: string, 
     return structuredClone(value);
   });
 }
-function canonicalAuthorityOrigins(primary: string, additional: string[] | undefined): string[] {
-  if (additional !== undefined && !Array.isArray(additional)) throw new TypeError('Invalid authority origins');
-  return [...new Set([primary, ...(additional ?? [])].map((value) => {
-    if (typeof value !== 'string') throw new TypeError('Invalid authority origin');
-    const url = new URL(value);
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new TypeError('Invalid authority origin');
-    return url.origin;
-  }))];
-}
-
-function canonicalPlayerNames(names: string[] | undefined): string[] {
-  if (names === undefined) return ['player'];
-  if (!Array.isArray(names) || names.length === 0 || names.some((name) => typeof name !== 'string' || !/^[A-Za-z0-9_-]+$/.test(name) || name.includes('.')) || new Set(names).size !== names.length) throw new TypeError('Invalid player names');
-  return [...names];
-}
-
 function validManifest(value: unknown): value is ValidCargoManifest {
   if (typeof value !== 'object' || value === null || !('entries' in value) || !Array.isArray(value.entries)) return false;
   return value.entries.every((entry) => typeof entry === 'object' && entry !== null && typeof entry.variety === 'string' &&
@@ -325,13 +295,11 @@ function validManifest(value: unknown): value is ValidCargoManifest {
 }
 
 function validAdmission(value: Record<string, unknown>): boolean {
-  const uris = (item: unknown): boolean => Array.isArray(item) && item.every((entry) => typeof entry === 'string' && URL.canParse(entry));
   return Object.entries(value).every(([key, item]) => {
     if (key === 'reviewMode') return item === 'automatic' || item === 'manual';
-    if (key === 'acceptedRegistries' || key === 'acceptedTerritories') return uris(item);
     if (key === 'manifestPolicy') return ['request', 'evidence', 'reject-difference'].includes(String(item));
     if (key === 'requireExitEvidence') return typeof item === 'boolean';
-    return false;
+    return (ADMISSION_FIELDS as readonly string[]).includes(key) && isAdmissionList(item);
   });
 }
 

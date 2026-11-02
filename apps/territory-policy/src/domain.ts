@@ -22,12 +22,6 @@ export interface Policy {
   portLimits: Record<string, number>;
   decisions: Record<string, 'allow' | 'deny'>;
   varietyPortPolicy?: Record<string, 'allow' | 'deny'>;
-  admission?: {
-    registryAcceptance?: string[];
-    territoryAcceptance?: string[];
-    mismatchPolicy?: 'declared' | 'evidence' | 'reject';
-    publicPorts?: string[];
-  };
 }
 
 export interface VesselCargo { capacity: number; manifest: CargoManifest }

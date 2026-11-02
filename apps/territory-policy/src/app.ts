@@ -1,7 +1,8 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Route, URI, Variety } from '@fctp/protocol';
-import { configuredAdministrator, createHost, type Host } from '@fctp/server-base';
+import { expectedHomeActor } from '@fctp/identity';
+import { ADMISSION_FIELDS, configuredAdministrator, createHost, isAdmissionList, type Host } from '@fctp/server-base';
 import { ActionDiscoveryError, discoverPolicyActions } from './actions.js';
 import { territoryAProduction, type Policy } from './domain.js';
 import { expectedIssuer, installPolicyTerritory, type PolicyTerritoryLedger } from './territory.js';
@@ -13,11 +14,7 @@ export interface CreatePolicyAppOptions {
   origin: string;
   storeFile: string;
   keyFile?: string;
-  authorityOrigin: string;
-  additionalAuthorityOrigins?: string[];
-  playerNames?: string[];
   administrator?: string;
-  peerOrigin: string;
   adminSecret: string;
   additionalRoutes?: Route[];
   fetcher?: typeof fetch;
@@ -35,9 +32,6 @@ export interface PolicyAppIds {
 
 export async function createPolicyApp(options: CreatePolicyAppOptions) {
   const origin = new URL(options.origin).origin;
-  const authorityOrigins = canonicalAuthorityOrigins(options.authorityOrigin, options.additionalAuthorityOrigins);
-  const playerNames = canonicalPlayerNames(options.playerNames);
-  const peerOrigin = new URL(options.peerOrigin).origin;
   const actorId = `${origin}/actors/territory`;
   const defaultRoutes: Route[] = [
     {
@@ -63,13 +57,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
     varieties: { ore: `${origin}/objects/varieties/ore`, metal: `${origin}/objects/varieties/metal` },
     assets: [`${origin}/objects/assets/ore`, `${origin}/objects/assets/metal`]
   };
-  const enrollments = authorityOrigins.flatMap((authority) => playerNames.map((name) => ({ home: `${authority}/actors/home` as URI, player: `${authority}/actors/${name}` as URI })));
-  const homeByPlayer = new Map(enrollments.map(({ home, player }) => [player, home]));
-  const playerIds = [...homeByPlayer.keys()];
-  const administrator = options.administrator === undefined ? undefined : configuredAdministrator(options.administrator, authorityOrigins);
-  if (administrator) homeByPlayer.set(administrator.actorId, administrator.homeActorId);
-  const playerId = `${authorityOrigins[0]!}/actors/${playerNames[0]!}` as URI;
-  const registryIds = authorityOrigins.map((authority) => `${authority}/actors/registry` as URI);
+  const administrator = options.administrator === undefined ? undefined : configuredAdministrator(options.administrator);
   const portDocuments = ids.ports.map((id, index) => ({
     '@context': ['https://www.w3.org/ns/activitystreams', 'https://fctp.example/context'],
     id, type: 'Port', name: index === 0 ? 'East Haven' : 'West Haven', territory: actorId,
@@ -93,8 +81,8 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
     if (object && typeof object === 'object' && ('tokenDigest' in object || 'tokenRevoke' in object)) {
       const declaredPlayer = typeof (object as Record<string, unknown>).actor === 'string' ? (object as Record<string, unknown>).actor as string : undefined;
       if (!declaredPlayer || !Array.isArray(activity.to) || !activity.to.includes(actorId)) return undefined;
-      const enrolledHome = homeByPlayer.get(declaredPlayer);
-      return enrolledHome && enrolledHome === sender ? enrolledHome : undefined;
+      const expectedHome = expectedHomeActor(declaredPlayer);
+      return expectedHome === sender ? expectedHome : undefined;
     }
     if (localActor !== actorId || !territory) return undefined;
     const ledger = await territory.ledger;
@@ -116,7 +104,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
     },
     authorizeResource: async (_request, _actor, resourceId, player) => {
       const ledger = await territory.ledger;
-      return { allowed: ledger.admission.publicPorts.some((port) => resourceId === port || resourceId.startsWith(`${port}/`)), ...(player && playerIds.includes(player) ? { player } : {}) };
+      return { allowed: ledger.admission.publicPorts.some((port) => resourceId === port || resourceId.startsWith(`${port}/`)), ...(player ? { player } : {}) };
     }
   });
   hostRef.current = host;
@@ -127,17 +115,16 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
     varieties: [ore.id, metal.id], assets: ids.assets
   });
   await host.server.registerActor({ actor: mutableActor });
-  for (const { home, player } of enrollments) await host.server.enrollPlayer(player, home);
   if (administrator) await host.server.enrollPlayer(administrator.actorId, administrator.homeActorId);
   const territory = installPolicyTerritory(host, {
     name: 'territory', portIds: ids.ports, routeIds: ids.routes,
     routes: routes.map((route) => ({ id: route.id as URI, from: route.from as string, to: route.to as string })),
     commodities: [{ variety: ore, mass: 2 }, { variety: metal, mass: 1 }], initialPolicy: policy,
-    registryAcceptance: registryIds, territoryAcceptance: [`${peerOrigin}/actors/territory`], publicPorts: [ids.ports[0]!],
+    publicPorts: [ids.ports[0]!],
     ...(options.fetcher ? { fetcher: options.fetcher } : {})
   });
 
-  await publishResources(host, ids, mutableActor, portDocuments, routes, ore, metal, actorId, playerId, (await territory.ledger).admission.publicPorts);
+  await publishResources(host, ids, mutableActor, portDocuments, routes, ore, metal, actorId, (await territory.ledger).admission.publicPorts);
   host.server.addRoute(({ request, response, url }) => {
     if (request.method !== 'GET' || url.pathname !== '/objects/maps/territory/ascii') return false;
     response.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=0, must-revalidate' });
@@ -161,7 +148,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
     }
     if (url.pathname === '/local/actions' && request.method === 'GET') {
       try {
-        const player = await authenticatedPlayer(request, host, actorId, playerIds);
+        const player = await authenticatedPlayer(request, host, actorId);
         if (!player) { send(401, { error: 'unauthorized' }); return true; }
         const vessel = url.searchParams.get('vessel');
         if (!vessel || !URL.canParse(vessel)) { send(400, { error: 'invalid-vessel' }); return true; }
@@ -173,7 +160,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
       return true;
     }
     if (url.pathname === '/local/state' && request.method === 'GET') {
-      const player = await authenticatedPlayer(request, host, actorId, playerIds);
+      const player = await authenticatedPlayer(request, host, actorId);
       if (!player && !await base.checkAdmin(request, mutableActor)) { send(401, { error: 'unauthorized' }); return true; }
       const ledger = await territory.ledger;
       send(200, { state: ledger.state, admission: ledger.admission, decisions: ledger.decisions });
@@ -204,7 +191,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
       }
       if (!validAdmission(input, ids)) { send(400, { error: 'invalid-input' }); return true; }
       await territory.updateAdmissionPolicy(input as Partial<PolicyTerritoryLedger['admission']>);
-      await publishResources(host, ids, mutableActor, portDocuments, routes, ore, metal, actorId, playerId, (await territory.ledger).admission.publicPorts);
+      await publishResources(host, ids, mutableActor, portDocuments, routes, ore, metal, actorId, (await territory.ledger).admission.publicPorts);
       send(200, { admission: (await territory.ledger).admission }); return true;
     }
     if (url.pathname === '/local/admin/entry-requests' && request.method === 'GET') {
@@ -223,7 +210,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
       send(200, result); return true;
     }
     if (url.pathname === '/local/traverse' && request.method === 'POST') {
-      const player = await authenticatedPlayer(request, host, actorId, playerIds);
+      const player = await authenticatedPlayer(request, host, actorId);
       if (!player) { send(401, { error: 'unauthorized' }); return true; }
       const input = await readJson(request);
       if (typeof input.vessel !== 'string' || typeof input.route !== 'string') { send(400, { error: 'invalid-input' }); return true; }
@@ -233,7 +220,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
     }
     const operation = ['/local/mine', '/local/manufacture', '/local/transfer', '/local/load', '/local/unload'].includes(url.pathname);
     if (operation && request.method === 'POST') {
-      const player = await authenticatedPlayer(request, host, actorId, playerIds);
+      const player = await authenticatedPlayer(request, host, actorId);
       if (!player) { send(401, { error: 'unauthorized' }); return true; }
       const input = await readJson(request);
       if (!Number.isSafeInteger(input.count) || (input.count as number) < 1) { send(400, { error: 'invalid-input' }); return true; }
@@ -260,7 +247,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
   return { host, territory, ids };
 }
 
-async function publishResources(host: Host, ids: PolicyAppIds, actor: Record<string, unknown>, ports: Record<string, unknown>[], routes: Record<string, unknown>[], ore: Variety, metal: Variety, actorId: URI, playerId: URI, publicPorts: URI[]): Promise<void> {
+async function publishResources(host: Host, ids: PolicyAppIds, actor: Record<string, unknown>, ports: Record<string, unknown>[], routes: Record<string, unknown>[], ore: Variety, metal: Variety, actorId: URI, publicPorts: URI[]): Promise<void> {
   const context = ['https://www.w3.org/ns/activitystreams', 'https://fctp.example/context'];
   const boundaries = [`${new URL(actorId).origin}/objects/boundaries/west`, `${new URL(actorId).origin}/objects/boundaries/east`];
   const varieties = [ore, metal];
@@ -285,7 +272,7 @@ async function publishResources(host: Host, ids: PolicyAppIds, actor: Record<str
     host.server.registerResource(String(variety.id), { '@context': context, ...variety });
     const slug = String(variety.id).split('/').at(-1)!;
     const assetId = `${new URL(actorId).origin}/objects/assets/${slug}`;
-    host.server.registerResource(assetId, { '@context': context, id: assetId, type: 'Asset', name: String(variety.name), creator: [playerId], holder: actorId, media: [{ url: `${assetId}/text`, mediaType: 'text/plain; charset=utf-8' }] });
+    host.server.registerResource(assetId, { '@context': context, id: assetId, type: 'Asset', name: String(variety.name), creator: [actorId], holder: actorId, media: [{ url: `${assetId}/text`, mediaType: 'text/plain; charset=utf-8' }] });
   }
   actor.resources = { ports: `${new URL(actorId).origin}/objects/policy/ports`, routes: `${new URL(actorId).origin}/objects/policy/routes`, areas: [area], map: ids.map };
   await host.server.registerActor({ actor: actor as never });
@@ -304,20 +291,6 @@ function canonicalAdditionalRoutes(values: Route[] | undefined, origin: string, 
     return structuredClone(value);
   });
 }
-function canonicalAuthorityOrigins(primary: string, additional: string[] | undefined): string[] {
-  if (additional !== undefined && !Array.isArray(additional)) throw new TypeError('Invalid authority origins');
-  return [...new Set([primary, ...(additional ?? [])].map((value) => {
-    if (typeof value !== 'string') throw new TypeError('Invalid authority origin');
-    const url = new URL(value);
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new TypeError('Invalid authority origin');
-    return url.origin;
-  }))];
-}
-function canonicalPlayerNames(names: string[] | undefined): string[] {
-  if (names === undefined) return ['player'];
-  if (!Array.isArray(names) || names.length === 0 || names.some((name) => typeof name !== 'string' || !/^[A-Za-z0-9_-]+$/.test(name) || name.includes('.')) || new Set(names).size !== names.length) throw new TypeError('Invalid player names');
-  return [...names];
-}
 function isVariety(value: unknown, ids: PolicyAppIds): value is URI { return value === ids.varieties.ore || value === ids.varieties.metal; }
 function possessesActiveVisit(ledger: PolicyTerritoryLedger, vessel: string, player: string): boolean {
   const visit = ledger.visits[vessel];
@@ -329,11 +302,10 @@ async function matchesSecret(request: IncomingMessage, expected: string): Promis
   const provided = (request.headers.authorization ?? '').startsWith('Bearer ') ? request.headers.authorization!.slice(7) : '';
   return timingSafeEqual(createHash('sha256').update(provided).digest(), createHash('sha256').update(expected).digest());
 }
-async function authenticatedPlayer(request: IncomingMessage, host: Host, actorId: URI, playerIds: URI[]): Promise<URI | undefined> {
+async function authenticatedPlayer(request: IncomingMessage, host: Host, actorId: URI): Promise<URI | undefined> {
   const header = request.headers.authorization;
   if (!header?.startsWith('Bearer ')) return undefined;
-  const player = await host.server.authenticateDiplomaticToken(actorId, header.slice(7));
-  return player && playerIds.includes(player) ? player : undefined;
+  return await host.server.authenticateDiplomaticToken(actorId, header.slice(7));
 }
 async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []; let size = 0;
@@ -346,8 +318,9 @@ function validAdmission(value: Record<string, unknown>, ids: PolicyAppIds): bool
   return Object.entries(value).every(([key, item]) => {
     if (key === 'mismatchPolicy') return ['declared', 'evidence', 'reject'].includes(String(item));
     if (key === 'reviewMode') return item === 'automatic' || item === 'manual';
-    return ['registryAcceptance', 'territoryAcceptance', 'publicPorts'].includes(key) && Array.isArray(item) &&
-      item.every((entry) => typeof entry === 'string' && URL.canParse(entry) && (key !== 'publicPorts' || ids.ports.includes(entry)));
+    if (key === 'publicPorts') return Array.isArray(item) &&
+      item.every((entry) => typeof entry === 'string' && URL.canParse(entry) && ids.ports.includes(entry));
+    return (ADMISSION_FIELDS as readonly string[]).includes(key) && isAdmissionList(item);
   });
 }
 function validPolicy(value: Record<string, unknown>, ids: PolicyAppIds): boolean {

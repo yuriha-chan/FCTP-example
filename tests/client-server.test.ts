@@ -484,10 +484,9 @@ async function startExploreTerritories(directory: string): Promise<ExploreTerrit
     simulation: `http://127.0.0.1:${simulationPort}`,
     additional: `http://127.0.0.1:${additionalPort}`
   };
-  const authorityOrigin = 'http://127.0.0.1:1';
-  const policy = await createPolicyApp({ origin: origins.policy, storeFile: join(directory, 'policy.store.json'), authorityOrigin, peerOrigin: origins.simulation, adminSecret: 'explore-admin' });
-  const simulation = await createSimulationApp({ origin: origins.simulation, storeFile: join(directory, 'simulation.store.json'), authorityOrigin, peerOrigin: origins.policy, adminSecret: 'explore-admin' });
-  const additional = await createPolicyApp({ origin: origins.additional, storeFile: join(directory, 'additional.store.json'), authorityOrigin, peerOrigin: origins.simulation, adminSecret: 'explore-admin' });
+  const policy = await createPolicyApp({ origin: origins.policy, storeFile: join(directory, 'policy.store.json'), adminSecret: 'explore-admin' });
+  const simulation = await createSimulationApp({ origin: origins.simulation, storeFile: join(directory, 'simulation.store.json'), peerOrigin: origins.policy, adminSecret: 'explore-admin' });
+  const additional = await createPolicyApp({ origin: origins.additional, storeFile: join(directory, 'additional.store.json'), adminSecret: 'explore-admin' });
   await Promise.all([
     policy.host.listen(policyPort, '127.0.0.1'),
     simulation.host.listen(simulationPort, '127.0.0.1'),
@@ -1874,6 +1873,15 @@ interface ProductionWorldOptions {
   additionalSimulationRoutes?: (origins: { policyOrigin: string; simulationOrigin: string }) => Route[];
 }
 
+function fixtureAdmission(registryActor: URI) {
+  return {
+    trustedRegistry: { mode: 'allowlist' as const, allowlist: [registryActor], denylist: [] },
+    acceptedRegistry: { mode: 'denylist' as const, allowlist: [], denylist: [] },
+    acceptedTerritory: { mode: 'denylist' as const, allowlist: [], denylist: [] },
+    vesselBuildingRegistry: { mode: 'allowlist' as const, allowlist: [registryActor], denylist: [] }
+  };
+}
+
 async function startProductionWorld(directory: string, options: ProductionWorldOptions = {}): Promise<ProductionWorld> {
   const [authorityPort, policyPort, simulationPort] = await Promise.all([freePort(), freePort(), freePort()]);
   const origins = {
@@ -1889,12 +1897,15 @@ async function startProductionWorld(directory: string, options: ProductionWorldO
   const additionalPolicyRoutes = options.additionalPolicyRoutes?.({ policyOrigin: origins.policy, simulationOrigin: origins.simulation }) ?? [];
   const additionalSimulationRoutes = options.additionalSimulationRoutes?.({ policyOrigin: origins.policy, simulationOrigin: origins.simulation }) ?? [];
   const authority = await createAuthorityApp({
-    origin: origins.authority, storeFile: join(directory, 'authority.json'), adminSecret, playerNames, administrator: administratorHandle,
+    origin: origins.authority, storeFile: join(directory, 'authority.json'), adminSecret, administrator: administratorHandle, playerNames,
     ...(options.administratorNames === undefined ? {} : { administratorNames: options.administratorNames }),
     ...(options.accountPasswords === undefined ? {} : { accountPasswords: options.accountPasswords })
   });
-  const policy = await createPolicyApp({ origin: origins.policy, storeFile: join(directory, 'policy.json'), authorityOrigin: origins.authority, playerNames, administrator: administratorHandle, peerOrigin: origins.simulation, adminSecret, additionalRoutes: additionalPolicyRoutes });
-  const simulation = await createSimulationApp({ origin: origins.simulation, storeFile: join(directory, 'simulation.json'), authorityOrigin: origins.authority, playerNames, administrator: administratorHandle, peerOrigin: origins.policy, adminSecret, additionalRoutes: additionalSimulationRoutes });
+  const policy = await createPolicyApp({ origin: origins.policy, storeFile: join(directory, 'policy.json'), administrator: administratorHandle, adminSecret, additionalRoutes: additionalPolicyRoutes });
+  const simulation = await createSimulationApp({ origin: origins.simulation, storeFile: join(directory, 'simulation.json'), administrator: administratorHandle, peerOrigin: origins.policy, adminSecret, additionalRoutes: additionalSimulationRoutes });
+  const admission = fixtureAdmission(authority.ids.actor.registry);
+  await policy.territory.updateAdmissionPolicy(admission);
+  await simulation.territory.updateAdmission(admission);
   await Promise.all([
     authority.authority.listen(authorityPort, '127.0.0.1'),
     policy.host.listen(policyPort, '127.0.0.1'),
@@ -2633,7 +2644,8 @@ test('equal local job numbers at independent simulation authorities retain disti
   const world = await startProductionWorld(directory);
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
-  const other = await createSimulationApp({ origin, storeFile: join(directory, 'other-sim.json'), authorityOrigin: world.origins.authority, peerOrigin: world.origins.policy, playerNames: ['player', 'other'], adminSecret: world.adminSecret });
+  const other = await createSimulationApp({ origin, storeFile: join(directory, 'other-sim.json'), peerOrigin: world.origins.policy, adminSecret: world.adminSecret });
+  await other.territory.updateAdmission(fixtureAdmission(world.authority.ids.actor.registry));
   await other.host.listen(port, '127.0.0.1');
   await world.authority.home.requestDigest(world.authority.ids.actor.player, { id: other.ids.actor, inbox: other.host.actor('territory').inbox });
   await world.authority.authority.server.processOutbox();

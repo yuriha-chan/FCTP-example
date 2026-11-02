@@ -30,7 +30,7 @@ test('simulation app serves resources and enforces enrolled Player and administr
   const authorityOrigin = `http://127.0.0.1:${authorityPort}`;
   const origin = `http://127.0.0.1:${appPort}`;
   const authority = await createHost({ origin: authorityOrigin, storeFile: join(directory, 'authority.json'), actors: [{ name: 'registry', role: 'registry' }, { name: 'home', role: 'home' }, { name: 'player', role: 'player' }] });
-  const app = await createSimulationApp({ origin, storeFile: join(directory, 'simulation.json'), authorityOrigin, peerOrigin: 'https://policy.example', adminSecret: 'local-admin-secret' });
+  const app = await createSimulationApp({ origin, storeFile: join(directory, 'simulation.json'), peerOrigin: 'https://policy.example', adminSecret: 'local-admin-secret' });
   try {
     await authority.listen(authorityPort);
     await app.host.listen(appPort);
@@ -93,7 +93,7 @@ test('simulation manual review persists pending entry requests and waits for tic
     actors: [{ name: 'registry', role: 'registry' }, { name: 'home', role: 'home' }, { name: 'player', role: 'player' }]
   });
   const registryId = `${authorityOrigin}/actors/registry`;
-  let app = await createSimulationApp({ origin, storeFile: join(directory, 'simulation.json'), authorityOrigin, peerOrigin: 'https://policy.example', adminSecret });
+  let app = await createSimulationApp({ origin, storeFile: join(directory, 'simulation.json'), peerOrigin: 'https://policy.example', adminSecret });
   await authority.listen(authorityPort);
   await app.host.listen(appPort);
   const adminHeaders = { Authorization: `Bearer ${adminSecret}`, 'Content-Type': 'application/json' };
@@ -123,7 +123,7 @@ test('simulation manual review persists pending entry requests and waits for tic
   const events = (type: string): Promise<Array<Record<string, unknown>>> => app.host.server.store.read((store) =>
     store.outboxArchive.map((item) => item.activity.object as Record<string, unknown>).filter((object) => object.type === type));
   try {
-    const admission = await fetch(`${origin}/local/admin/admission`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ reviewMode: 'manual', acceptedRegistries: [registryId] }) });
+    const admission = await fetch(`${origin}/local/admin/admission`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ reviewMode: 'manual', trustedRegistry: { mode: 'allowlist', allowlist: [registryId], denylist: [] } }) });
     assert.equal(admission.status, 200, 'simulation accepts durable admission settings over its administration endpoint');
 
     const pendingRequest = entry('https://registry.test/entry/sim-manual-pending', 'https://registry.test/vessels/sim-manual-one');
@@ -137,7 +137,7 @@ test('simulation manual review persists pending entry requests and waits for tic
     assert.equal((await events('BerthingEvent')).some((event) => event.request === pendingRequest.id), false);
 
     await app.host.close();
-    app = await createSimulationApp({ origin, storeFile: join(directory, 'simulation.json'), authorityOrigin, peerOrigin: 'https://policy.example', adminSecret });
+    app = await createSimulationApp({ origin, storeFile: join(directory, 'simulation.json'), peerOrigin: 'https://policy.example', adminSecret });
     await app.host.listen(appPort);
     assert.match(JSON.stringify(await listRequests()), new RegExp(escapeRegExp(String(pendingRequest.id))), 'pending simulation records remain actionable after restart');
 
@@ -189,7 +189,7 @@ test('simulation manual review persists pending entry requests and waits for tic
 
     const changedRequest = entry('https://registry.test/entry/sim-manual-current-rule', 'https://registry.test/vessels/sim-manual-three');
     await sendEntry(changedRequest);
-    const changedAdmission = await fetch(`${origin}/local/admin/admission`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ acceptedRegistries: [] }) });
+    const changedAdmission = await fetch(`${origin}/local/admin/admission`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ trustedRegistry: { mode: 'allowlist', allowlist: [], denylist: [] } }) });
     assert.equal(changedAdmission.status, 200);
     const currentRule = await decide(String(changedRequest.id), 'approve');
     assert.equal(currentRule.status, 200);

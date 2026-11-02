@@ -40,7 +40,7 @@ test('policy app serves linked resources and protects operations with enrolled P
     }
     return new Response('not found', { status: 404 });
   };
-  const app = await createPolicyApp({ origin, storeFile: join(directory, 'policy.json'), authorityOrigin, peerOrigin: 'https://peer.example', adminSecret: 'policy-admin-secret', fetcher: remoteFetch });
+  const app = await createPolicyApp({ origin, storeFile: join(directory, 'policy.json'), adminSecret: 'policy-admin-secret', fetcher: remoteFetch });
   await app.host.listen(Number(new URL(origin).port));
   const nativeToken = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
   const diplomaticToken = await deriveDiplomaticToken(nativeToken, app.ids.actor);
@@ -100,7 +100,7 @@ test('policy app serves linked resources and protects operations with enrolled P
     const textMap = await fetch(`${origin}/objects/maps/territory/ascii`);
     assert.equal(textMap.headers.get('content-type'), 'text/plain; charset=utf-8');
     const asset = await (await fetch(app.ids.assets[0]!)).json() as { creator: string[]; media: Array<{ url: string }> };
-    assert.deepEqual(asset.creator, [playerId]);
+    assert.deepEqual(asset.creator, [app.ids.actor]);
     const assetText = await fetch(asset.media[0]!.url);
     assert.equal(assetText.headers.get('content-type'), 'text/plain; charset=utf-8');
     assert.match(await assetText.text(), /^Ore: /);
@@ -133,7 +133,7 @@ test('policy manual review persists verified entry requests across restart and a
     }
     return new Response('not found', { status: 404 });
   };
-  let app = await createPolicyApp({ origin, storeFile: join(directory, 'policy.json'), authorityOrigin, peerOrigin: 'https://peer.example', adminSecret, fetcher: remoteFetch });
+  let app = await createPolicyApp({ origin, storeFile: join(directory, 'policy.json'), adminSecret, fetcher: remoteFetch });
   await app.host.listen(port);
   const adminHeaders = { Authorization: `Bearer ${adminSecret}`, 'Content-Type': 'application/json' };
   const entry = (id: string, vessel: string) => ({
@@ -162,7 +162,7 @@ test('policy manual review persists verified entry requests across restart and a
   const events = (type: string): Promise<Array<Record<string, unknown>>> => app.host.server.store.read((store) =>
     store.outboxArchive.map((item) => item.activity.object as Record<string, unknown>).filter((object) => object.type === type));
   try {
-    const admission = await fetch(`${origin}/local/admin/admission`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ reviewMode: 'manual' }) });
+    const admission = await fetch(`${origin}/local/admin/admission`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ reviewMode: 'manual', trustedRegistry: { mode: 'allowlist', allowlist: [registryId], denylist: [] } }) });
     assert.equal(admission.status, 200, 'manual review mode is a durable admission setting');
 
     const pendingRequest = entry('https://registry.test/entry/manual-pending', 'https://registry.test/vessels/manual-one');
@@ -176,7 +176,7 @@ test('policy manual review persists verified entry requests across restart and a
     assert.equal((await events('BerthingEvent')).some((event) => event.request === pendingRequest.id), false, 'manual review does not emit a berthing event');
 
     await app.host.close();
-    app = await createPolicyApp({ origin, storeFile: join(directory, 'policy.json'), authorityOrigin, peerOrigin: 'https://peer.example', adminSecret, fetcher: remoteFetch });
+    app = await createPolicyApp({ origin, storeFile: join(directory, 'policy.json'), adminSecret, fetcher: remoteFetch });
     await app.host.listen(port);
     assert.match(JSON.stringify(await listRequests()), new RegExp(escapeRegExp(String(pendingRequest.id))), 'pending records remain actionable after restart');
 
@@ -219,7 +219,7 @@ test('policy manual review persists verified entry requests across restart and a
 
     const changedRequest = entry('https://registry.test/entry/manual-current-rule', 'https://registry.test/vessels/manual-three');
     await sendEntry(changedRequest);
-    const changedAdmission = await fetch(`${origin}/local/admin/admission`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ registryAcceptance: [] }) });
+    const changedAdmission = await fetch(`${origin}/local/admin/admission`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ trustedRegistry: { mode: 'allowlist', allowlist: [], denylist: [] } }) });
     assert.equal(changedAdmission.status, 200);
     const currentRule = await decide(String(changedRequest.id), 'approve');
     assert.equal(currentRule.status, 200);
@@ -286,8 +286,7 @@ test('policy local traverse moves an active visit between owned ports with an ob
     return new Response('not found', { status: 404 });
   };
   const app = await createPolicyApp({
-    origin, storeFile: join(directory, 'policy.json'), authorityOrigin, peerOrigin, adminSecret: 'policy-traverse-secret',
-    playerNames: ['player', 'other'], additionalRoutes: [outboundRoute], fetcher: remoteFetch
+    origin, storeFile: join(directory, 'policy.json'), adminSecret: 'policy-traverse-secret', additionalRoutes: [outboundRoute], fetcher: remoteFetch
   });
   await app.host.listen(Number(new URL(origin).port));
   const tokens = {} as Record<'player' | 'other', { native: Uint8Array; diplomatic: string }>;
@@ -314,6 +313,7 @@ test('policy local traverse moves an active visit between owned ports with an ob
     assert.equal(routeDocument.from, app.ids.ports[1]);
     assert.equal(routeDocument.to, `${peerOrigin}/objects/boundaries/east`);
 
+    await app.territory.updateAdmissionPolicy({ trustedRegistry: { mode: 'allowlist', allowlist: [registryId], denylist: [] } });
     const vessel = `${authorityOrigin}/objects/vessels/traverse-one`;
     const cargo = { entries: [{ variety: app.ids.varieties.ore, count: 2, data: {} }] };
     const entryId = `${authorityOrigin}/objects/entry-requests/traverse-one`;

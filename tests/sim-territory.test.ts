@@ -42,7 +42,7 @@ async function setup() {
     documents.set(String(host.key(name).publicKey.id), host.key(name).publicKey);
   }
   const sim = installSimulationTerritory(host, {
-    territoryActor: 'territory', port, route, config: config(), acceptedRegistries: [registry], acceptedTerritories: [],
+    territoryActor: 'territory', port, route, config: config(), trustedRegistry: { mode: 'allowlist', allowlist: [registry], denylist: [] },
     fetcher, registryInbox: async () => `${registry}/inbox` as URI, epoch: '2025-01-01T00:00:00.000Z', tickDurationMs: 1_000,
   });
   const send = async (object: Record<string, unknown>, corruptProof = false) => {
