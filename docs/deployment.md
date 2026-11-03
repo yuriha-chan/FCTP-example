@@ -32,6 +32,8 @@ docker compose --env-file docker/client/.env -f docker/client/compose.yaml up -d
 
 The default published host address is `127.0.0.1`, with host ports Authority `4100`, Policy `4101`, Simulation `4102`, and Client `4103`; each container listens on `8080`. Set `BIND_ADDRESS` in the relevant `.env` only when an operator intentionally needs a different host bind address. Compose project names and named data volumes are distinct per service.
 
+The Dockerfiles enable Corepack, activate the latest pnpm, and install from `pnpm-lock.yaml`. The pnpm store is a BuildKit cache mount shared by all four images (`id=pnpm`, `/pnpm/store`), so service builds reuse downloaded packages. BuildKit must remain enabled; it is the default in current Docker Compose. The cache contains package content only, not service state or secrets.
+
 ## NodeInfo build identity
 
 Every service exposes public NodeInfo 2.1 discovery:

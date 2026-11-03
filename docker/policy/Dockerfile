@@ -1,6 +1,9 @@
 FROM node:22-bookworm-slim AS build
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
 WORKDIR /app
-COPY package.json package-lock.json tsconfig.json tsconfig.base.json ./
+RUN corepack enable && corepack prepare pnpm@latest --activate
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json tsconfig.base.json ./
 COPY packages/ ./packages/
 COPY apps/test-authority/ ./apps/test-authority/
 COPY apps/territory-policy/ ./apps/territory-policy/
@@ -9,7 +12,9 @@ COPY apps/client-server/ ./apps/client-server/
 COPY apps/demo/ ./apps/demo/
 COPY apps/browser-harness/ ./apps/browser-harness/
 COPY scripts/deployment.mjs scripts/serve.mjs ./scripts/
-RUN npm ci && npm run build:policy && npm prune --omit=dev
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm install --frozen-lockfile --allow-build=esbuild --store-dir=/pnpm/store
+RUN pnpm run build:policy && pnpm prune --prod
 
 FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production
@@ -22,7 +27,7 @@ ENV FCTP_GIT_COMMIT=$GIT_COMMIT \
     FCTP_GIT_DIRTY=$GIT_DIRTY \
     FCTP_BUILD_TIME=$BUILD_TIME
 WORKDIR /app
-COPY --from=build --chown=node:node /app/package.json /app/package-lock.json ./
+COPY --from=build --chown=node:node /app/package.json ./
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/packages ./packages
 COPY --from=build --chown=node:node /app/apps/territory-policy/dist ./apps/territory-policy/dist
