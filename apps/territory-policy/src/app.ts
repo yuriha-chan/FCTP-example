@@ -1,7 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Route, URI, Variety } from '@fctp/protocol';
-import { expectedHomeActor } from '@fctp/identity';
 import { ADMISSION_FIELDS, configuredAdministrator, createHost, isAdmissionList, type Host } from '@fctp/server-base';
 import { ActionDiscoveryError, discoverPolicyActions } from './actions.js';
 import { territoryAProduction, type Policy } from './domain.js';
@@ -76,17 +75,10 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
     recipes: [{ id: 'ore-to-metal', ingredients: { [ore.id]: 2 }, output: metal.id, outputCount: 1 }],
     warehouseLimits: {}, portLimits: {}, decisions: {}
   };
-  const digestIssuer = async (localActor: URI, sender: URI, activity: { object: unknown; to?: unknown }): Promise<URI | undefined> => {
-    const object = activity.object;
-    if (object && typeof object === 'object' && ('tokenDigest' in object || 'tokenRevoke' in object)) {
-      const declaredPlayer = typeof (object as Record<string, unknown>).actor === 'string' ? (object as Record<string, unknown>).actor as string : undefined;
-      if (!declaredPlayer || !Array.isArray(activity.to) || !activity.to.includes(actorId)) return undefined;
-      const expectedHome = expectedHomeActor(declaredPlayer);
-      return expectedHome === sender ? expectedHome : undefined;
-    }
+  const resolveTerritoryIssuer = async (localActor: URI, _sender: URI, activity: { object: unknown }): Promise<URI | undefined> => {
     if (localActor !== actorId || !territory) return undefined;
     const ledger = await territory.ledger;
-    return expectedIssuer(object, ledger.visits);
+    return expectedIssuer(activity.object, ledger.visits);
   };
   const hostRef: { current?: Host } = {};
   const host = await createHost({
@@ -94,7 +86,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
     actors: [{ name: 'territory', role: 'territory' }],
     nodeInfo: { name: 'fctp-policy' },
     ...(options.fetcher ? { fetcher: options.fetcher } : {}),
-    resolveExpectedIssuer: digestIssuer,
+    resolveExpectedIssuer: resolveTerritoryIssuer,
     authorizeAdmin: async (request) => {
       if (await matchesSecret(request, options.adminSecret)) return true;
       if (!administrator) return false;
@@ -115,7 +107,6 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
     varieties: [ore.id, metal.id], assets: ids.assets
   });
   await host.server.registerActor({ actor: mutableActor });
-  if (administrator) await host.server.enrollPlayer(administrator.actorId, administrator.homeActorId);
   const territory = installPolicyTerritory(host, {
     name: 'territory', portIds: ids.ports, routeIds: ids.routes,
     routes: routes.map((route) => ({ id: route.id as URI, from: route.from as string, to: route.to as string })),

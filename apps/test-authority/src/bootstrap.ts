@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { FCTPActor, URI } from '@fctp/protocol';
-import type { GeneratedActorKey } from '@fctp/identity';
+import { validateHomeAccountName, type GeneratedActorKey } from '@fctp/identity';
 import { configuredAdministrator, createHost, FctpServer, type ActivityHandler, type FctpServerOptions } from '@fctp/server-base';
 
 export type AuthorityRole = 'registry' | 'home' | 'player';
@@ -19,6 +19,7 @@ export interface CreateAuthorityOptions {
   verifyInbound?: FctpServerOptions['verifyInbound'];
   authorizeResource?: FctpServerOptions['authorizeResource'];
   nodeInfo?: { name: string };
+  homeAccountName?: string;
   onInbound?: (server: FctpServer, actors: AuthorityActors) => void;
   inboxHandlers?: Partial<Record<AuthorityRole, Record<string, ActivityHandler>>>;
 }
@@ -44,6 +45,7 @@ export interface Authority {
 const roles: AuthorityRole[] = ['registry', 'home', 'player'];
 
 export async function createAuthority(options: CreateAuthorityOptions): Promise<Authority> {
+  const homeAccountName = validateHomeAccountName(options.homeAccountName ?? 'system.home');
   const playerNames = options.playerNames ?? ['player'];
   if (playerNames.length === 0 || new Set(playerNames).size !== playerNames.length || playerNames.some((name) => !/^[^.]+$/.test(name))) throw new TypeError('Player names must be non-empty, unique, and contain no dots');
   const administratorNames = options.administratorNames ?? [];
@@ -62,7 +64,8 @@ export async function createAuthority(options: CreateAuthorityOptions): Promise<
     ...(options.fetcher ? { fetcher: options.fetcher } : {}),
     ...(options.verifyInbound ? { verifyInbound: options.verifyInbound } : {}),
     ...(options.authorizeResource ? { authorizeResource: options.authorizeResource } : {}),
-    ...(options.nodeInfo ? { nodeInfo: options.nodeInfo } : {}),
+    nodeInfo: options.nodeInfo ?? { name: 'fctp-authority' },
+    homeAccountName,
     authorizeAdmin: options.adminSecret === undefined ? async () => false : async (request) => matchesSecret(request, options.adminSecret!),
     ...(options.inboxHandlers ? { inboxHandlers: options.inboxHandlers } : {}),
     configure: (server, actors) => {

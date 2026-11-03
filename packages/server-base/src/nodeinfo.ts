@@ -10,10 +10,10 @@ export interface GitBuildMetadata {
 export interface NodeInfoRuntime {
   name: string;
   version: string;
-  metadata: { git: GitBuildMetadata };
+  metadata: { git: GitBuildMetadata; homeAccountName?: string };
 }
 
-export function readNodeInfo(name: string, env: NodeJS.ProcessEnv = process.env): NodeInfoRuntime {
+export function readNodeInfo(name: string, env: NodeJS.ProcessEnv = process.env, homeAccountName?: string): NodeInfoRuntime {
   const commit = env.FCTP_GIT_COMMIT?.trim() || 'unknown';
   const describe = env.FCTP_GIT_DESCRIBE?.trim() || undefined;
   const dirtyValue = env.FCTP_GIT_DIRTY?.trim().toLowerCase();
@@ -28,7 +28,8 @@ export function readNodeInfo(name: string, env: NodeJS.ProcessEnv = process.env)
         ...(describe === undefined ? {} : { describe }),
         dirty,
         ...(builtAt === undefined ? {} : { builtAt })
-      }
+      },
+      ...(homeAccountName === undefined ? {} : { homeAccountName })
     }
   };
 }

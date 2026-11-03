@@ -1,6 +1,7 @@
 import { mkdir, readFile, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { validateHomeAccountName } from '@fctp/identity';
 
 const services = new Set(['authority', 'policy', 'simulation', 'client']);
 const applicationRoot = fileURLToPath(new globalThis.URL('../', import.meta.url));
@@ -85,6 +86,7 @@ export async function readDeploymentConfig(service, path) {
     const playerNames = validateNames(input.playerNames, 'player names');
     const administratorNames = input.administratorNames === undefined ? [] : validateNames(input.administratorNames, 'administrator names', true);
     const administrator = validateAdministrator(input.administrator);
+    const homeAccountName = validateHomeAccountName(input.homeAccountName ?? 'system.home');
     if (administratorNames.some((name) => playerNames.includes(name))) fail('Invalid account names');
     if (!record(input.vesselNames) || Object.keys(input.vesselNames).length !== playerNames.length || playerNames.some((name) => typeof input.vesselNames[name] !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(input.vesselNames[name])) || new Set(Object.values(input.vesselNames)).size !== playerNames.length) fail('Invalid vessel names');
     const adminSecret = await readSecret(resolveFile(input.adminSecretFile, base));
@@ -96,7 +98,7 @@ export async function readDeploymentConfig(service, path) {
     try { accountPasswords = JSON.parse(await readFile(passwordFile, 'utf8')); } catch { fail('Invalid account password file'); }
     const accountNames = [...playerNames, ...administratorNames];
     if (!record(accountPasswords) || Object.keys(accountPasswords).length !== accountNames.length || accountNames.some((name) => typeof accountPasswords[name] !== 'string' || !accountPasswords[name])) fail('Invalid account passwords');
-    Object.assign(config, { playerNames, administratorNames, ...(administrator === undefined ? {} : { administrator }), vesselNames: globalThis.structuredClone(input.vesselNames), adminSecret, accountPasswords });
+    Object.assign(config, { playerNames, administratorNames, ...(administrator === undefined ? {} : { administrator }), homeAccountName, vesselNames: globalThis.structuredClone(input.vesselNames), adminSecret, accountPasswords });
   }
 
   if (service === 'policy' || service === 'simulation') {
@@ -139,7 +141,7 @@ export async function startDeployment(service, config) {
   try {
     if (service === 'authority') {
       const { createAuthorityApp } = await import('../apps/test-authority/dist/app.js');
-      app = await createAuthorityApp({ origin: config.origin, storeFile, keyFile, adminSecret: config.adminSecret, ...(config.administrator === undefined ? {} : { administrator: config.administrator }), playerNames: config.playerNames, administratorNames: config.administratorNames, vesselNames: config.vesselNames, accountPasswords: config.accountPasswords });
+      app = await createAuthorityApp({ origin: config.origin, storeFile, keyFile, adminSecret: config.adminSecret, ...(config.administrator === undefined ? {} : { administrator: config.administrator }), playerNames: config.playerNames, administratorNames: config.administratorNames, vesselNames: config.vesselNames, accountPasswords: config.accountPasswords, homeAccountName: config.homeAccountName });
     }
     if (service === 'policy') {
       const { createPolicyApp } = await import('../apps/territory-policy/dist/app.js');

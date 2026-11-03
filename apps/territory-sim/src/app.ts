@@ -1,7 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { validateModel, type Area, type Asset, type CargoManifest, type Listing, type Production, type Route, type URI, type Variety, type Vessel } from '@fctp/protocol';
-import { expectedHomeActor } from '@fctp/identity';
 import { ADMISSION_FIELDS, configuredAdministrator, createHost, entryAdmissionAllows, isAdmissionList, type FctpServerOptions } from '@fctp/server-base';
 import { discoverSimulationActions } from './actions.js';
 import { installSimulationTerritory, simulationExpectedIssuer, type SimulationTerritory } from './territory.js';
@@ -109,14 +108,6 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
     },
     authorizeResource: resourceAuth,
     resolveExpectedIssuer: async (_local, sender, activity) => {
-      if (activity.object && typeof activity.object === 'object' && ('tokenDigest' in activity.object || 'tokenRevoke' in activity.object)) {
-        const declaration = activity.object as Record<string, unknown>;
-        const declaredPlayer = typeof declaration.actor === 'string' ? declaration.actor : undefined;
-        const recipient = Array.isArray(activity.to) && activity.to.includes(actorId);
-        if (!declaredPlayer || !recipient) return undefined;
-        const expectedHome = expectedHomeActor(declaredPlayer);
-        return expectedHome === sender ? expectedHome : undefined;
-      }
       const object = activity.object as Record<string, unknown>;
       let knownRegistry: URI | undefined;
       if (object?.type === 'DepartureRequest' && typeof object.vessel === 'string') {
@@ -132,7 +123,6 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
     },
   });
   hostRef.current = host;
-  if (administrator) await host.server.enrollPlayer(administrator.actorId, administrator.homeActorId);
   const territory = installSimulationTerritory(host, {
     port: mainPort, route: routeId,
     config: {

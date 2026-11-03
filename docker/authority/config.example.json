@@ -5,6 +5,7 @@
   "origin": "https://authority.example.org",
   "workerIntervalMs": 1000,
   "adminSecretFile": "/run/secrets/admin-secret",
+  "homeAccountName": "system.home",
   "playerNames": ["player", "player-2"],
   "administratorNames": ["governor"],
   "administrator": "@governor@authority.example.org",

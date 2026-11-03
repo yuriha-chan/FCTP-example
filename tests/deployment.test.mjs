@@ -18,6 +18,55 @@ async function freePort() {
   return address.port;
 }
 
+const NODEINFO_SCHEMA = 'http://nodeinfo.diaspora.software/ns/schema/2.1';
+
+async function readNodeInfo(origin) {
+  const wellKnownResponse = await globalThis.fetch(`${origin}/.well-known/nodeinfo`);
+  assert.equal(wellKnownResponse.status, 200);
+  const wellKnown = await wellKnownResponse.json();
+  const link = wellKnown.links.find((entry) => entry.rel === NODEINFO_SCHEMA);
+  assert.ok(link, 'NodeInfo discovery advertises schema 2.1');
+  const response = await globalThis.fetch(link.href);
+  assert.equal(response.status, 200);
+  return response.json();
+}
+
+async function readHomeIdentity(origin) {
+  const response = await globalThis.fetch(`${origin}/actors/home`);
+  assert.equal(response.status, 200);
+  const actor = await response.json();
+  assert.ok(Array.isArray(actor.publicKeys) && actor.publicKeys.length > 0, 'the Home Actor publishes its persisted key');
+  const keyResponse = await globalThis.fetch(actor.publicKeys[0]);
+  assert.equal(keyResponse.status, 200);
+  const key = await keyResponse.json();
+  return {
+    id: actor.id,
+    role: actor.role,
+    webfinger: actor.webfinger,
+    publicKeys: actor.publicKeys,
+    keyId: key.id,
+    keyValue: key.publicKeyMultibase
+  };
+}
+
+async function assertHomeAdvertisement(origin, homeAccountName) {
+  const host = new globalThis.URL(origin).host;
+  const identity = await readHomeIdentity(origin);
+  assert.equal(identity.id, `${origin}/actors/home`);
+  assert.equal(identity.role, 'home');
+  assert.equal(identity.webfinger, `${homeAccountName}@${host}`);
+
+  const endpoint = new globalThis.URL('/.well-known/webfinger', origin);
+  endpoint.searchParams.set('resource', `acct:${homeAccountName}@${host}`);
+  const response = await globalThis.fetch(endpoint);
+  assert.equal(response.status, 200);
+  const jrd = await response.json();
+  assert.equal(jrd.subject, `acct:${homeAccountName}@${host}`);
+  const self = jrd.links.filter((link) => link.rel === 'self');
+  assert.equal(self.length, 1, 'the Home WebFinger document has exactly one self link');
+  assert.equal(new globalThis.URL(self[0].href).href, `${origin}/actors/home`);
+}
+
 test('authority deployment loads private config and serves persisted account credentials', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'deployment-test-'));
   const dataDir = join(directory, 'data');
@@ -59,6 +108,86 @@ test('authority deployment loads private config and serves persisted account cre
     assert.equal((await restartedLogin.json()).nativeToken, token);
   } finally {
     await deployment?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('authority deployment defaults the Home account name in config, NodeInfo, and WebFinger', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'deployment-home-default-'));
+  const port = await freePort();
+  const origin = `http://127.0.0.1:${port}`;
+  let deployment;
+  try {
+    await writeFile(join(directory, 'admin-secret'), 'home-default-admin-secret\n');
+    await writeFile(join(directory, 'passwords.json'), JSON.stringify({ player: 'player-password' }));
+    await writeFile(join(directory, 'config.json'), JSON.stringify({
+      origin, port, listenHost: '127.0.0.1', dataDir: './data',
+      adminSecretFile: './admin-secret', playerNames: ['player'],
+      vesselNames: { player: 'player-vessel' }, accountPasswordsFile: './passwords.json'
+    }));
+    const config = await readDeploymentConfig('authority', join(directory, 'config.json'));
+    assert.equal(config.homeAccountName, 'system.home');
+    deployment = await startDeployment('authority', config);
+    const nodeInfo = await readNodeInfo(origin);
+    assert.equal(nodeInfo.metadata.homeAccountName, 'system.home');
+    await assertHomeAdvertisement(origin, 'system.home');
+  } finally {
+    await deployment?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('authority deployment preserves a configured Home account name and Actor identity across restart', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'deployment-home-restart-'));
+  const port = await freePort();
+  const origin = `http://127.0.0.1:${port}`;
+  let deployment;
+  try {
+    await writeFile(join(directory, 'admin-secret'), 'home-restart-admin-secret\n');
+    await writeFile(join(directory, 'passwords.json'), JSON.stringify({ player: 'player-password' }));
+    await writeFile(join(directory, 'config.json'), JSON.stringify({
+      origin, port, listenHost: '127.0.0.1', dataDir: './data',
+      adminSecretFile: './admin-secret', playerNames: ['player'],
+      vesselNames: { player: 'player-vessel' }, accountPasswordsFile: './passwords.json',
+      homeAccountName: 'academy.home'
+    }));
+    const config = await readDeploymentConfig('authority', join(directory, 'config.json'));
+    assert.equal(config.homeAccountName, 'academy.home');
+
+    deployment = await startDeployment('authority', config);
+    const before = await readHomeIdentity(origin);
+    assert.equal((await readNodeInfo(origin)).metadata.homeAccountName, 'academy.home');
+    await assertHomeAdvertisement(origin, 'academy.home');
+    await deployment.close();
+    deployment = undefined;
+
+    deployment = await startDeployment('authority', config);
+    assert.equal((await readNodeInfo(origin)).metadata.homeAccountName, 'academy.home');
+    const after = await readHomeIdentity(origin);
+    assert.equal(after.id, `${origin}/actors/home`);
+    assert.deepEqual(after, before);
+    await assertHomeAdvertisement(origin, 'academy.home');
+  } finally {
+    await deployment?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('authority deployment config rejects invalid Home account names before startup', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'deployment-home-invalid-'));
+  try {
+    await writeFile(join(directory, 'admin-secret'), 'home-invalid-admin-secret\n');
+    await writeFile(join(directory, 'passwords.json'), JSON.stringify({ player: 'player-password' }));
+    const base = {
+      origin: 'https://authority.example.org', listenHost: '127.0.0.1', port: 8080, dataDir: './data',
+      adminSecretFile: './admin-secret', playerNames: ['player'],
+      vesselNames: { player: 'player-vessel' }, accountPasswordsFile: './passwords.json'
+    };
+    for (const homeAccountName of ['system', '@system.home', 'system.home@authority.example.org', 'system_home']) {
+      await writeFile(join(directory, 'config.json'), JSON.stringify({ ...base, homeAccountName }));
+      await assert.rejects(readDeploymentConfig('authority', join(directory, 'config.json')), TypeError);
+    }
+  } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });

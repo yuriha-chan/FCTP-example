@@ -25,7 +25,7 @@ test('simulation action discovery authorizes owned vessels and previews without 
   const directory = await mkdtemp(join(tmpdir(), 'sim-actions-'));
   const authorityOrigin = `http://127.0.0.1:${await port()}`;
   const origin = `http://127.0.0.1:${await port()}`;
-  const authority = await createHost({ origin: authorityOrigin, storeFile: join(directory, 'authority.json'), actors: [{ name: 'registry', role: 'registry' }, { name: 'home', role: 'home' }, { name: 'player', role: 'player' }] });
+  const authority = await createHost({ origin: authorityOrigin, storeFile: join(directory, 'authority.json'), nodeInfo: { name: 'fixture-home' }, actors: [{ name: 'registry', role: 'registry' }, { name: 'home', role: 'home' }, { name: 'player', role: 'player' }] });
   let owned!: Vessel;
   const app = await createSimulationApp({ origin, storeFile: join(directory, 'simulation.json'), peerOrigin: 'https://policy.example', adminSecret: 'admin', fetcher: async (input, init) => {
     if (String(input) === owned.id) return new Response(JSON.stringify(owned), { status: 200, headers: { 'Content-Type': 'application/json' } });

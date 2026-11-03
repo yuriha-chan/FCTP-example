@@ -6,6 +6,7 @@ import test from 'node:test';
 import { createTokenDigest } from '@fctp/auth';
 import { createActivity } from '@fctp/federation';
 import { FctpServer } from '@fctp/server-base';
+import { homeDiscoveryFetcher } from './home-discovery-fixture.js';
 
 const local = 'https://local.example/actors/one';
 const sender = 'https://remote.example/actors/one';
@@ -14,8 +15,9 @@ test('invalid token declaration is quarantined without blocking later work; hand
   const directory = await mkdtemp(join(tmpdir(), 'fctp-inbox-recovery-'));
   const storeFile = join(directory, 'state.json');
   const verifier = async () => ({ cryptographic: { verified: true }, attribution: { attributed: true }, expectedIssuer: { matches: true } });
+  const fetcher = homeDiscoveryFetcher('https://remote.example', { id: sender, role: 'home', inbox: `${sender}/inbox`, outbox: `${sender}/outbox`, publicKeys: [] });
   try {
-    let server = new FctpServer({ storeFile, verifyInbound: verifier });
+    let server = new FctpServer({ storeFile, fetcher, verifyInbound: verifier });
     await server.open();
     await server.registerActor({ actor: { id: local, type: 'Service', role: 'territory', inbox: `${local}/inbox`, outbox: `${local}/outbox`, publicKeys: [] } });
     await server.enrollPlayer('https://remote.example/players/alice', sender);
@@ -48,7 +50,7 @@ test('invalid token declaration is quarantined without blocking later work; hand
     assert.deepEqual(rejected[0]?.activity, structuredClone(invalid));
     assert.equal((await server.store.read((state) => state.credentials[`${local}\u0000https://remote.example/players/alice`])) !== undefined, true);
     await server.store.transaction((state) => { state.inboxQueue[0]!.nextAttemptAt = 0; });
-    server = new FctpServer({ storeFile, verifyInbound: verifier });
+    server = new FctpServer({ storeFile, fetcher, verifyInbound: verifier });
     await server.open();
     let handled = 0;
     server.on(local, 'Example', async (context) => {

@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after } from 'node:test';
 import { createHost } from '@fctp/server-base';
 import { createAuthorityApp } from '../apps/test-authority/src/app.js';
+import { createAuthority } from '../apps/test-authority/src/bootstrap.js';
 import { createPolicyApp } from '../apps/territory-policy/src/app.js';
 import { createSimulationApp } from '../apps/territory-sim/src/app.js';
 import { startClientServer } from '../apps/demo/src/client-server.js';
@@ -41,7 +42,7 @@ after(() => {
 interface NodeInfoDocument {
   version: string;
   software: { name: string; version: string };
-  metadata?: { git?: Record<string, unknown> };
+  metadata?: { git?: Record<string, unknown>; homeAccountName?: string };
   protocols: unknown[];
   services: { inbound: unknown[]; outbound: unknown[] };
   openRegistrations: boolean;
@@ -52,6 +53,7 @@ interface ExpectedNodeInfo {
   name: string;
   version: string;
   git: Record<string, unknown>;
+  homeAccountName?: string;
 }
 
 async function freePort(): Promise<number> {
@@ -89,6 +91,11 @@ async function assertNodeInfo(baseUrl: string, canonicalOrigin: string, expected
   assert.equal(document.software.version, expected.version);
   assert.ok(document.metadata?.git, 'NodeInfo includes metadata.git');
   assert.deepEqual(document.metadata.git, expected.git);
+  if (expected.homeAccountName === undefined) {
+    assert.equal(Object.hasOwn(document.metadata, 'homeAccountName'), false, 'NodeInfo omits metadata.homeAccountName without a hosted Home');
+  } else {
+    assert.equal(document.metadata?.homeAccountName, expected.homeAccountName);
+  }
   assert.deepEqual(document.protocols, []);
   assert.deepEqual(document.services, { inbound: [], outbound: [] });
   assert.equal(document.openRegistrations, false);
@@ -96,6 +103,37 @@ async function assertNodeInfo(baseUrl: string, canonicalOrigin: string, expected
     users: { total: 0, activeHalfyear: 0, activeMonth: 0 },
     localPosts: 0
   });
+}
+
+interface HomeActorDocument {
+  id: string;
+  role: string;
+  webfinger?: string;
+  publicKeys?: string[];
+}
+
+async function assertHomeAdvertisement(baseUrl: string, canonicalOrigin: string, homeAccountName: string): Promise<HomeActorDocument> {
+  const host = new URL(canonicalOrigin).host;
+  const homeId = `${canonicalOrigin}/actors/home`;
+  const actorResponse = await fetch(`${baseUrl}/actors/home`);
+  assert.equal(actorResponse.status, 200, 'the Home Actor responds with 200');
+  const actor = await actorResponse.json() as HomeActorDocument;
+  assert.equal(actor.id, homeId, 'the Home Actor keeps the stable /actors/home identifier');
+  assert.equal(actor.role, 'home');
+  assert.equal(actor.webfinger, `${homeAccountName}@${host}`);
+  assert.ok(Array.isArray(actor.publicKeys) && actor.publicKeys.length > 0, 'the Home Actor publishes its persisted key');
+
+  const endpoint = new URL('/.well-known/webfinger', baseUrl);
+  endpoint.searchParams.set('resource', `acct:${homeAccountName}@${host}`);
+  const response = await fetch(endpoint);
+  assert.equal(response.status, 200, 'the canonical Home WebFinger address resolves');
+  const jrd = await response.json() as { subject?: string; links?: Array<{ rel?: string; href?: string }> };
+  assert.equal(jrd.subject, `acct:${homeAccountName}@${host}`);
+  const self = (jrd.links ?? []).filter((link) => link.rel === 'self');
+  assert.equal(self.length, 1, 'the Home WebFinger document has exactly one self link');
+  assert.equal(self[0]?.href, homeId);
+  assert.equal(new URL(self[0]!.href!).protocol, 'https:', 'the self link is an absolute HTTPS URI');
+  return actor;
 }
 
 function unsetBuildEnvironment(): () => void {
@@ -152,10 +190,126 @@ test('authority app publishes NodeInfo with its configured canonical origin', { 
     await assertNodeInfo(`http://127.0.0.1:${port}`, 'https://authority.test', {
       name: 'fctp-authority',
       version: BUILD_ENV.FCTP_GIT_DESCRIBE,
-      git: EXPECTED_GIT
+      git: EXPECTED_GIT,
+      homeAccountName: 'system.home'
     });
   } finally {
     await app?.authority.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('authority advertises the default Home account name in NodeInfo and WebFinger', { timeout: 30000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-nodeinfo-home-default-'));
+  let app: Awaited<ReturnType<typeof createAuthorityApp>> | undefined;
+  try {
+    app = await createAuthorityApp({
+      origin: 'https://home-default.test',
+      storeFile: join(directory, 'authority.json'),
+      keyFile: join(directory, 'authority.keys.json'),
+      adminSecret: 'home-default-admin-secret'
+    });
+    const port = await freePort();
+    await app.authority.listen(port);
+    await assertNodeInfo(`http://127.0.0.1:${port}`, 'https://home-default.test', {
+      name: 'fctp-authority',
+      version: BUILD_ENV.FCTP_GIT_DESCRIBE,
+      git: EXPECTED_GIT,
+      homeAccountName: 'system.home'
+    });
+    await assertHomeAdvertisement(`http://127.0.0.1:${port}`, 'https://home-default.test', 'system.home');
+  } finally {
+    await app?.authority.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('authority publishes and resolves a configured Home account name without changing other Actor handles', { timeout: 30000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-nodeinfo-home-custom-'));
+  let authority: Awaited<ReturnType<typeof createAuthority>> | undefined;
+  try {
+    authority = await createAuthority({
+      origin: 'https://home-custom.test',
+      storeFile: join(directory, 'authority.json'),
+      keyFile: join(directory, 'authority.keys.json'),
+      adminSecret: 'home-custom-admin-secret',
+      nodeInfo: { name: 'fctp-authority' },
+      homeAccountName: 'academy.home'
+    } as Parameters<typeof createAuthority>[0] & { homeAccountName: string });
+    const port = await freePort();
+    await authority.listen(port);
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await assertNodeInfo(baseUrl, 'https://home-custom.test', {
+      name: 'fctp-authority',
+      version: BUILD_ENV.FCTP_GIT_DESCRIBE,
+      git: EXPECTED_GIT,
+      homeAccountName: 'academy.home'
+    });
+    await assertHomeAdvertisement(baseUrl, 'https://home-custom.test', 'academy.home');
+    const host = new URL('https://home-custom.test').host;
+    assert.equal(authority.actor('registry').webfinger, `registry.registry@${host}`);
+    assert.equal(authority.actor('player').webfinger, `player@${host}`);
+  } finally {
+    await authority?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+const invalidHomeAccountNames = ['', 'system', '@system.home', 'system.home@authority.test', 'system_home', 'system.home.extra'];
+
+test('authority rejects invalid Home account names before writing startup files', { timeout: 30000 }, async () => {
+  for (const homeAccountName of invalidHomeAccountNames) {
+    const directory = await mkdtemp(join(tmpdir(), 'fctp-nodeinfo-home-invalid-'));
+    const storeFile = join(directory, 'authority.json');
+    const keyFile = join(directory, 'authority.keys.json');
+    let app: Awaited<ReturnType<typeof createAuthorityApp>> | undefined;
+    let caught: unknown;
+    try {
+      try {
+        app = await createAuthorityApp({
+          origin: 'https://home-invalid.test',
+          storeFile,
+          keyFile,
+          adminSecret: 'home-invalid-admin-secret',
+          homeAccountName
+        } as Parameters<typeof createAuthorityApp>[0] & { homeAccountName: string });
+      } catch (error) {
+        caught = error;
+      }
+      assert.ok(caught instanceof TypeError, `${JSON.stringify(homeAccountName)} is rejected with TypeError`);
+      await assert.rejects(stat(storeFile), { code: 'ENOENT' }, 'the store file is not written before validation');
+      await assert.rejects(stat(keyFile), { code: 'ENOENT' }, 'the key file is not written before validation');
+    } finally {
+      await app?.authority.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test('createAuthority rejects an invalid Home account name before writing startup files', { timeout: 30000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-nodeinfo-home-direct-invalid-'));
+  const storeFile = join(directory, 'authority.json');
+  const keyFile = join(directory, 'authority.keys.json');
+  let authority: Awaited<ReturnType<typeof createAuthority>> | undefined;
+  let caught: unknown;
+  try {
+    try {
+      authority = await createAuthority({
+        origin: 'https://home-direct-invalid.test',
+        storeFile,
+        keyFile,
+        adminSecret: 'home-direct-invalid-admin-secret',
+        nodeInfo: { name: 'fctp-authority' },
+        homeAccountName: 'system'
+      } as Parameters<typeof createAuthority>[0] & { homeAccountName: string });
+    } catch (error) {
+      caught = error;
+    }
+    assert.ok(caught instanceof TypeError, 'an invalid Home account name is rejected with TypeError');
+    await assert.rejects(stat(storeFile), { code: 'ENOENT' }, 'the store file is not written before validation');
+    await assert.rejects(stat(keyFile), { code: 'ENOENT' }, 'the key file is not written before validation');
+  } finally {
+    await authority?.close();
     await rm(directory, { recursive: true, force: true });
   }
 });

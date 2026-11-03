@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { URL } from 'node:url';
 import { createActivity, parseActivity, type Activity } from '@fctp/federation';
-import { expectedHomeActor, parseWebFingerAddress, resolveActor } from '@fctp/identity';
+import { parseWebFingerAddress, resolveActor, resolveHomeAuthority } from '@fctp/identity';
 import { TokenCredentialStore, digestDiplomaticToken, type CredentialState } from '@fctp/auth';
 import { validateModel, type FCTPActor, type TokenDeclaration, type URI } from '@fctp/protocol';
 import { JsonSnapshotStore, type StoreState } from './store.js';
@@ -98,9 +98,9 @@ export class FctpServer {
   }
 
   async applyTokenDeclaration(resourceServerId: URI, senderHomeId: URI, declaration: TokenDeclaration): Promise<'applied' | 'stale' | 'duplicate' | 'conflict'> {
+    const resolved = await resolveHomeAuthority(declaration.actor, this.#fetcher);
+    if (resolved.actor.id !== senderHomeId) throw new Error('Token declaration sender is not the discovered Player Home');
     return this.store.transaction((state) => {
-      const expectedHome = state.enrollments[declaration.actor] ?? expectedHomeActor(declaration.actor);
-      if (expectedHome === undefined || expectedHome !== senderHomeId) throw new Error('Token declaration sender is not the Player Home namespace');
       const key = `${resourceServerId}\u0000${declaration.actor}`;
       const current = state.credentials[key] as CredentialState | undefined;
       const store = createCredentialStoreFromSnapshot(current ? { [declaration.actor]: current } : {});
@@ -358,7 +358,7 @@ export class FctpServer {
       return requested === derived || (advertised !== undefined && requested === advertised);
     });
     if (!match) { json(response, 404, { error: 'not-found' }); return; }
-    json(response, 200, { subject, links: [{ rel: 'self', type: 'application/activity+json', href: match[0] }] }, 'application/jrd+json');
+    json(response, 200, { subject: resource, links: [{ rel: 'self', type: 'application/activity+json', href: match[0] }] }, 'application/jrd+json');
   }
 
   async #actor(actorId: string, response: ServerResponse): Promise<void> {

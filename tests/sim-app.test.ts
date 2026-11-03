@@ -23,13 +23,13 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-test('simulation app serves resources and enforces enrolled Player and administrator permissions over HTTP', async () => {
+test('simulation app serves resources and enforces discovered Home Player and administrator permissions over HTTP', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'sim-app-'));
   const authorityPort = await port();
   const appPort = await port();
   const authorityOrigin = `http://127.0.0.1:${authorityPort}`;
   const origin = `http://127.0.0.1:${appPort}`;
-  const authority = await createHost({ origin: authorityOrigin, storeFile: join(directory, 'authority.json'), actors: [{ name: 'registry', role: 'registry' }, { name: 'home', role: 'home' }, { name: 'player', role: 'player' }] });
+  const authority = await createHost({ origin: authorityOrigin, storeFile: join(directory, 'authority.json'), nodeInfo: { name: 'fixture-home' }, actors: [{ name: 'registry', role: 'registry' }, { name: 'home', role: 'home' }, { name: 'player', role: 'player' }] });
   const app = await createSimulationApp({ origin, storeFile: join(directory, 'simulation.json'), peerOrigin: 'https://policy.example', adminSecret: 'local-admin-secret' });
   try {
     await authority.listen(authorityPort);

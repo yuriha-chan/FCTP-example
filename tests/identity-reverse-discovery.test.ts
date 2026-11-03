@@ -94,7 +94,7 @@ test('legacy and plain WebFinger subjects resolve to the same Actor with an exac
         assert.equal(response.status, 200, `Expected ${resource} to resolve`);
         assert.match(response.headers.get('content-type') ?? '', /^application\/jrd\+json/);
         const jrd = await response.json() as { subject?: string; links?: Array<{ rel?: string; href?: string }> };
-        assert.equal(jrd.subject, resource.slice('acct:'.length));
+        assert.equal(jrd.subject, resource);
         assert.ok(jrd.links?.some((link) => link.rel === 'self' && link.href === fixture.host.actor(name).id));
       }
     }

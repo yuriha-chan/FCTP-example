@@ -6,6 +6,7 @@ import test from 'node:test';
 import { createActivity } from '@fctp/federation';
 import { createTokenDigest, deriveDiplomaticToken } from '@fctp/auth';
 import { createHost, FctpServer } from '@fctp/server-base';
+import { homeDiscoveryFetcher } from './home-discovery-fixture.js';
 
 test('committed request and signed event references are retrieved by absolute URI after restart', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-server-wire-'));
@@ -56,7 +57,8 @@ test('inbox recognizes structural token declarations without a type field', asyn
   const homeId = 'https://home.test/actors/home';
   const resourceId = 'https://resource.test/actors/territory';
   const token = await deriveDiplomaticToken(new Uint8Array([1, 2, 3]), resourceId);
-  const server = new FctpServer({ storeFile: join(directory, 'state.json'), verifyInbound: async () => ({
+  const fetcher = homeDiscoveryFetcher(new URL(playerId).origin, { id: homeId, role: 'home', inbox: `${homeId}/inbox`, outbox: `${homeId}/outbox`, publicKeys: [] });
+  const server = new FctpServer({ storeFile: join(directory, 'state.json'), fetcher, verifyInbound: async () => ({
     cryptographic: { verified: true }, attribution: { attributed: true, publisher: homeId }, expectedIssuer: { matches: true, expected: homeId, actual: homeId },
   }) });
   try {
@@ -85,7 +87,8 @@ test('protected GET distinguishes invalid credentials from denied resource polic
   const homeId = 'https://home.test/actors/home';
   const playerId = 'https://home.test/players/alice';
   const deniedPlayerId = 'https://home.test/players/bob';
-  const server = new FctpServer({ storeFile: join(directory, 'state.json'), authorizeResource: async () => ({ allowed: false }) });
+  const fetcher = homeDiscoveryFetcher(new URL(playerId).origin, { id: homeId, role: 'home', inbox: `${homeId}/inbox`, outbox: `${homeId}/outbox`, publicKeys: [] });
+  const server = new FctpServer({ storeFile: join(directory, 'state.json'), fetcher, authorizeResource: async () => ({ allowed: false }) });
   try {
     await server.open();
     await server.registerActor({ actor: { id: resourceId, role: 'territory', inbox: `${resourceId}/inbox`, outbox: `${resourceId}/outbox`, publicKeys: [] } });

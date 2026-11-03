@@ -2,6 +2,7 @@ import {
   checkExpectedIssuer,
   createLocalDocumentLoader,
   resolveActor,
+  resolveHomeAuthority,
   verifyKeyAttribution,
   verifyProofCryptography,
   withDocuments,
@@ -25,8 +26,13 @@ export function createInboundVerifier(options: InboundVerifierOptions): NonNulla
   return async (localActorId, senderActorId, activity): Promise<VerificationReport> => {
     let expectedIssuer: VerificationReport['expectedIssuer'];
     let expectedPublisher: URI | undefined;
+    const declaration = tokenDeclaration(activity);
     try {
-      expectedPublisher = await options.resolveExpectedIssuer(localActorId, senderActorId, activity);
+      if (declaration === undefined) {
+        expectedPublisher = await options.resolveExpectedIssuer(localActorId, senderActorId, activity);
+      } else if (declaration.player !== undefined) {
+        expectedPublisher = (await resolveHomeAuthority(declaration.player, fetcher)).actor.id as URI;
+      }
       expectedIssuer = expectedPublisher === undefined ? { matches: false } : checkExpectedIssuer(senderActorId, expectedPublisher);
     } catch {
       expectedIssuer = { matches: false };
@@ -34,6 +40,14 @@ export function createInboundVerifier(options: InboundVerifierOptions): NonNulla
     const report = await verifyPublishedDocument(activity, senderActorId, expectedPublisher ?? senderActorId, fetcher, baseLoader);
     return { ...report, expectedIssuer };
   };
+}
+
+function tokenDeclaration(activity: Activity): { player?: URI } | undefined {
+  const object = activity.object;
+  if (!object || typeof object !== 'object' || Array.isArray(object)) return undefined;
+  const value = object as Record<string, unknown>;
+  if (!('tokenDigest' in value) && !('tokenRevoke' in value)) return undefined;
+  return { ...(typeof value.actor === 'string' ? { player: value.actor as URI } : {}) };
 }
 
 export async function verifyPublishedDocument(

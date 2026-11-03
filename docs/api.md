@@ -40,7 +40,7 @@ The permission-map routes require authentication. Missing or invalid credentials
 
 ## Territory A — policy (port 4101)
 
-`GET /local/territory/info` is public and returns `{ kind, actor, ids, endpoints, production }`. `GET /local/territory/state` requires a namespace-valid Player diplomatic token or A admin credential and returns `{ state, admission, decisions }`. A Territory accepts any authenticated Player whose Home owns that Actor's namespace; no server or user allowlist is configured.
+`GET /local/territory/info` is public and returns `{ kind, actor, ids, endpoints, production }`. `GET /local/territory/state` requires a Player diplomatic token or A admin credential and returns `{ state, admission, decisions }`. A Territory accepts token declarations only from the Home resolved for the Player Actor's origin through NodeInfo 2.1 `metadata.homeAccountName` and canonical WebFinger. The resolved Home may use another origin; neither a guessed `/actors/home` path nor local enrollment grants issuer authority. No server or user allowlist is configured.
 
 | Route | Credential | Request | Response |
 |---|---|---|---|
@@ -56,11 +56,11 @@ Player-initiated A mine, manufacture, transfer, load, and unload operations reco
 
 `varietyPortPolicy` is an optional local A permit map keyed by absolute `http` or `https` canonical Variety URIs without credentials. A missing entry means allow; `deny` rejects `load` or `unload` of that exact variety before port inventory or vessel manifest changes, with an attributed rejection. The permit does not create, modify, or register a Variety object, is not an FCTP field, and has no B equivalent. Policy validation returns `400` for malformed keys or decisions other than `allow` or `deny`.
 
-Player credentials identify a namespace-valid Player; load/unload additionally require that Player to match the active visit possessor. An administrator credential alone cannot operate cargo. Invalid credentials return `401`; authenticated but unauthorized cargo access returns `403`; unknown `/local/` paths return JSON `404`. Invalid JSON/operation fields return `400`; valid operation requests rejected by local domain conditions may return `409`.
+Player credentials identify a Player whose token declaration was issued by its discovered Home; load/unload additionally require that Player to match the active visit possessor. An administrator credential alone cannot operate cargo. Invalid credentials return `401`; authenticated but unauthorized cargo access returns `403`; unknown `/local/` paths return JSON `404`. Invalid JSON/operation fields return `400`; valid operation requests rejected by local domain conditions may return `409`.
 
 ## Territory B — simulation (port 4102)
 
-`GET /local/territory/info` is public. `GET /local/territory/state` accepts a namespace-valid Player diplomatic token or B admin credential and returns simulation state including ticks, jobs, inventories, vessels and visits. Simulation also admits matches from any namespace-valid Home; admission is controlled by the four lists below.
+`GET /local/territory/info` is public. `GET /local/territory/state` accepts a Player diplomatic token or B admin credential and returns simulation state including ticks, jobs, inventories, vessels and visits. Simulation uses the same NodeInfo/WebFinger Home issuer validation as Policy; admission is controlled by the four lists below.
 
 | Route | Credential | Request | Response |
 |---|---|---|---|

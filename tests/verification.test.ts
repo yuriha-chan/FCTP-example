@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createTokenDigest } from '@fctp/auth';
 import { createActivity, type Activity } from '@fctp/federation';
 import { createLocalDocumentLoader, generateActorKey, signJsonLd, withDocuments } from '@fctp/identity';
 import type { FCTPActor } from '@fctp/protocol';
@@ -116,4 +117,64 @@ test('inbound verifier reports unavailable sender and key documents as failures'
   assert.equal(unresolved.cryptographic.verified, false);
   assert.equal(unresolved.attribution.attributed, false);
   assert.equal(unresolved.expectedIssuer.matches, true);
+});
+
+test('token declarations are checked against the discovered Home instead of a role-specific issuer callback', async () => {
+  const playerOrigin = 'https://players.example';
+  const playerId = `${playerOrigin}/actors/alice`;
+  const delegateHomeId = 'https://home.test/actors/home';
+  const wrongHomeId = 'https://wrong.test/actors/home';
+  const localActorId = 'https://territory.test/actors/blue';
+  const wrongKey = await generateActorKey(wrongHomeId);
+  const wrongKeyId = String(wrongKey.publicKey.id);
+  const wrongActor: FCTPActor = {
+    id: wrongHomeId,
+    inbox: `${wrongHomeId}/inbox`,
+    outbox: `${wrongHomeId}/outbox`,
+    role: 'home',
+    publicKeys: [wrongKeyId]
+  };
+  const delegateActor: FCTPActor = {
+    id: delegateHomeId,
+    inbox: `${delegateHomeId}/inbox`,
+    outbox: `${delegateHomeId}/outbox`,
+    role: 'home',
+    publicKeys: []
+  };
+  const fetcher: typeof fetch = async (input) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin === playerOrigin && url.pathname === '/.well-known/nodeinfo') {
+      return Response.json({ links: [{ rel: 'http://nodeinfo.diaspora.software/ns/schema/2.1', href: `${playerOrigin}/nodeinfo/2.1` }] });
+    }
+    if (url.href === `${playerOrigin}/nodeinfo/2.1`) {
+      return Response.json({ version: '2.1', metadata: { homeAccountName: 'system.home' } });
+    }
+    if (url.origin === playerOrigin && url.pathname === '/.well-known/webfinger') {
+      return Response.json({ subject: url.searchParams.get('resource'), links: [{ rel: 'self', href: delegateHomeId }] });
+    }
+    if (url.href === delegateHomeId) return Response.json(delegateActor);
+    if (url.href === wrongHomeId) return Response.json(wrongActor);
+    if (url.href === wrongKeyId) return Response.json(wrongKey.publicKey);
+    return new Response(null, { status: 404 });
+  };
+  const signingLoader = withDocuments(createLocalDocumentLoader(), new Map([[wrongKeyId, wrongKey.publicKey]]));
+  const signed = await signJsonLd(createActivity({
+    id: 'https://wrong.test/activities/token-digest/1',
+    actor: wrongHomeId,
+    object: await createTokenDigest(playerId, 1, 'dG9rZW4'),
+    to: localActorId
+  }) as unknown as Record<string, unknown>, wrongKey.keyPair, signingLoader) as unknown as Activity;
+  let roleCallbackCalls = 0;
+  const verifier = createInboundVerifier({
+    fetcher,
+    resolveExpectedIssuer: async (_local, sender) => {
+      roleCallbackCalls++;
+      return sender;
+    }
+  });
+  const report = await verifier(localActorId, wrongHomeId, signed);
+  assert.equal(report.cryptographic.verified, true);
+  assert.equal(report.attribution.attributed, true);
+  assert.equal(report.expectedIssuer.matches, false);
+  assert.equal(roleCallbackCalls, 0, 'role-specific issuer callbacks do not decide token declarations');
 });

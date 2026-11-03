@@ -1,6 +1,6 @@
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { WEBFINGER_CONTEXT, createLocalDocumentLoader, generateActorKey, importActorKey, signJsonLd, type DocumentLoader, type GeneratedActorKey, type JsonDocument } from '@fctp/identity';
+import { WEBFINGER_CONTEXT, createLocalDocumentLoader, generateActorKey, importActorKey, parseWebFingerAddress, signJsonLd, type DocumentLoader, type GeneratedActorKey, type JsonDocument } from '@fctp/identity';
 import type { FCTPActor } from '@fctp/protocol';
 import type { Activity } from '@fctp/federation';
 import { FctpServer, type ActivityHandler, type FctpServerOptions } from './server.js';
@@ -30,6 +30,7 @@ export interface CreateHostOptions {
   authorizeAdmin?: FctpServerOptions['authorizeAdmin'];
   authorizeResource?: FctpServerOptions['authorizeResource'];
   nodeInfo?: { name: string };
+  homeAccountName?: string;
   onWorkerError?: (failure: HostWorkerError) => void;
   inboxHandlers?: Partial<Record<string, Record<string, ActivityHandler>>>;
   configure?: (server: FctpServer, actors: Readonly<Record<string, FCTPActor & Record<string, unknown>>>, keys: Readonly<Record<string, GeneratedActorKey>>) => void;
@@ -58,12 +59,16 @@ export async function createHost(options: CreateHostOptions): Promise<Host> {
   if (options.actors.some(({ name, role }) => !name || !role || name.includes('/'))) throw new TypeError('Actor names and roles must be non-empty; names cannot contain slashes');
   const base = origin.origin;
   const descriptors = options.actors;
+  const homeDescriptor = descriptors.find(({ role }) => role === 'home');
+  const hostedHomeAccountName = homeDescriptor === undefined ? undefined : options.homeAccountName;
   const keyFile = options.keyFile ?? `${options.storeFile}.keys`;
   const persisted = await loadOrCreateKeys(keyFile, base, descriptors);
   const keys = Object.fromEntries(descriptors.map(({ name }) => [name, { keyPair: persisted[name]!.keyPair, publicKey: structuredClone(persisted[name]!.publicDocument) }])) as Record<string, GeneratedActorKey>;
   const actors = Object.fromEntries(descriptors.map(({ name, role, document }) => {
     const id = `${base}/actors/${name}`;
-    const webfinger = role === 'player' ? `${name}@${origin.host}` : `${name}.${role}@${origin.host}`;
+    const webfinger = role === 'home' && hostedHomeAccountName !== undefined
+      ? `${hostedHomeAccountName}@${origin.host}`
+      : role === 'player' ? `${name}@${origin.host}` : `${name}.${role}@${origin.host}`;
     const actor: Record<string, unknown> = document ? structuredClone(document) : {
       '@context': ['https://www.w3.org/ns/activitystreams', 'https://fctp.example/context'], id, type: 'Service', role,
       inbox: `${id}/inbox`, outbox: `${id}/outbox`, publicKeys: [keys[name]!.keyPair.id]
@@ -72,6 +77,8 @@ export async function createHost(options: CreateHostOptions): Promise<Host> {
     actor['@context'] = withWebFingerContext(actor['@context']);
     return [name, actor];
   })) as Record<string, FCTPActor & Record<string, unknown>>;
+  const homeHandle = homeDescriptor === undefined ? undefined : actors[homeDescriptor.name]?.webfinger;
+  const advertisedHomeAccountName = homeAccountHandleName(homeHandle);
   for (const { name } of descriptors) {
     if (actors[name]!.id !== keys[name]!.keyPair.controller || !Array.isArray(actors[name]!.publicKeys) || !actors[name]!.publicKeys.includes(keys[name]!.keyPair.id)) throw new TypeError(`Actor ${name} must identify and publish its persisted key`);
   }
@@ -83,7 +90,7 @@ export async function createHost(options: CreateHostOptions): Promise<Host> {
     verifyInbound: options.verifyInbound ?? createInboundVerifier({ ...(options.fetcher ? { fetcher: options.fetcher } : {}), loader, resolveExpectedIssuer: options.resolveExpectedIssuer ?? (async () => undefined) }),
     ...(options.authorizeResource ? { authorizeResource: options.authorizeResource } : {}),
     authorizeAdmin: options.authorizeAdmin ?? (async () => false),
-    ...(options.nodeInfo ? { nodeInfo: readNodeInfo(options.nodeInfo.name) } : {}),
+    ...(options.nodeInfo ? { nodeInfo: readNodeInfo(options.nodeInfo.name, process.env, advertisedHomeAccountName) } : {}),
     signActivity: async (actorId, activity) => {
       const name = descriptors.find(({ name: candidate }) => actors[candidate]!.id === actorId)?.name;
       if (!name) throw new Error(`Unknown local Actor: ${actorId}`);
@@ -149,6 +156,18 @@ export async function createHost(options: CreateHostOptions): Promise<Host> {
     stopWorkers: async () => { if (workerTimer) clearInterval(workerTimer); workerTimer = undefined; await workerRun; },
     close: async () => { await (async () => { if (workerTimer) clearInterval(workerTimer); workerTimer = undefined; await workerRun; if (listening) await listening.close(); listening = undefined; })(); }
   };
+}
+
+function homeAccountHandleName(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  try {
+    const address = parseWebFingerAddress(value).address;
+    const separator = address.lastIndexOf('@');
+    return separator > 0 ? address.slice(0, separator) : undefined;
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    return undefined;
+  }
 }
 
 function withWebFingerContext(context: unknown): unknown {

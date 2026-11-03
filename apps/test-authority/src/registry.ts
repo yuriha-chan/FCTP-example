@@ -67,11 +67,6 @@ export function installRegistry(authority: Authority, options: InstallRegistryOp
   const resolveExpectedIssuer = async (sender: URI, object: unknown): Promise<URI | undefined> => {
     if (!object || typeof object !== 'object') return undefined;
     const event = object as Record<string, unknown>;
-    if ('tokenDigest' in event || 'tokenRevoke' in event) {
-      const declared = typeof event.actor === 'string' ? event.actor : undefined;
-      if (!declared || !Object.values(authority.players).some((player) => player.id === declared)) return undefined;
-      return authority.actor('home').id;
-    }
     const collection = await readCollection();
     const vesselId = typeof event.vessel === 'string' ? event.vessel : undefined;
     const exact = event.type === 'EntryRejected' && typeof event.request === 'string'

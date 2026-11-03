@@ -174,23 +174,46 @@ test('server persists inbox deduplication and atomically delivers outbox work', 
   }
 });
 
-test('resource-server tokens are Home-enrolled, persistent and required for protected GET', async () => {
+test('resource-server tokens are discovered from the Player Home, persistent and required for protected GET', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-auth-server-'));
   const nativeToken = new Uint8Array([9, 8, 7]);
-  const playerId = 'https://home.test/players/alice';
+  const playerOrigin = 'https://players.test';
+  const playerId = `${playerOrigin}/actors/alice`;
   const homeId = 'https://home.test/actors/home';
+  const enrolledWrongHome = 'https://enrolled.test/actors/home';
   const resourceActor = actor('https://resource.test/actors/territory');
+  const fetcher: typeof fetch = async (input) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin === playerOrigin && url.pathname === '/.well-known/nodeinfo') {
+      return Response.json({ links: [{ rel: 'http://nodeinfo.diaspora.software/ns/schema/2.1', href: `${playerOrigin}/nodeinfo/2.1` }] });
+    }
+    if (url.href === `${playerOrigin}/nodeinfo/2.1`) {
+      return Response.json({ version: '2.1', metadata: { homeAccountName: 'system.home' } });
+    }
+    if (url.origin === playerOrigin && url.pathname === '/.well-known/webfinger') {
+      return Response.json({
+        subject: url.searchParams.get('resource'),
+        links: [{ rel: 'self', href: homeId }]
+      });
+    }
+    if (url.href === homeId) {
+      return Response.json({ id: homeId, type: 'Service', role: 'home', inbox: `${homeId}/inbox`, outbox: `${homeId}/outbox`, publicKeys: [] });
+    }
+    return new Response(null, { status: 404 });
+  };
   try {
     const server = new FctpServer({
       storeFile: join(directory, 'state.json'),
+      fetcher,
       authorizeResource: async (_request, _actor, _resource, player) => ({ allowed: player === playerId })
     });
     await server.open();
     await server.registerActor({ actor: resourceActor });
-    await server.enrollPlayer(playerId, homeId);
+    await server.enrollPlayer(playerId, enrolledWrongHome);
     const token = await deriveDiplomaticTokenForTest(nativeToken, resourceActor.id);
     const declaration = await createTokenDigest(playerId, 1, token);
-    await assert.rejects(server.applyTokenDeclaration(resourceActor.id, 'https://other.test/actors/home', declaration), /not the Player Home namespace/);
+    await assert.rejects(server.applyTokenDeclaration(resourceActor.id, enrolledWrongHome, declaration));
+    assert.equal(await server.authenticateDiplomaticToken(resourceActor.id, token), undefined);
     await server.applyTokenDeclaration(resourceActor.id, homeId, declaration);
     server.registerResource('http://127.0.0.1/objects/listing', { id: 'http://127.0.0.1/objects/listing', type: 'Listing' }, { public: false, actorId: resourceActor.id });
     const listening = await server.listen();
@@ -203,6 +226,9 @@ test('resource-server tokens are Home-enrolled, persistent and required for prot
     } finally {
       await listening.close();
     }
+    const restarted = new FctpServer({ storeFile: join(directory, 'state.json'), fetcher });
+    await restarted.open();
+    assert.equal(await restarted.authenticateDiplomaticToken(resourceActor.id, token), playerId);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

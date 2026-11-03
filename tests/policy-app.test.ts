@@ -7,6 +7,7 @@ import test from 'node:test';
 import { createTokenDigest, deriveDiplomaticToken } from '@fctp/auth';
 import { createHost } from '@fctp/server-base';
 import { createPolicyApp } from '../apps/territory-policy/src/app.js';
+import { homeDiscoveryFetcher } from './home-discovery-fixture.js';
 
 async function freePort(): Promise<number> {
   const server = createServer();
@@ -21,7 +22,7 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-test('policy app serves linked resources and protects operations with enrolled Player tokens', async () => {
+test('policy app serves linked resources and protects operations with discovered Home Player tokens', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-policy-app-'));
   const authorityOrigin = `http://127.0.0.1:${await freePort()}`;
   const origin = `http://127.0.0.1:${await freePort()}`;
@@ -40,7 +41,7 @@ test('policy app serves linked resources and protects operations with enrolled P
     }
     return new Response('not found', { status: 404 });
   };
-  const app = await createPolicyApp({ origin, storeFile: join(directory, 'policy.json'), adminSecret: 'policy-admin-secret', fetcher: remoteFetch });
+  const app = await createPolicyApp({ origin, storeFile: join(directory, 'policy.json'), adminSecret: 'policy-admin-secret', fetcher: homeDiscoveryFetcher(authorityOrigin, authority.actor('home'), remoteFetch) });
   await app.host.listen(Number(new URL(origin).port));
   const nativeToken = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
   const diplomaticToken = await deriveDiplomaticToken(nativeToken, app.ids.actor);
@@ -286,7 +287,7 @@ test('policy local traverse moves an active visit between owned ports with an ob
     return new Response('not found', { status: 404 });
   };
   const app = await createPolicyApp({
-    origin, storeFile: join(directory, 'policy.json'), adminSecret: 'policy-traverse-secret', additionalRoutes: [outboundRoute], fetcher: remoteFetch
+    origin, storeFile: join(directory, 'policy.json'), adminSecret: 'policy-traverse-secret', additionalRoutes: [outboundRoute], fetcher: homeDiscoveryFetcher(authorityOrigin, authority.actor('home'), remoteFetch)
   });
   await app.host.listen(Number(new URL(origin).port));
   const tokens = {} as Record<'player' | 'other', { native: Uint8Array; diplomatic: string }>;

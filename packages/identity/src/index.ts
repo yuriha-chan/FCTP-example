@@ -171,6 +171,13 @@ export function parseHandle(handle: string): ParsedHandle {
     : { handle, localName: localName!, server, kind: 'authority', role };
 }
 
+export function validateHomeAccountName(value: unknown): string {
+  if (typeof value !== 'string') throw new TypeError('Home account name must be a string');
+  const parsed = parseHandle(`@${value}@home`);
+  if (parsed.kind !== 'authority' || parsed.role !== 'home') throw new TypeError('Home account name must be a name followed by .home');
+  return value;
+}
+
 export interface ParsedWebFingerAddress {
   address: string;
   handle: string;
@@ -267,6 +274,75 @@ export async function resolveActor(uri: URI, fetcher: typeof fetch = fetch): Pro
   const actor = await response.json() as FCTPActor;
   if (actor.id !== uri) throw new Error('Actor document id does not match requested URI');
   return { actor, source: 'uri' };
+}
+
+function isHomeDiscoveryUrl(url: URL): boolean {
+  return !url.username && !url.password &&
+    (url.protocol === 'https:' || (url.protocol === 'http:' && isLoopbackHostname(url.hostname)));
+}
+
+export async function resolveHomeAuthority(playerActorId: URI, fetcher: typeof fetch = fetch): Promise<ActorResolution> {
+  const unresolved = (cause?: unknown): Error => new Error('home-unresolved: Home authority could not be resolved', { cause });
+  const mismatch = (): Error => new Error('home-mismatch: Home discovery documents are inconsistent');
+  let player: URL;
+  try {
+    player = new URL(playerActorId);
+  } catch (error) {
+    throw unresolved(error);
+  }
+  if (!isHomeDiscoveryUrl(player) || player.search || player.hash) throw unresolved();
+  const origin = player.origin;
+  const request = async (url: URL, accept: string): Promise<unknown> => {
+    try {
+      const response = await fetcher(url, {
+        method: 'GET', cache: 'no-store', credentials: 'omit', redirect: 'error',
+        headers: { Accept: accept }
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.json();
+    } catch (error) {
+      throw unresolved(error);
+    }
+  };
+  const nodeInfoList = await request(new URL('/.well-known/nodeinfo', origin), 'application/json');
+  if (!isRecord(nodeInfoList) || !Array.isArray(nodeInfoList.links)) throw unresolved();
+  const nodeInfoLink = nodeInfoList.links.find((link) => isRecord(link) && link.rel === 'http://nodeinfo.diaspora.software/ns/schema/2.1');
+  if (!isRecord(nodeInfoLink) || typeof nodeInfoLink.href !== 'string') throw unresolved();
+  let nodeInfoUrl: URL;
+  try {
+    nodeInfoUrl = new URL(nodeInfoLink.href);
+    if (!isHomeDiscoveryUrl(nodeInfoUrl)) throw new Error('Invalid NodeInfo URL');
+  } catch (error) {
+    throw unresolved(error);
+  }
+  const nodeInfo = await request(nodeInfoUrl, 'application/json');
+  if (!isRecord(nodeInfo) || !isRecord(nodeInfo.metadata)) throw unresolved();
+  let accountName: string;
+  try {
+    accountName = validateHomeAccountName(nodeInfo.metadata.homeAccountName);
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    throw unresolved(error);
+  }
+  const authority = player.host;
+  const resource = `acct:${accountName}@${authority}`;
+  const webfingerUrl = new URL('/.well-known/webfinger', origin);
+  webfingerUrl.searchParams.set('resource', resource);
+  const jrd = await request(webfingerUrl, 'application/jrd+json');
+  if (!isRecord(jrd) || jrd.subject !== resource) throw mismatch();
+  const selfLinks = Array.isArray(jrd.links) ? jrd.links.filter((link) => isRecord(link) && link.rel === 'self') : [];
+  if (selfLinks.length !== 1 || !isRecord(selfLinks[0]) || typeof selfLinks[0].href !== 'string') throw mismatch();
+  const selfHref = selfLinks[0].href;
+  let actorUrl: URL;
+  try {
+    actorUrl = new URL(selfHref);
+    if (!isHomeDiscoveryUrl(actorUrl)) throw new Error('Invalid Home Actor URL');
+  } catch {
+    throw mismatch();
+  }
+  const actorValue = await request(actorUrl, 'application/activity+json, application/ld+json');
+  if (!isRecord(actorValue) || actorValue.id !== selfHref || actorValue.role !== 'home') throw mismatch();
+  return { actor: actorValue as unknown as FCTPActor, source: 'webfinger' };
 }
 
 export async function resolveWebFinger(handle: string, fetcher: typeof fetch = fetch, origin?: string): Promise<ActorResolution> {

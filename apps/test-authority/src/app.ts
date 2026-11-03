@@ -17,6 +17,7 @@ export interface CreateAuthorityAppOptions {
   administratorNames?: string[];
   vesselNames?: Record<string, string>;
   accountPasswords?: Record<string, string>;
+  homeAccountName?: string;
 }
 
 export interface AuthorityAppIds {
@@ -44,6 +45,7 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
     ...(options.administrator ? { administrator: options.administrator } : {}),
     ...(options.playerNames ? { playerNames: options.playerNames } : {}),
     ...(options.administratorNames ? { administratorNames: options.administratorNames } : {}),
+    ...(options.homeAccountName === undefined ? {} : { homeAccountName: options.homeAccountName }),
     nodeInfo: { name: 'fctp-authority' },
     fetcher,
     verifyInbound: createInboundVerifier({
