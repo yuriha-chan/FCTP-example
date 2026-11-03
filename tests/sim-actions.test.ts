@@ -42,9 +42,9 @@ test('simulation action discovery authorizes owned vessels and previews without 
     const declaration = await authority.sign('home', { '@context': ['https://www.w3.org/ns/activitystreams', 'https://fctp.example/context'], id: `${authority.actor('home').id}/token-digest/1`, type: 'Create', actor: authority.actor('home').id, to: [app.ids.actor], object: digest } as never);
     await app.host.server.receive(app.ids.actor, declaration);
     await app.host.server.processInbox();
-    const url = `${origin}/local/actions?vessel=${encodeURIComponent(owned.id)}`;
-    assert.equal((await fetch(`${origin}/local/actions?vessel=${encodeURIComponent(owned.id)}`, { headers: { Authorization: 'Bearer admin' } })).status, 403);
-    assert.equal((await fetch(`${origin}/local/actions`, { headers: { Authorization: `Bearer ${token}` } })).status, 400);
+    const url = `${origin}/local/territory/actions?vessel=${encodeURIComponent(owned.id)}`;
+    assert.equal((await fetch(`${origin}/local/territory/actions?vessel=${encodeURIComponent(owned.id)}`, { headers: { Authorization: 'Bearer admin' } })).status, 403);
+    assert.equal((await fetch(`${origin}/local/territory/actions`, { headers: { Authorization: `Bearer ${token}` } })).status, 400);
     const before = await app.territory.state();
     const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     assert.equal(response.status, 200);
@@ -52,7 +52,7 @@ test('simulation action discovery authorizes owned vessels and previews without 
     const discovery = await response.json() as { state: Record<string, unknown>; actions: Array<{ id: string; request?: { href: string; body?: Record<string, unknown> } }> };
     assert.equal(discovery.actions.find((action) => action.id === 'mine')?.request?.body?.count, 1);
     assert.equal(discovery.actions.find((action) => action.id === 'entry')?.request?.href, `${authorityOrigin}/local/registry/entry`);
-    assert.ok(((await (await fetch(`${origin}/local/info`)).json()) as { endpoints: string[] }).endpoints.includes('/local/actions'));
+    assert.ok(((await (await fetch(`${origin}/local/territory/info`)).json()) as { endpoints: string[] }).endpoints.includes('/local/territory/actions'));
     assert.deepEqual(await app.territory.state(), before);
     owned = { ...owned, possessor: 'https://other.example/actors/player' };
     assert.equal((await fetch(url, { headers: { Authorization: `Bearer ${token}` } })).status, 403);
@@ -80,9 +80,9 @@ test('simulation discovery offers each rich stock identity and retains the vesse
 
 test('known production rejection is an unavailable preview and unexpected errors propagate', () => {
   const simulation = {} as SimulationState;
-  const action = previewSimulationAction(simulation, 'preview', 'Preview', { method: 'POST', href: 'https://sim.example/local/manufacture' }, 'effect', () => { throw new Error('production only supports homogeneous empty-data Stack ingredients'); });
+  const action = previewSimulationAction(simulation, 'preview', 'Preview', { method: 'POST', href: 'https://sim.example/local/territory/manufacture' }, 'effect', () => { throw new Error('production only supports homogeneous empty-data Stack ingredients'); });
   assert.equal(action.available, false);
-  assert.throws(() => previewSimulationAction(simulation, 'preview', 'Preview', { method: 'POST', href: 'https://sim.example/local/manufacture' }, 'effect', () => { throw new Error('unexpected'); }), /unexpected/);
+  assert.throws(() => previewSimulationAction(simulation, 'preview', 'Preview', { method: 'POST', href: 'https://sim.example/local/territory/manufacture' }, 'effect', () => { throw new Error('unexpected'); }), /unexpected/);
 });
 
 test('pending berth and reserved handling expose blockers without hiding cargo choices', () => {

@@ -87,11 +87,18 @@ export function createDiscoveryService(state: ClientApplicationState, fetcher: t
 
   const discoverOrigin = async (value: string): Promise<DiscoveryResult> => {
     const origin = normalizeOrigin(value);
-    const response = await upstream(new URL('/local/info', origin.origin), {
+    let response = await upstream(new URL('/local/info', origin.origin), {
       method: 'GET',
       headers: { Accept: 'application/json' },
       cache: 'no-store'
     });
+    if (response.status === 404 || response.status === 401) {
+      response = await upstream(new URL('/local/territory/info', origin.origin), {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        cache: 'no-store'
+      });
+    }
     if (!response.ok) throw new Error(`Discovery failed: HTTP ${response.status}`);
     const info: unknown = await response.json();
     const discovered = await Promise.all(advertisedActors(info).map(async (actorId) => {

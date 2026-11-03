@@ -71,9 +71,9 @@ test('completed Territory load survives Registry outage and its durable signed d
     method: 'POST', headers: playerAuth, body: JSON.stringify(body)
   });
 
-  assert.equal((await operate('/local/mine', { count: 2 })).status, 200);
-  assert.equal((await operate('/local/manufacture', { count: 1, recipe: 'ore-to-metal' })).status, 200);
-  assert.equal((await operate('/local/transfer', { direction: 'to-port', variety: policy.ids.varieties.metal, count: 1 })).status, 200);
+  assert.equal((await operate('/local/territory/mine', { count: 2 })).status, 200);
+  assert.equal((await operate('/local/territory/manufacture', { count: 1, recipe: 'ore-to-metal' })).status, 200);
+  assert.equal((await operate('/local/territory/transfer', { direction: 'to-port', variety: policy.ids.varieties.metal, count: 1 })).status, 200);
   assert.equal((await fetch(`${authorityOrigin}/local/registry/entry`, {
     method: 'POST', headers: registryAuth,
     body: JSON.stringify({ territory: policy.ids.actor, port: policy.ids.ports[0], route: policy.ids.routes[0] })
@@ -84,7 +84,7 @@ test('completed Territory load survives Registry outage and its durable signed d
   await policy.host.server.processOutbox();
   await authority.authority.server.processInbox();
 
-  const policyBeforeOutage = await json<{ state: { portInventory: Record<string, number>; vessels: Record<string, { manifest: { entries: unknown[] } }> } }>(await fetch(`${policyOrigin}/local/state`, { headers: playerAuth }));
+  const policyBeforeOutage = await json<{ state: { portInventory: Record<string, number>; vessels: Record<string, { manifest: { entries: unknown[] } }> } }>(await fetch(`${policyOrigin}/local/territory/state`, { headers: playerAuth }));
   assert.equal(policyBeforeOutage.state.portInventory[policy.ids.varieties.metal], 1);
   assert.equal(policyBeforeOutage.state.vessels[authority.ids.vessel]!.manifest.entries.length, 0);
 
@@ -92,8 +92,8 @@ test('completed Territory load survives Registry outage and its durable signed d
   await authority.authority.close();
   authority = undefined;
   const captureStart = captures.length;
-  assert.equal((await operate('/local/load', { vessel: `${authorityOrigin}/objects/vessels/demo`, variety: policy.ids.varieties.metal, count: 1 })).status, 200);
-  const completedLoad = await json<{ state: { portInventory: Record<string, number>; vessels: Record<string, { manifest: { entries: unknown[] } }> } }>(await fetch(`${policyOrigin}/local/state`, { headers: playerAuth }));
+  assert.equal((await operate('/local/territory/load', { vessel: `${authorityOrigin}/objects/vessels/demo`, variety: policy.ids.varieties.metal, count: 1 })).status, 200);
+  const completedLoad = await json<{ state: { portInventory: Record<string, number>; vessels: Record<string, { manifest: { entries: unknown[] } }> } }>(await fetch(`${policyOrigin}/local/territory/state`, { headers: playerAuth }));
   assert.equal(completedLoad.state.portInventory[policy.ids.varieties.metal], 0);
   assert.deepEqual(completedLoad.state.vessels[`${authorityOrigin}/objects/vessels/demo`]!.manifest.entries, [{ variety: policy.ids.varieties.metal, count: 1, data: {} }]);
   assert.equal(await policy.host.server.processOutbox(), 0, 'Registry outage leaves delivery queued');
@@ -139,7 +139,7 @@ test('completed Territory load survives Registry outage and its durable signed d
     const item = store.outbox.find((candidate) => candidate.id === durableIdentity.id);
     return item && { id: item.id, payload: item.payload, activityId: (item.activity as { id: string }).id };
   }), undefined, 'successful delivery removes only the acknowledged outbox item');
-  const territoryAfterRestart = await json<{ state: { vessels: Record<string, { manifest: { entries: unknown[] } }> } }>(await fetch(`${policyOrigin}/local/state`, { headers: playerAuth }));
+  const territoryAfterRestart = await json<{ state: { vessels: Record<string, { manifest: { entries: unknown[] } }> } }>(await fetch(`${policyOrigin}/local/territory/state`, { headers: playerAuth }));
   assert.deepEqual(territoryAfterRestart.state.vessels[`${authorityOrigin}/objects/vessels/demo`]!.manifest.entries, completedLoad.state.vessels[`${authorityOrigin}/objects/vessels/demo`]!.manifest.entries);
   await policy.host.close();
   policy = await createPolicyApp({
@@ -147,7 +147,7 @@ test('completed Territory load survives Registry outage and its durable signed d
     adminSecret: admin, fetcher: captureTransport
   });
   await policy.host.listen(Number(new URL(policyOrigin).port));
-  assert.equal((await fetch(`${policyOrigin}/local/state`, { headers: playerAuth })).status, 200, 'enrolled token state survives Territory restart');
+  assert.equal((await fetch(`${policyOrigin}/local/territory/state`, { headers: playerAuth })).status, 200, 'enrolled token state survives Territory restart');
   assert.equal(await policy.host.server.store.read((store) => store.remoteActors[`${authorityOrigin}/actors/registry`]?.inbox), registryInbox, 'recipient route cache survives Territory restart');
   assert.deepEqual(durableIdentity, { id: queued[0]!.id, activityId: signedActivity.id, objectId: signedActivity.object.id, payload: captured.payload });
 });

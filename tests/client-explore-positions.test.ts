@@ -91,7 +91,7 @@ function capabilityKey(accountId: string, vesselId: string, authorityId: string)
 }
 
 function capabilitySource(authorityId: string): string {
-  return new URL('/local/actions', authorityId).href;
+  return new URL('/local/territory/actions', authorityId).href;
 }
 
 interface CapabilitySeed {
@@ -465,7 +465,7 @@ test('failed capability freshness is not overridden by an available legacy posit
     const token = tokens.get(account.id)!;
     const staleVessel = 'https://vessels.test/freshness-stale';
     const unavailableVessel = 'https://vessels.test/freshness-unavailable';
-    const legacySource = 'https://legacy.test/local/state';
+    const legacySource = 'https://legacy.test/local/territory/state';
     const legacyPort = 'https://legacy.test/objects/ports/old';
     const currentPort = 'https://policy.test:4200/objects/ports/current';
 

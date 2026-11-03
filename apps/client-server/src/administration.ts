@@ -235,7 +235,7 @@ export function createAdministrationActionHandlers(
         const decision = input.intent.inputs.decision === 'reject' ? 'reject' : 'approve';
         if (!authorityId || !requestId) throw new Error('Administration decision scope is missing');
         const token = await options.resolveToken(input.accountId, authorityId);
-        const path = `/local/admin/entry-requests/${encodeURIComponent(requestId)}/${decision}`;
+        const path = `/local/territory/admin/entry-requests/${encodeURIComponent(requestId)}/${decision}`;
         const reason = typeof input.intent.inputs.reason === 'string' ? input.intent.inputs.reason : undefined;
         const submission = await call((signal) => submitAdministrationPost(fetcher, authorityId, path, token, reason === undefined ? {} : { reason }, signal));
         const event = record(record(submission.value).event);

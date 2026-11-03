@@ -125,7 +125,7 @@ test('policy HTTP action examples execute through an authenticated Player and re
   const nativeToken = tokens.get('player')!.native;
   const otherToken = tokens.get('other')!.diplomatic;
   const vessel = authority.ids.vessel;
-  const discoveryUrl = `${territoryOrigin}/local/actions?vessel=${encodeURIComponent(vessel)}`;
+  const discoveryUrl = `${territoryOrigin}/local/territory/actions?vessel=${encodeURIComponent(vessel)}`;
   const discover = (token: string) => fetch(discoveryUrl, { headers: { Authorization: `Bearer ${token}` } });
   const execute = (request: { method: 'GET' | 'POST'; href: string; body?: Record<string, unknown> }, token = playerToken) => fetch(request.href, {
     method: request.method,
@@ -139,9 +139,9 @@ test('policy HTTP action examples execute through an authenticated Player and re
 
   assert.equal((await discover('invalid-credential')).status, 401);
   assert.equal((await discover(admin)).status, 401);
-  assert.equal((await fetch(`${territoryOrigin}/local/actions`, { headers: { Authorization: `Bearer ${playerToken}` } })).status, 400);
+  assert.equal((await fetch(`${territoryOrigin}/local/territory/actions`, { headers: { Authorization: `Bearer ${playerToken}` } })).status, 400);
   const otherVessel = authority.ids.vessels.other!;
-  assert.equal((await fetch(`${territoryOrigin}/local/actions?vessel=${encodeURIComponent(otherVessel)}`, { headers: { Authorization: `Bearer ${playerToken}` } })).status, 403);
+  assert.equal((await fetch(`${territoryOrigin}/local/territory/actions?vessel=${encodeURIComponent(otherVessel)}`, { headers: { Authorization: `Bearer ${playerToken}` } })).status, 403);
 
   const initialResponse = await discover(playerToken);
   assert.equal(initialResponse.status, 200);
@@ -218,7 +218,7 @@ test('policy HTTP action examples execute through an authenticated Player and re
 
   const blockedPolicy = structuredClone(policyState.state.policy);
   blockedPolicy.miningQuota = 0;
-  const policyUpdate = await fetch(`${territoryOrigin}/local/admin/policy`, { method: 'POST', headers: adminHeaders, body: JSON.stringify(blockedPolicy) });
+  const policyUpdate = await fetch(`${territoryOrigin}/local/territory/admin/policy`, { method: 'POST', headers: adminHeaders, body: JSON.stringify(blockedPolicy) });
   assert.equal(policyUpdate.status, 200);
   const quotaDiscovery = await (await discover(playerToken)).json() as typeof initial;
   assert.equal(quotaDiscovery.actions.find((item) => item.id === 'mine-ore')?.available, false, 'availability reflects the current mining quota');

@@ -174,8 +174,8 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
       return true;
     }
     if (!url.pathname.startsWith('/local/')) return false;
-    if (url.pathname === '/local/info' && request.method === 'GET') {
-      json(response, 200, { kind: 'simulation', actor: actorId, ids, endpoints: ['/local/state', '/local/actions', '/local/mine', '/local/manufacture', '/local/load', '/local/unload', '/local/territory/permissions', '/local/admin/facilities', '/local/admin/tick'], production: { ore: ids.varieties.ore, metal: ids.varieties.metal, refined: ids.varieties.refined, importedMetal: ids.varieties.importedMetal } });
+    if (url.pathname === '/local/territory/info' && request.method === 'GET') {
+      json(response, 200, { kind: 'simulation', actor: actorId, ids, endpoints: ['/local/territory/state', '/local/territory/actions', '/local/territory/mine', '/local/territory/manufacture', '/local/territory/load', '/local/territory/unload', '/local/territory/permissions', '/local/territory/admin/facilities', '/local/territory/admin/tick'], production: { ore: ids.varieties.ore, metal: ids.varieties.metal, refined: ids.varieties.refined, importedMetal: ids.varieties.importedMetal } });
       return true;
     }
     if (url.pathname === '/local/territory/permissions' && request.method === 'GET') {
@@ -195,7 +195,7 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
     const player = auth.startsWith('Bearer ') ? await host.server.authenticateDiplomaticToken(actorId, auth.slice(7)) : undefined;
     const isPlayer = Boolean(player);
     const isAdmin = await host.server.checkAdmin(request, host.actor('territory'));
-    if (url.pathname === '/local/actions' && request.method === 'GET') {
+    if (url.pathname === '/local/territory/actions' && request.method === 'GET') {
       response.setHeader('Cache-Control', 'no-store');
       if (!isPlayer) { json(response, player || isAdmin ? 403 : 401, { error: player || isAdmin ? 'forbidden' : 'unauthorized' }); return true; }
       const vesselId = url.searchParams.get('vessel');
@@ -222,17 +222,17 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
       json(response, 200, discoverSimulationActions({ simulation: state.simulation, actor: actorId, player, vesselId: vesselId as URI, vessel, origin, ...(activeVisit ? { visit: activeVisit } : {}) }));
       return true;
     }
-    const entryDecision = /^\/local\/admin\/entry-requests\/([^/]+)\/(approve|reject)$/.exec(url.pathname);
-    const admin = url.pathname === '/local/admin/facilities' || url.pathname === '/local/admin/tick' || url.pathname === '/local/admin/admission' ||
-      url.pathname === '/local/admin/entry-requests' || entryDecision !== null;
-    const playerOperation = ['/local/mine', '/local/manufacture', '/local/load', '/local/unload'].includes(url.pathname);
+    const entryDecision = /^\/local\/territory\/admin\/entry-requests\/([^/]+)\/(approve|reject)$/.exec(url.pathname);
+    const admin = url.pathname === '/local/territory/admin/facilities' || url.pathname === '/local/territory/admin/tick' || url.pathname === '/local/territory/admin/admission' ||
+      url.pathname === '/local/territory/admin/entry-requests' || entryDecision !== null;
+    const playerOperation = ['/local/territory/mine', '/local/territory/manufacture', '/local/territory/load', '/local/territory/unload'].includes(url.pathname);
     if (admin ? !isAdmin : playerOperation ? !isPlayer : !isPlayer && !isAdmin) {
       const status = isPlayer || isAdmin ? 403 : 401;
       json(response, status, { error: status === 403 ? 'forbidden' : 'unauthorized' });
       return true;
     }
-    if (url.pathname === '/local/state' && request.method === 'GET') { json(response, 200, await territory.state()); return true; }
-    if (url.pathname === '/local/admin/entry-requests' && request.method === 'GET') { json(response, 200, { requests: await territory.entryRequests() }); return true; }
+    if (url.pathname === '/local/territory/state' && request.method === 'GET') { json(response, 200, await territory.state()); return true; }
+    if (url.pathname === '/local/territory/admin/entry-requests' && request.method === 'GET') { json(response, 200, { requests: await territory.entryRequests() }); return true; }
     if (entryDecision && request.method === 'POST') {
       let requestId: string;
       try { requestId = decodeURIComponent(entryDecision[1]!); } catch { json(response, 404, { error: 'not-found' }); return true; }
@@ -241,18 +241,18 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
       if (!result) { json(response, 404, { error: 'not-found' }); return true; }
       json(response, 200, result); return true;
     }
-    if (url.pathname === '/local/admin/admission' && request.method === 'POST') {
+    if (url.pathname === '/local/territory/admin/admission' && request.method === 'POST') {
       const input = await body(request);
       if (!validAdmission(input)) { json(response, 400, { error: 'invalid-admission' }); return true; }
       json(response, 200, { admission: await territory.updateAdmission(input as Parameters<typeof territory.updateAdmission>[0]) }); return true;
     }
-    if (url.pathname === '/local/admin/tick' && request.method === 'POST') { json(response, 200, await territory.tick()); return true; }
+    if (url.pathname === '/local/territory/admin/tick' && request.method === 'POST') { json(response, 200, await territory.tick()); return true; }
     if (request.method !== 'POST') { json(response, 404, { error: 'not-found' }); return true; }
     const input = await body(request);
-      if (url.pathname === '/local/mine' && Number.isSafeInteger(input.count) && (input.duration === undefined || Number.isSafeInteger(input.duration))) json(response, 200, { job: await territory.mine(input.count as number, input.duration as number | undefined) });
-      else if (url.pathname === '/local/manufacture' && Number.isSafeInteger(input.count) && (input.recipe === 'native' || input.recipe === 'imported')) json(response, 200, { job: await territory.manufacture(input.recipe === 'native' ? 'native' : 'imported', input.count as number) });
-      else if (url.pathname === '/local/admin/facilities' && isAdmin && validFacilities(input)) { await territory.configureFacilities(input); json(response, 200, { ok: true }); }
-      else if ((url.pathname === '/local/load' || url.pathname === '/local/unload') && typeof input.entryRequest === 'string' && validManifest(input.cargo) && Number.isSafeInteger(input.duration)) {
+      if (url.pathname === '/local/territory/mine' && Number.isSafeInteger(input.count) && (input.duration === undefined || Number.isSafeInteger(input.duration))) json(response, 200, { job: await territory.mine(input.count as number, input.duration as number | undefined) });
+      else if (url.pathname === '/local/territory/manufacture' && Number.isSafeInteger(input.count) && (input.recipe === 'native' || input.recipe === 'imported')) json(response, 200, { job: await territory.manufacture(input.recipe === 'native' ? 'native' : 'imported', input.count as number) });
+      else if (url.pathname === '/local/territory/admin/facilities' && isAdmin && validFacilities(input)) { await territory.configureFacilities(input); json(response, 200, { ok: true }); }
+      else if ((url.pathname === '/local/territory/load' || url.pathname === '/local/territory/unload') && typeof input.entryRequest === 'string' && validManifest(input.cargo) && Number.isSafeInteger(input.duration)) {
         const state = await territory.state();
         if (!isPlayer || state.visits[input.entryRequest]?.possessor !== player) { json(response, 403, { error: 'forbidden' }); return true; }
         const cargo = input.cargo.entries.map((item) => {

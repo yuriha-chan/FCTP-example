@@ -53,16 +53,16 @@ test('policy app serves linked resources and protects operations with enrolled P
     await app.host.server.processInbox();
     const headers = { Authorization: `Bearer ${diplomaticToken}`, 'Content-Type': 'application/json' };
     const get = (uri: string, token?: string) => fetch(uri, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-    const unknownCommodity = await fetch(`${origin}/local/transfer`, { method: 'POST', headers, body: JSON.stringify({ direction: 'to-port', variety: `${origin}/objects/varieties/fake`, count: 1 }) });
+    const unknownCommodity = await fetch(`${origin}/local/territory/transfer`, { method: 'POST', headers, body: JSON.stringify({ direction: 'to-port', variety: `${origin}/objects/varieties/fake`, count: 1 }) });
     assert.equal(unknownCommodity.status, 400);
-    const invalidPolicy = await fetch(`${origin}/local/admin/policy`, { method: 'POST', headers: { Authorization: 'Bearer policy-admin-secret', 'Content-Type': 'application/json' }, body: JSON.stringify({ miningPermitted: true, miningQuota: 2, oreReserve: 2, manufacturePermits: ['recipe'], recipes: [{ id: 'recipe', ingredients: { [app.ids.varieties.ore]: '2' }, output: app.ids.varieties.metal, outputCount: 1 }], warehouseLimits: {}, portLimits: {}, decisions: {} }) });
+    const invalidPolicy = await fetch(`${origin}/local/territory/admin/policy`, { method: 'POST', headers: { Authorization: 'Bearer policy-admin-secret', 'Content-Type': 'application/json' }, body: JSON.stringify({ miningPermitted: true, miningQuota: 2, oreReserve: 2, manufacturePermits: ['recipe'], recipes: [{ id: 'recipe', ingredients: { [app.ids.varieties.ore]: '2' }, output: app.ids.varieties.metal, outputCount: 1 }], warehouseLimits: {}, portLimits: {}, decisions: {} }) });
     assert.equal(invalidPolicy.status, 400);
     const basePolicy = { miningPermitted: true, miningQuota: 2, oreReserve: 2, manufacturePermits: [], recipes: [], warehouseLimits: {}, portLimits: {}, decisions: {} };
-    const postPolicy = (varietyPortPolicy: unknown) => fetch(`${origin}/local/admin/policy`, { method: 'POST', headers: { Authorization: 'Bearer policy-admin-secret', 'Content-Type': 'application/json' }, body: JSON.stringify({ ...basePolicy, varietyPortPolicy }) });
+    const postPolicy = (varietyPortPolicy: unknown) => fetch(`${origin}/local/territory/admin/policy`, { method: 'POST', headers: { Authorization: 'Bearer policy-admin-secret', 'Content-Type': 'application/json' }, body: JSON.stringify({ ...basePolicy, varietyPortPolicy }) });
     assert.equal((await postPolicy({ '/objects/varieties/metal': 'deny' })).status, 400);
     assert.equal((await postPolicy({ [app.ids.varieties.metal]: 'maybe' })).status, 400);
     assert.equal((await postPolicy([])).status, 400);
-    const info = await (await fetch(`${origin}/local/info`)).json() as { ids: typeof app.ids };
+    const info = await (await fetch(`${origin}/local/territory/info`)).json() as { ids: typeof app.ids };
     assert.deepEqual(info.ids, app.ids);
     assert.equal((await get(app.ids.ports[0]!)).status, 200);
     const publicPort = await (await get(app.ids.ports[0]!)).json() as { listings: string; resources?: unknown };
@@ -72,22 +72,22 @@ test('policy app serves linked resources and protects operations with enrolled P
     assert.equal((await get(app.ids.ports[1]!)).status, 401);
     assert.equal((await get(app.ids.ports[1]!, diplomaticToken)).status, 403);
     assert.equal((await get(app.ids.ports[1]!, 'invalid')).status, 401);
-    assert.equal((await fetch(`${origin}/local/mine`, { method: 'POST', headers: { Authorization: 'Bearer policy-admin-secret', 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 2 }) })).status, 401);
-    const mined = await fetch(`${origin}/local/mine`, { method: 'POST', headers, body: JSON.stringify({ count: 2 }) });
+    assert.equal((await fetch(`${origin}/local/territory/mine`, { method: 'POST', headers: { Authorization: 'Bearer policy-admin-secret', 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 2 }) })).status, 401);
+    const mined = await fetch(`${origin}/local/territory/mine`, { method: 'POST', headers, body: JSON.stringify({ count: 2 }) });
     assert.equal(mined.status, 200);
-    const manufactured = await fetch(`${origin}/local/manufacture`, { method: 'POST', headers, body: JSON.stringify({ count: 1, recipe: 'ore-to-metal' }) });
+    const manufactured = await fetch(`${origin}/local/territory/manufacture`, { method: 'POST', headers, body: JSON.stringify({ count: 1, recipe: 'ore-to-metal' }) });
     assert.equal(manufactured.status, 200);
-    const state = await (await fetch(`${origin}/local/state`, { headers: { Authorization: `Bearer ${diplomaticToken}` } })).json() as { state: { rawInventory: Record<string, number>; audit: Array<{ actor: string; action: string; outcome: string }> } };
+    const state = await (await fetch(`${origin}/local/territory/state`, { headers: { Authorization: `Bearer ${diplomaticToken}` } })).json() as { state: { rawInventory: Record<string, number>; audit: Array<{ actor: string; action: string; outcome: string }> } };
     assert.equal(state.state.rawInventory[app.ids.varieties.metal], 1);
     assert.equal(state.state.rawInventory[app.ids.varieties.ore], 0);
     assert.deepEqual(state.state.audit.at(-1), { actor: playerId, action: 'manufacture', outcome: 'accepted', details: { recipeId: 'ore-to-metal', count: 1, outputCount: 1 } });
-    const rejectedTransfer = await fetch(`${origin}/local/transfer`, { method: 'POST', headers, body: JSON.stringify({ direction: 'to-port', variety: app.ids.varieties.metal, count: 100 }) });
+    const rejectedTransfer = await fetch(`${origin}/local/territory/transfer`, { method: 'POST', headers, body: JSON.stringify({ direction: 'to-port', variety: app.ids.varieties.metal, count: 100 }) });
     assert.equal(rejectedTransfer.status, 409);
-    const afterRejection = await (await fetch(`${origin}/local/state`, { headers: { Authorization: `Bearer ${diplomaticToken}` } })).json() as typeof state;
+    const afterRejection = await (await fetch(`${origin}/local/territory/state`, { headers: { Authorization: `Bearer ${diplomaticToken}` } })).json() as typeof state;
     assert.equal(afterRejection.state.audit.at(-1)?.actor, playerId);
     assert.equal(afterRejection.state.audit.at(-1)?.action, 'warehouse-to-port');
     assert.equal(afterRejection.state.audit.at(-1)?.outcome, 'rejected');
-    const changed = await fetch(`${origin}/local/admin/admission`, { method: 'POST', headers: { Authorization: 'Bearer policy-admin-secret', 'Content-Type': 'application/json' }, body: JSON.stringify({ publicPorts: [app.ids.ports[1]] }) });
+    const changed = await fetch(`${origin}/local/territory/admin/admission`, { method: 'POST', headers: { Authorization: 'Bearer policy-admin-secret', 'Content-Type': 'application/json' }, body: JSON.stringify({ publicPorts: [app.ids.ports[1]] }) });
     assert.equal(changed.status, 200);
     assert.equal((await get(app.ids.ports[1]!)).status, 200);
     assert.equal((await get(`${app.ids.ports[1]}/listings`)).status, 200);
@@ -151,18 +151,18 @@ test('policy manual review persists verified entry requests across restart and a
     await app.host.server.processInbox();
   };
   const listRequests = async (): Promise<unknown[]> => {
-    const response = await fetch(`${origin}/local/admin/entry-requests`, { headers: { Authorization: `Bearer ${adminSecret}` } });
+    const response = await fetch(`${origin}/local/territory/admin/entry-requests`, { headers: { Authorization: `Bearer ${adminSecret}` } });
     assert.equal(response.status, 200, 'entry request administration uses the existing administrator secret');
     const body = await response.json() as { requests?: unknown };
     assert.ok(Array.isArray(body.requests), 'entry request administration returns a requests collection');
     return body.requests;
   };
   const decide = (id: string, action: 'approve' | 'reject', body: Record<string, unknown> = {}): Promise<Response> =>
-    fetch(`${origin}/local/admin/entry-requests/${encodeURIComponent(id)}/${action}`, { method: 'POST', headers: adminHeaders, body: JSON.stringify(body) });
+    fetch(`${origin}/local/territory/admin/entry-requests/${encodeURIComponent(id)}/${action}`, { method: 'POST', headers: adminHeaders, body: JSON.stringify(body) });
   const events = (type: string): Promise<Array<Record<string, unknown>>> => app.host.server.store.read((store) =>
     store.outboxArchive.map((item) => item.activity.object as Record<string, unknown>).filter((object) => object.type === type));
   try {
-    const admission = await fetch(`${origin}/local/admin/admission`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ reviewMode: 'manual', trustedRegistry: { mode: 'allowlist', allowlist: [registryId], denylist: [] } }) });
+    const admission = await fetch(`${origin}/local/territory/admin/admission`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ reviewMode: 'manual', trustedRegistry: { mode: 'allowlist', allowlist: [registryId], denylist: [] } }) });
     assert.equal(admission.status, 200, 'manual review mode is a durable admission setting');
 
     const pendingRequest = entry('https://registry.test/entry/manual-pending', 'https://registry.test/vessels/manual-one');
@@ -219,7 +219,7 @@ test('policy manual review persists verified entry requests across restart and a
 
     const changedRequest = entry('https://registry.test/entry/manual-current-rule', 'https://registry.test/vessels/manual-three');
     await sendEntry(changedRequest);
-    const changedAdmission = await fetch(`${origin}/local/admin/admission`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ trustedRegistry: { mode: 'allowlist', allowlist: [], denylist: [] } }) });
+    const changedAdmission = await fetch(`${origin}/local/territory/admin/admission`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ trustedRegistry: { mode: 'allowlist', allowlist: [], denylist: [] } }) });
     assert.equal(changedAdmission.status, 200);
     const currentRule = await decide(String(changedRequest.id), 'approve');
     assert.equal(currentRule.status, 200);
@@ -228,9 +228,9 @@ test('policy manual review persists verified entry requests across restart and a
     assert.equal((await app.territory.ledger).visits[String(changedRequest.vessel.id)], undefined);
     assert.equal((await events('EntryRejected')).filter((event) => event.request === changedRequest.id).length, 1);
 
-    const unauthorizedList = await fetch(`${origin}/local/admin/entry-requests`);
+    const unauthorizedList = await fetch(`${origin}/local/territory/admin/entry-requests`);
     assert.equal(unauthorizedList.status, 401);
-    const unauthorizedDecision = await fetch(`${origin}/local/admin/entry-requests/${encodeURIComponent(String(pendingRequest.id))}/approve`, {
+    const unauthorizedDecision = await fetch(`${origin}/local/territory/admin/entry-requests/${encodeURIComponent(String(pendingRequest.id))}/approve`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
     });
     assert.equal(unauthorizedDecision.status, 401, 'entry request decisions require the existing administrator secret');
@@ -303,9 +303,9 @@ test('policy local traverse moves an active visit between owned ports with an ob
     }
     await app.host.server.processInbox();
 
-    const info = await (await fetch(`${origin}/local/info`)).json() as { ids: typeof app.ids; endpoints?: string[] };
+    const info = await (await fetch(`${origin}/local/territory/info`)).json() as { ids: typeof app.ids; endpoints?: string[] };
     assert.ok(info.ids.routes.includes(outboundRouteId), 'explicit additional routes are advertised with owned route identities');
-    assert.ok((info.endpoints ?? []).includes('/local/traverse'), 'local traverse is advertised through territory info');
+    assert.ok((info.endpoints ?? []).includes('/local/territory/traverse'), 'local traverse is advertised through territory info');
     assert.equal(JSON.stringify(info.ids).includes(`${origin}/objects/routes/coastal`), true, 'the default topology remains advertised');
     const publishedRoute = await fetch(outboundRouteId);
     assert.equal(publishedRoute.status, 200);
@@ -335,22 +335,22 @@ test('policy local traverse moves an active visit between owned ports with an ob
 
     const playerHeaders = { Authorization: `Bearer ${tokens.player.diplomatic}`, 'Content-Type': 'application/json' };
     const otherHeaders = { Authorization: `Bearer ${tokens.other.diplomatic}`, 'Content-Type': 'application/json' };
-    const discovery = await (await fetch(`${origin}/local/actions?vessel=${encodeURIComponent(vessel)}`, { headers: playerHeaders })).json() as { actions: Array<Record<string, unknown>>; state?: { visits?: Array<Record<string, unknown>> } };
-    const traverse = discovery.actions.find((action) => typeof action.request === 'object' && action.request !== null && String((action.request as Record<string, unknown>).href).endsWith('/local/traverse') && JSON.stringify((action.request as Record<string, unknown>).body).includes(app.ids.routes[1]!));
+    const discovery = await (await fetch(`${origin}/local/territory/actions?vessel=${encodeURIComponent(vessel)}`, { headers: playerHeaders })).json() as { actions: Array<Record<string, unknown>>; state?: { visits?: Array<Record<string, unknown>> } };
+    const traverse = discovery.actions.find((action) => typeof action.request === 'object' && action.request !== null && String((action.request as Record<string, unknown>).href).endsWith('/local/territory/traverse') && JSON.stringify((action.request as Record<string, unknown>).body).includes(app.ids.routes[1]!));
     assert.ok(traverse, 'an available traverse action names the Coastal Passage route for the active visit');
     assert.equal(traverse.available, true);
 
-    const wrongPossessor = await fetch(`${origin}/local/traverse`, { method: 'POST', headers: otherHeaders, body: JSON.stringify({ vessel, route: app.ids.routes[1] }) });
+    const wrongPossessor = await fetch(`${origin}/local/territory/traverse`, { method: 'POST', headers: otherHeaders, body: JSON.stringify({ vessel, route: app.ids.routes[1] }) });
     assert.equal(wrongPossessor.status, 403, 'only the active visit possessor can move the vessel');
     assert.equal((await app.territory.ledger).visits[vessel]?.port, app.ids.ports[0], 'a wrong possessor never moves the visit');
 
-    const wrongStart = await fetch(`${origin}/local/traverse`, { method: 'POST', headers: playerHeaders, body: JSON.stringify({ vessel, route: app.ids.routes[0] }) });
+    const wrongStart = await fetch(`${origin}/local/territory/traverse`, { method: 'POST', headers: playerHeaders, body: JSON.stringify({ vessel, route: app.ids.routes[0] }) });
     assert.ok([400, 409].includes(wrongStart.status), 'a route that does not start at the current port is refused');
-    const unknownRoute = await fetch(`${origin}/local/traverse`, { method: 'POST', headers: playerHeaders, body: JSON.stringify({ vessel, route: `${origin}/objects/routes/unowned` }) });
+    const unknownRoute = await fetch(`${origin}/local/territory/traverse`, { method: 'POST', headers: playerHeaders, body: JSON.stringify({ vessel, route: `${origin}/objects/routes/unowned` }) });
     assert.ok([400, 403, 404, 409].includes(unknownRoute.status), 'unowned routes are refused');
     assert.equal((await app.territory.ledger).visits[vessel]?.port, app.ids.ports[0], 'invalid routes never move the visit');
 
-    const moved = await fetch(`${origin}/local/traverse`, { method: 'POST', headers: playerHeaders, body: JSON.stringify({ vessel, route: app.ids.routes[1] }) });
+    const moved = await fetch(`${origin}/local/territory/traverse`, { method: 'POST', headers: playerHeaders, body: JSON.stringify({ vessel, route: app.ids.routes[1] }) });
     assert.equal(moved.status, 200);
     const movedBody = await moved.json();
     const voyage = findObject(movedBody, (record) => record.type === 'VoyageEvent' && record.kind === 'local-movement');
@@ -369,11 +369,11 @@ test('policy local traverse moves an active visit between owned ports with an ob
     assert.deepEqual(ledgerAfterMove.visits[vessel]?.cargo, cargo, 'local movement keeps the cargo identity');
     assert.match(JSON.stringify(ledgerAfterMove), new RegExp(escapeRegExp(String(voyage.id))), 'the territory ledger retains the observable movement event');
 
-    const afterMoveDiscovery = await (await fetch(`${origin}/local/actions?vessel=${encodeURIComponent(vessel)}`, { headers: playerHeaders })).json() as { state?: { visits?: Array<Record<string, unknown>>; cargo?: unknown } };
+    const afterMoveDiscovery = await (await fetch(`${origin}/local/territory/actions?vessel=${encodeURIComponent(vessel)}`, { headers: playerHeaders })).json() as { state?: { visits?: Array<Record<string, unknown>>; cargo?: unknown } };
     assert.equal(afterMoveDiscovery.state?.visits?.[0]?.port, app.ids.ports[1]);
     assert.deepEqual(afterMoveDiscovery.state?.cargo, cargo);
 
-    const reverse = await fetch(`${origin}/local/traverse`, { method: 'POST', headers: playerHeaders, body: JSON.stringify({ vessel, route: app.ids.routes[1] }) });
+    const reverse = await fetch(`${origin}/local/territory/traverse`, { method: 'POST', headers: playerHeaders, body: JSON.stringify({ vessel, route: app.ids.routes[1] }) });
     assert.ok([400, 403, 404, 409].includes(reverse.status), 'the Coastal Passage is not traversable in reverse without an explicit route');
     assert.equal((await app.territory.ledger).visits[vessel]?.port, app.ids.ports[1], 'a reverse attempt never moves the vessel');
 

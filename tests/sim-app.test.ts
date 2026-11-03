@@ -34,7 +34,7 @@ test('simulation app serves resources and enforces enrolled Player and administr
   try {
     await authority.listen(authorityPort);
     await app.host.listen(appPort);
-    const infoResponse = await fetch(`${origin}/local/info`);
+    const infoResponse = await fetch(`${origin}/local/territory/info`);
     assert.equal(infoResponse.status, 200);
     const info = await infoResponse.json() as { ids: typeof app.ids };
     assert.equal(info.ids.varieties.importedMetal, 'https://policy.example/objects/varieties/metal');
@@ -63,17 +63,17 @@ test('simulation app serves resources and enforces enrolled Player and administr
     assert.match(assetResponse.headers.get('content-type') ?? '', /^text\/plain/);
     assert.equal(await assetResponse.text(), 'metal production asset');
     assert.equal((await fetch(info.ids.map, { headers: playerAuth })).status, 200);
-    assert.equal((await fetch(`${origin}/local/state`)).status, 401);
-    assert.equal((await fetch(`${origin}/local/mine`, { method: 'POST', headers: { ...playerAuth, 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 2 }) })).status, 200);
-    assert.equal((await fetch(`${origin}/local/mine`, { method: 'POST', headers: { Authorization: 'Bearer local-admin-secret', 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 1 }) })).status, 403);
-    assert.equal((await fetch(`${origin}/local/mine`, { method: 'POST', headers: { Authorization: 'Bearer invalid', 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 1 }) })).status, 401);
-    assert.equal((await fetch(`${origin}/local/admin/tick`, { method: 'POST', headers: playerAuth })).status, 403);
-    const stateResponse = await fetch(`${origin}/local/state`, { headers: playerAuth });
+    assert.equal((await fetch(`${origin}/local/territory/state`)).status, 401);
+    assert.equal((await fetch(`${origin}/local/territory/mine`, { method: 'POST', headers: { ...playerAuth, 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 2 }) })).status, 200);
+    assert.equal((await fetch(`${origin}/local/territory/mine`, { method: 'POST', headers: { Authorization: 'Bearer local-admin-secret', 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 1 }) })).status, 403);
+    assert.equal((await fetch(`${origin}/local/territory/mine`, { method: 'POST', headers: { Authorization: 'Bearer invalid', 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 1 }) })).status, 401);
+    assert.equal((await fetch(`${origin}/local/territory/admin/tick`, { method: 'POST', headers: playerAuth })).status, 403);
+    const stateResponse = await fetch(`${origin}/local/territory/state`, { headers: playerAuth });
     assert.equal(stateResponse.status, 200);
     const state = await stateResponse.json() as { simulation: { productionJobs: Array<{ count: number }> } };
     assert.equal(state.simulation.productionJobs[0]?.count, 2);
-    assert.equal((await fetch(`${origin}/local/unload`, { method: 'POST', headers: { Authorization: 'Bearer local-admin-secret', 'Content-Type': 'application/json' }, body: JSON.stringify({ entryRequest: `${authorityOrigin}/requests/missing`, cargo: { entries: [] }, duration: 1 }) })).status, 403);
-    assert.equal((await fetch(`${origin}/local/unload`, { method: 'POST', headers: { ...playerAuth, 'Content-Type': 'application/json' }, body: JSON.stringify({ entryRequest: `${authorityOrigin}/requests/missing`, cargo: { entries: [{ variety: app.ids.varieties.ore, count: 2 }] }, duration: 1 }) })).status, 400);
+    assert.equal((await fetch(`${origin}/local/territory/unload`, { method: 'POST', headers: { Authorization: 'Bearer local-admin-secret', 'Content-Type': 'application/json' }, body: JSON.stringify({ entryRequest: `${authorityOrigin}/requests/missing`, cargo: { entries: [] }, duration: 1 }) })).status, 403);
+    assert.equal((await fetch(`${origin}/local/territory/unload`, { method: 'POST', headers: { ...playerAuth, 'Content-Type': 'application/json' }, body: JSON.stringify({ entryRequest: `${authorityOrigin}/requests/missing`, cargo: { entries: [{ variety: app.ids.varieties.ore, count: 2 }] }, duration: 1 }) })).status, 400);
   } finally {
     await app.host.close();
     await authority.close();
@@ -112,18 +112,18 @@ test('simulation manual review persists pending entry requests and waits for tic
     await app.host.server.processInbox();
   };
   const listRequests = async (): Promise<unknown[]> => {
-    const response = await fetch(`${origin}/local/admin/entry-requests`, { headers: { Authorization: `Bearer ${adminSecret}` } });
+    const response = await fetch(`${origin}/local/territory/admin/entry-requests`, { headers: { Authorization: `Bearer ${adminSecret}` } });
     assert.equal(response.status, 200, 'entry request administration uses the existing administrator secret');
     const body = await response.json() as { requests?: unknown };
     assert.ok(Array.isArray(body.requests), 'entry request administration returns a requests collection');
     return body.requests;
   };
   const decide = (id: string, action: 'approve' | 'reject', body: Record<string, unknown> = {}): Promise<Response> =>
-    fetch(`${origin}/local/admin/entry-requests/${encodeURIComponent(id)}/${action}`, { method: 'POST', headers: adminHeaders, body: JSON.stringify(body) });
+    fetch(`${origin}/local/territory/admin/entry-requests/${encodeURIComponent(id)}/${action}`, { method: 'POST', headers: adminHeaders, body: JSON.stringify(body) });
   const events = (type: string): Promise<Array<Record<string, unknown>>> => app.host.server.store.read((store) =>
     store.outboxArchive.map((item) => item.activity.object as Record<string, unknown>).filter((object) => object.type === type));
   try {
-    const admission = await fetch(`${origin}/local/admin/admission`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ reviewMode: 'manual', trustedRegistry: { mode: 'allowlist', allowlist: [registryId], denylist: [] } }) });
+    const admission = await fetch(`${origin}/local/territory/admin/admission`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ reviewMode: 'manual', trustedRegistry: { mode: 'allowlist', allowlist: [registryId], denylist: [] } }) });
     assert.equal(admission.status, 200, 'simulation accepts durable admission settings over its administration endpoint');
 
     const pendingRequest = entry('https://registry.test/entry/sim-manual-pending', 'https://registry.test/vessels/sim-manual-one');
@@ -151,7 +151,7 @@ test('simulation manual review persists pending entry requests and waits for tic
     assert.equal(state.simulation.vessels[0]?.status, 'pending', 'simulation approval resumes admission but waits for a tick to berth');
     assert.equal((await events('BerthingEvent')).some((event) => event.request === pendingRequest.id), false, 'simulation approval does not emit BerthingEvent before the tick');
 
-    const tick = await fetch(`${origin}/local/admin/tick`, { method: 'POST', headers: adminHeaders, body: '{}' });
+    const tick = await fetch(`${origin}/local/territory/admin/tick`, { method: 'POST', headers: adminHeaders, body: '{}' });
     assert.equal(tick.status, 200);
     state = await app.territory.state();
     assert.equal(state.simulation.vessels[0]?.status, 'berthed');
@@ -189,7 +189,7 @@ test('simulation manual review persists pending entry requests and waits for tic
 
     const changedRequest = entry('https://registry.test/entry/sim-manual-current-rule', 'https://registry.test/vessels/sim-manual-three');
     await sendEntry(changedRequest);
-    const changedAdmission = await fetch(`${origin}/local/admin/admission`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ trustedRegistry: { mode: 'allowlist', allowlist: [], denylist: [] } }) });
+    const changedAdmission = await fetch(`${origin}/local/territory/admin/admission`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ trustedRegistry: { mode: 'allowlist', allowlist: [], denylist: [] } }) });
     assert.equal(changedAdmission.status, 200);
     const currentRule = await decide(String(changedRequest.id), 'approve');
     assert.equal(currentRule.status, 200);
@@ -197,9 +197,9 @@ test('simulation manual review persists pending entry requests and waits for tic
     assert.equal((await app.territory.state()).visits[String(changedRequest.id)], undefined);
     assert.equal((await events('EntryRejected')).filter((event) => event.request === changedRequest.id).length, 1);
 
-    const unauthorizedList = await fetch(`${origin}/local/admin/entry-requests`);
+    const unauthorizedList = await fetch(`${origin}/local/territory/admin/entry-requests`);
     assert.equal(unauthorizedList.status, 401);
-    const unauthorizedDecision = await fetch(`${origin}/local/admin/entry-requests/${encodeURIComponent(String(pendingRequest.id))}/approve`, {
+    const unauthorizedDecision = await fetch(`${origin}/local/territory/admin/entry-requests/${encodeURIComponent(String(pendingRequest.id))}/approve`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
     });
     assert.equal(unauthorizedDecision.status, 401, 'entry request decisions require the existing administrator secret');

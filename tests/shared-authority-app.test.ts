@@ -85,12 +85,12 @@ test('one shared Authority serves five Players and a vessel-isolated Registry to
   assert.equal(await policy.host.server.processInbox(), 2);
   const policyToken = await deriveDiplomaticToken(tokens.get('player')!, policy.ids.actor);
   const policyHeaders = { Authorization: `Bearer ${policyToken}`, 'Content-Type': 'application/json' };
-  assert.equal((await fetch(`${policyOrigin}/local/mine`, { method: 'POST', headers: policyHeaders, body: JSON.stringify({ variety: policy.ids.varieties.ore, count: 2 }) })).status, 200);
-  assert.equal((await fetch(`${policyOrigin}/local/transfer`, { method: 'POST', headers: policyHeaders, body: JSON.stringify({ variety: policy.ids.varieties.ore, count: 2, direction: 'to-port' }) })).status, 200);
-  const load = await fetch(`${policyOrigin}/local/load`, { method: 'POST', headers: policyHeaders, body: JSON.stringify({ vessel: authority.ids.vessels.player, variety: policy.ids.varieties.ore, count: 1 }) });
+  assert.equal((await fetch(`${policyOrigin}/local/territory/mine`, { method: 'POST', headers: policyHeaders, body: JSON.stringify({ variety: policy.ids.varieties.ore, count: 2 }) })).status, 200);
+  assert.equal((await fetch(`${policyOrigin}/local/territory/transfer`, { method: 'POST', headers: policyHeaders, body: JSON.stringify({ variety: policy.ids.varieties.ore, count: 2, direction: 'to-port' }) })).status, 200);
+  const load = await fetch(`${policyOrigin}/local/territory/load`, { method: 'POST', headers: policyHeaders, body: JSON.stringify({ vessel: authority.ids.vessels.player, variety: policy.ids.varieties.ore, count: 1 }) });
   assert.equal(load.status, 200);
   const playerTwoToken = await deriveDiplomaticToken(tokens.get('player-2')!, policy.ids.actor);
-  const secondLoad = await fetch(`${policyOrigin}/local/load`, { method: 'POST', headers: { Authorization: `Bearer ${playerTwoToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ vessel: authority.ids.vessels['player-2'], variety: policy.ids.varieties.ore, count: 1 }) });
+  const secondLoad = await fetch(`${policyOrigin}/local/territory/load`, { method: 'POST', headers: { Authorization: `Bearer ${playerTwoToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ vessel: authority.ids.vessels['player-2'], variety: policy.ids.varieties.ore, count: 1 }) });
   assert.equal(secondLoad.status, 200);
   await policy.host.server.processOutbox();
   assert.ok(await authority.authority.server.processInbox() >= 2);

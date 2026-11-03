@@ -290,13 +290,13 @@ function createScopedExploreService(
 
   const refreshCapabilities = async (authority: AuthorityRecord, account: AccountRecord | undefined, vesselId: string | undefined): Promise<void> => {
     if (!account || account.login.status !== 'signed-in' || !vesselId) return;
-    const endpoint = new URL('/local/actions', new URL(authority.actorId).origin);
+    const endpoint = new URL('/local/territory/actions', new URL(authority.actorId).origin);
     endpoint.searchParams.set('vessel', vesselId);
     const capabilityKey = exploreKey('capabilities', account.id, vesselId, authority.actorId);
     try {
-      const infoUri = new URL('/local/info', authority.actorId).href;
+      const infoUri = new URL('/local/territory/info', authority.actorId).href;
       const info = await call((signal) => readPublicFirst(infoUri, signal, authority.actorId));
-      if (!isRecord(info) || !['policy', 'simulation'].includes(String(info.kind)) || !Array.isArray(info.endpoints) || !info.endpoints.includes('/local/actions')) {
+      if (!isRecord(info) || !['policy', 'simulation'].includes(String(info.kind)) || !Array.isArray(info.endpoints) || !info.endpoints.includes('/local/territory/actions')) {
         throw new TypeError('No supported actions service is advertised');
       }
       const token = await deriveDiplomaticToken(account.login.nativeToken, authority.actorId);

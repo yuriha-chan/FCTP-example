@@ -63,11 +63,11 @@ test('Territory factories accept independent authorities and enforce their Playe
     for (let playerIndex = 0; playerIndex < 5; playerIndex++) {
       const playerToken = await deriveDiplomaticToken(nativeTokens[playerIndex]!, app.ids.actor);
       const authorization = { Authorization: `Bearer ${playerToken}`, 'Content-Type': 'application/json' };
-      assert.equal((await fetch(`${origin}/local/mine`, { method: 'POST', headers: authorization, body: JSON.stringify({ count: 1 }) })).status, 200);
-      assert.equal((await fetch(`${origin}/local/state`, { headers: authorization })).status, 200);
+      assert.equal((await fetch(`${origin}/local/territory/mine`, { method: 'POST', headers: authorization, body: JSON.stringify({ count: 1 }) })).status, 200);
+      assert.equal((await fetch(`${origin}/local/territory/state`, { headers: authorization })).status, 200);
     }
     const sixthAuthorityToken = await deriveDiplomaticToken(nativeTokens[5]!, app.ids.actor);
-    assert.equal((await fetch(`${origin}/local/mine`, { method: 'POST', headers: { Authorization: `Bearer ${sixthAuthorityToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 1 }) })).status, 200);
+    assert.equal((await fetch(`${origin}/local/territory/mine`, { method: 'POST', headers: { Authorization: `Bearer ${sixthAuthorityToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 1 }) })).status, 200);
   }
 
   for (const [index, app] of apps.entries()) {
@@ -84,6 +84,6 @@ test('Territory factories accept independent authorities and enforce their Playe
     const cargoRequest = index === 0
       ? { vessel: vesselAuthority.ids.vessel, variety: policy.ids.varieties.ore, count: 1 }
       : { entryRequest: (await entryResponse.json() as { id: string }).id, cargo: { entries: [{ variety: simulation.ids.varieties.ore, count: 1, data: {} }] }, duration: 1 };
-    assert.equal((await fetch(`${territoryOrigin}/local/${index === 0 ? 'load' : 'unload'}`, { method: 'POST', headers: { Authorization: `Bearer ${playerTwo}`, 'Content-Type': 'application/json' }, body: JSON.stringify(cargoRequest) })).status, 403);
+    assert.equal((await fetch(`${territoryOrigin}/local/territory/${index === 0 ? 'load' : 'unload'}`, { method: 'POST', headers: { Authorization: `Bearer ${playerTwo}`, 'Content-Type': 'application/json' }, body: JSON.stringify(cargoRequest) })).status, 403);
   }
 });

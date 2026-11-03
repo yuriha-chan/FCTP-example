@@ -91,20 +91,20 @@ test('a configured administrator diplomatic token authorizes Policy admin operat
   assert.equal((await fetch(`${policyOrigin}/local/territory/permissions`)).status, 401);
   const admissionBody = JSON.stringify({ reviewMode: 'manual' });
 
-  const playerState = await fetch(`${policyOrigin}/local/state`, { headers: bearer(playerToken) });
+  const playerState = await fetch(`${policyOrigin}/local/territory/state`, { headers: bearer(playerToken) });
   assert.equal(playerState.status, 200, 'the ordinary player diplomatic token is valid for player access');
 
-  const governorAdmission = await fetch(`${policyOrigin}/local/admin/admission`, { method: 'POST', headers: bearer(governorToken), body: admissionBody });
+  const governorAdmission = await fetch(`${policyOrigin}/local/territory/admin/admission`, { method: 'POST', headers: bearer(governorToken), body: admissionBody });
   assert.equal(governorAdmission.status, 200, 'the configured administrator diplomatic token authorizes a Policy Admin-tab operation');
   assert.equal((await policy.territory.ledger).admission.reviewMode, 'manual', 'the authorized Policy operation takes effect');
 
-  const playerAdmission = await fetch(`${policyOrigin}/local/admin/admission`, { method: 'POST', headers: bearer(playerToken), body: admissionBody });
+  const playerAdmission = await fetch(`${policyOrigin}/local/territory/admin/admission`, { method: 'POST', headers: bearer(playerToken), body: admissionBody });
   assert.equal(playerAdmission.status, 401, 'a normal player diplomatic token does not authorize Policy administration');
 
-  const randomSecretAdmission = await fetch(`${policyOrigin}/local/admin/admission`, { method: 'POST', headers: bearer('not-the-policy-secret'), body: admissionBody });
+  const randomSecretAdmission = await fetch(`${policyOrigin}/local/territory/admin/admission`, { method: 'POST', headers: bearer('not-the-policy-secret'), body: admissionBody });
   assert.equal(randomSecretAdmission.status, 401, 'an arbitrary secret is not accepted as a Policy administrator');
 
-  const governorMine = await fetch(`${policyOrigin}/local/mine`, { method: 'POST', headers: bearer(governorToken), body: JSON.stringify({ count: 1 }) });
+  const governorMine = await fetch(`${policyOrigin}/local/territory/mine`, { method: 'POST', headers: bearer(governorToken), body: JSON.stringify({ count: 1 }) });
   assert.equal(governorMine.status, 200, 'the configured administrator is also an ordinary authenticated account');
 
   assert.equal(declarationError, undefined, 'the configured administrator token declaration is accepted by Policy');
@@ -150,22 +150,22 @@ test('a configured administrator diplomatic token authorizes Simulation admin op
   assert.equal((await fetch(`${simulationOrigin}/local/territory/permissions`)).status, 401);
   const facilitiesBody = JSON.stringify({ mining: { enabled: true, capacity: 5 } });
 
-  const playerState = await fetch(`${simulationOrigin}/local/state`, { headers: bearer(playerToken) });
+  const playerState = await fetch(`${simulationOrigin}/local/territory/state`, { headers: bearer(playerToken) });
   assert.equal(playerState.status, 200, 'the ordinary player diplomatic token is valid for player access');
 
-  const governorFacilities = await fetch(`${simulationOrigin}/local/admin/facilities`, { method: 'POST', headers: bearer(governorToken), body: facilitiesBody });
+  const governorFacilities = await fetch(`${simulationOrigin}/local/territory/admin/facilities`, { method: 'POST', headers: bearer(governorToken), body: facilitiesBody });
   assert.equal(governorFacilities.status, 200, 'the configured administrator diplomatic token authorizes a Simulation Admin-tab operation');
   const facilities = (await simulation.territory.state()).simulation.config;
   assert.equal(facilities.miningEnabled, true, 'the authorized Simulation operation takes effect');
   assert.equal(facilities.miningCapacity, 5, 'the authorized Simulation operation applies its values');
 
-  const playerFacilities = await fetch(`${simulationOrigin}/local/admin/facilities`, { method: 'POST', headers: bearer(playerToken), body: facilitiesBody });
+  const playerFacilities = await fetch(`${simulationOrigin}/local/territory/admin/facilities`, { method: 'POST', headers: bearer(playerToken), body: facilitiesBody });
   assert.equal(playerFacilities.status, 403, 'an enrolled player diplomatic token is rejected from Simulation administration');
 
-  const randomSecretFacilities = await fetch(`${simulationOrigin}/local/admin/facilities`, { method: 'POST', headers: bearer('not-the-simulation-secret'), body: facilitiesBody });
+  const randomSecretFacilities = await fetch(`${simulationOrigin}/local/territory/admin/facilities`, { method: 'POST', headers: bearer('not-the-simulation-secret'), body: facilitiesBody });
   assert.equal(randomSecretFacilities.status, 401, 'an arbitrary secret is not accepted as a Simulation administrator');
 
-  const governorMine = await fetch(`${simulationOrigin}/local/mine`, { method: 'POST', headers: bearer(governorToken), body: JSON.stringify({ count: 1 }) });
+  const governorMine = await fetch(`${simulationOrigin}/local/territory/mine`, { method: 'POST', headers: bearer(governorToken), body: JSON.stringify({ count: 1 }) });
   assert.equal(governorMine.status, 200, 'the configured administrator is also an ordinary authenticated account');
 
   assert.equal(declarationError, undefined, 'the configured administrator token declaration is accepted by Simulation');

@@ -40,17 +40,17 @@ The permission-map routes require authentication. Missing or invalid credentials
 
 ## Territory A — policy (port 4101)
 
-`GET /local/info` is public and returns `{ kind, actor, ids, endpoints, production }`. `GET /local/state` requires a namespace-valid Player diplomatic token or A admin credential and returns `{ state, admission, decisions }`. A Territory accepts any authenticated Player whose Home owns that Actor's namespace; no server or user allowlist is configured.
+`GET /local/territory/info` is public and returns `{ kind, actor, ids, endpoints, production }`. `GET /local/territory/state` requires a namespace-valid Player diplomatic token or A admin credential and returns `{ state, admission, decisions }`. A Territory accepts any authenticated Player whose Home owns that Actor's namespace; no server or user allowlist is configured.
 
 | Route | Credential | Request | Response |
 |---|---|---|---|
-| `POST /local/mine` | Player diplomatic token | `{ count, variety? }`; optional variety must be A ore | `200` operation result or `409` domain rejection |
-| `POST /local/manufacture` | Player diplomatic token | `{ count, recipe: "ore-to-metal" }` | `200` result or `409` domain rejection |
-| `POST /local/transfer` | Player diplomatic token | `{ direction: "to-port" | "to-warehouse", variety, count }` | `200` result or `409` domain rejection |
-| `POST /local/load`, `/local/unload` | Player diplomatic token who possesses the active visit | `{ vessel, variety, count }` | `200` result or `409` domain rejection |
+| `POST /local/territory/mine` | Player diplomatic token | `{ count, variety? }`; optional variety must be A ore | `200` operation result or `409` domain rejection |
+| `POST /local/territory/manufacture` | Player diplomatic token | `{ count, recipe: "ore-to-metal" }` | `200` result or `409` domain rejection |
+| `POST /local/territory/transfer` | Player diplomatic token | `{ direction: "to-port" | "to-warehouse", variety, count }` | `200` result or `409` domain rejection |
+| `POST /local/territory/load`, `/local/territory/unload` | Player diplomatic token who possesses the active visit | `{ vessel, variety, count }` | `200` result or `409` domain rejection |
 | `GET /local/territory/permissions` | Territory diplomatic token | None | `200 { "<territory authority handle>": ["admin"] }` for an administrator, otherwise `{ "<territory authority handle>": [] }` |
-| `POST /local/admin/policy` | A admin credential | Persisted policy object with mining permission/quota/reserve, recipe/permits, limits, optional `varietyPortPolicy` and decisions | `200` update result; `400` invalid policy |
-| `POST /local/admin/admission` | A admin credential | Partial admission object: `trustedRegistry`, `acceptedRegistry`, `acceptedTerritory`, and `vesselBuildingRegistry`, each `{ mode: "allowlist" | "denylist", allowlist: URI[], denylist: URI[] }`, plus preserved `reviewMode`, `publicPorts`, and `mismatchPolicy` | `200 { admission }`; `400` invalid input |
+| `POST /local/territory/admin/policy` | A admin credential | Persisted policy object with mining permission/quota/reserve, recipe/permits, limits, optional `varietyPortPolicy` and decisions | `200` update result; `400` invalid policy |
+| `POST /local/territory/admin/admission` | A admin credential | Partial admission object: `trustedRegistry`, `acceptedRegistry`, `acceptedTerritory`, and `vesselBuildingRegistry`, each `{ mode: "allowlist" | "denylist", allowlist: URI[], denylist: URI[] }`, plus preserved `reviewMode`, `publicPorts`, and `mismatchPolicy` | `200 { admission }`; `400` invalid input |
 
 Player-initiated A mine, manufacture, transfer, load, and unload operations record the authenticated Player URI in local audit entries. Registry entry `prepare-vessel` and departure `exit-vessel` record the verified Registry sender; internal and action-discovery preview operations default to `system`. Attribution does not change authorization.
 
@@ -60,17 +60,17 @@ Player credentials identify a namespace-valid Player; load/unload additionally r
 
 ## Territory B — simulation (port 4102)
 
-`GET /local/info` is public. `GET /local/state` accepts a namespace-valid Player diplomatic token or B admin credential and returns simulation state including ticks, jobs, inventories, vessels and visits. Simulation also admits matches from any namespace-valid Home; admission is controlled by the four lists below.
+`GET /local/territory/info` is public. `GET /local/territory/state` accepts a namespace-valid Player diplomatic token or B admin credential and returns simulation state including ticks, jobs, inventories, vessels and visits. Simulation also admits matches from any namespace-valid Home; admission is controlled by the four lists below.
 
 | Route | Credential | Request | Response |
 |---|---|---|---|
-| `POST /local/mine` | Player diplomatic token | `{ count, duration? }`, duration in local ticks | `200 { job }` |
-| `POST /local/manufacture` | Player diplomatic token | `{ count, recipe: "native" | "imported" }` | `200 { job }` |
-| `POST /local/load`, `/local/unload` | Player diplomatic token matching visit possessor | `{ entryRequest, cargo: { entries: [...] }, duration }` | `200 { job }` |
+| `POST /local/territory/mine` | Player diplomatic token | `{ count, duration? }`, duration in local ticks | `200 { job }` |
+| `POST /local/territory/manufacture` | Player diplomatic token | `{ count, recipe: "native" | "imported" }` | `200 { job }` |
+| `POST /local/territory/load`, `/local/territory/unload` | Player diplomatic token matching visit possessor | `{ entryRequest, cargo: { entries: [...] }, duration }` | `200 { job }` |
 | `GET /local/territory/permissions` | Territory diplomatic token | None | `200 { "<territory authority handle>": ["admin"] }` for an administrator, otherwise `{ "<territory authority handle>": [] }` |
-| `POST /local/admin/facilities` | B admin credential | Partial validated facility sections: `mining`, `manufacturing`, `port` | `200 { ok: true }` |
-| `POST /local/admin/tick` | B admin credential | `{}` (body is read for POST) | `200` tick result |
-| `POST /local/admin/admission` | B admin credential | Partial admission object: `trustedRegistry`, `acceptedRegistry`, `acceptedTerritory`, and `vesselBuildingRegistry`, each `{ mode: "allowlist" | "denylist", allowlist: URI[], denylist: URI[] }`, plus preserved `reviewMode`, `manifestPolicy`, and `requireExitEvidence` | `200 { admission }`; `400` invalid input |
+| `POST /local/territory/admin/facilities` | B admin credential | Partial validated facility sections: `mining`, `manufacturing`, `port` | `200 { ok: true }` |
+| `POST /local/territory/admin/tick` | B admin credential | `{}` (body is read for POST) | `200` tick result |
+| `POST /local/territory/admin/admission` | B admin credential | Partial admission object: `trustedRegistry`, `acceptedRegistry`, `acceptedTerritory`, and `vesselBuildingRegistry`, each `{ mode: "allowlist" | "denylist", allowlist: URI[], denylist: URI[] }`, plus preserved `reviewMode`, `manifestPolicy`, and `requireExitEvidence` | `200 { admission }`; `400` invalid input |
 
 Cargo entries preserve Item (`{ id, variety, data }`) versus Stack (`{ variety, count, data }`) identity. Jobs reserve applicable inputs/capacity and complete only as ticks advance. Valid credentials without permission return `403`; absent/invalid credentials return `401`; invalid bodies return `400`. Unknown paths return `404`. Resource retrieval may return `406` for an unsupported requested representation/format; the browser currently supports the local ASCII map format and text assets. Protected resource requests also use standard `401` unauthenticated, `403` denied and `404` missing-resource responses.
 

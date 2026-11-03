@@ -30,13 +30,13 @@ export function administrationTargetKind(roles: readonly AuthorityRole[]): Admin
 
 export function administrationControlPath(kind: AdministrationTargetKind, control: string): string | undefined {
   if (kind === 'policy') {
-    if (control === 'policy') return '/local/admin/policy';
-    if (control === 'admission') return '/local/admin/admission';
+    if (control === 'policy') return '/local/territory/admin/policy';
+    if (control === 'admission') return '/local/territory/admin/admission';
   }
   if (kind === 'simulation') {
-    if (control === 'admission') return '/local/admin/admission';
-    if (control === 'facilities') return '/local/admin/facilities';
-    if (control === 'tick') return '/local/admin/tick';
+    if (control === 'admission') return '/local/territory/admin/admission';
+    if (control === 'facilities') return '/local/territory/admin/facilities';
+    if (control === 'tick') return '/local/territory/admin/tick';
   }
   if (kind === 'registry' && control === 'adoption') return '/local/registry/adoption';
   if (kind === 'home' && control === 'availability') return '/local/home/accounts/availability';
@@ -74,8 +74,8 @@ export async function readAdministrationTarget(
     const payload = record(await readJson(fetcher, source, token, signal));
     return { source, value: { authorityId: target.authorityId, roles: target.roles, kind, fleet: payload } };
   }
-  const stateSource = new URL('/local/state', target.authorityId).href;
-  const requestsSource = new URL('/local/admin/entry-requests', target.authorityId).href;
+  const stateSource = new URL('/local/territory/state', target.authorityId).href;
+  const requestsSource = new URL('/local/territory/admin/entry-requests', target.authorityId).href;
   const [statePayload, requestsPayload] = await Promise.all([
     readJson(fetcher, stateSource, token, signal),
     readJson(fetcher, requestsSource, token, signal)

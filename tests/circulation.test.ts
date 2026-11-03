@@ -70,8 +70,8 @@ test('actual HTTP circulation keeps Territory decisions, Registry adoption, and 
     method: body === undefined ? 'GET' : 'POST', headers, ...(body === undefined ? {} : { body: JSON.stringify(body) })
   });
   const authorityState = async () => json<Record<string, unknown>>(await fetch(`${authorityOrigin}/local/registry/state`, { headers: registryAuth }));
-  const policyState = async () => json<{ state: { rawInventory: Record<string, number>; portInventory: Record<string, number>; vessels: Record<string, { manifest: { entries: unknown[] } }> }; decisions: Record<string, unknown> }>(await fetch(`${policyOrigin}/local/state`, { headers: playerHeaders(policy.ids.actor) }));
-  const simulationState = async () => json<{ simulation: { tick: number; rawStock: Array<{ commodity: string; count: number }>; productStock: Array<{ commodity: string; count: number }>; productionJobs: Array<{ kind: string; inputs: Array<{ commodity: string; count: number }> }>; handlingJobs: Array<{ operation: string; cargo: Array<{ commodity: string; count: number }> }>; vessels: Array<{ status: string; cargo: Array<{ commodity: string; count: number }> }> }; visits: Record<string, { decision: { accepted: boolean; reason: string }; evidenceVerification?: unknown }> }>(await fetch(`${simOrigin}/local/state`, { headers: playerHeaders(simulation.ids.actor) }));
+  const policyState = async () => json<{ state: { rawInventory: Record<string, number>; portInventory: Record<string, number>; vessels: Record<string, { manifest: { entries: unknown[] } }> }; decisions: Record<string, unknown> }>(await fetch(`${policyOrigin}/local/territory/state`, { headers: playerHeaders(policy.ids.actor) }));
+  const simulationState = async () => json<{ simulation: { tick: number; rawStock: Array<{ commodity: string; count: number }>; productStock: Array<{ commodity: string; count: number }>; productionJobs: Array<{ kind: string; inputs: Array<{ commodity: string; count: number }> }>; handlingJobs: Array<{ operation: string; cargo: Array<{ commodity: string; count: number }> }>; vessels: Array<{ status: string; cargo: Array<{ commodity: string; count: number }> }> }; visits: Record<string, { decision: { accepted: boolean; reason: string }; evidenceVerification?: unknown }> }>(await fetch(`${simOrigin}/local/territory/state`, { headers: playerHeaders(simulation.ids.actor) }));
   const pump = async (server: { processInbox(): Promise<number>; processOutbox(): Promise<number> }) => {
     const count = await server.processInbox();
     const sent = await server.processOutbox();
@@ -79,7 +79,7 @@ test('actual HTTP circulation keeps Territory decisions, Registry adoption, and 
   };
   const tick = async (count: number) => {
     for (let index = 0; index < count; index++) {
-      await json(await operate(simOrigin, '/local/admin/tick', registryAuth, {}));
+      await json(await operate(simOrigin, '/local/territory/admin/tick', registryAuth, {}));
       await pump(simulation.host.server);
       await pump(authority.authority.server);
     }
@@ -92,9 +92,9 @@ test('actual HTTP circulation keeps Territory decisions, Registry adoption, and 
   }));
 
   await t.test('A produces ore and metal, transfers to port, loads, and publishes adopted cargo operation', async () => {
-    assert.equal((await operate(policyOrigin, '/local/mine', playerHeaders(policy.ids.actor), { count: 2 })).status, 200, 'A mining succeeds using Player credentials');
-    assert.equal((await operate(policyOrigin, '/local/manufacture', playerHeaders(policy.ids.actor), { count: 1, recipe: 'ore-to-metal' })).status, 200, 'A consumes two ore into one metal');
-    assert.equal((await operate(policyOrigin, '/local/transfer', playerHeaders(policy.ids.actor), { direction: 'to-port', variety: policy.ids.varieties.metal, count: 1 })).status, 200, 'A transfers produced metal to port inventory');
+    assert.equal((await operate(policyOrigin, '/local/territory/mine', playerHeaders(policy.ids.actor), { count: 2 })).status, 200, 'A mining succeeds using Player credentials');
+    assert.equal((await operate(policyOrigin, '/local/territory/manufacture', playerHeaders(policy.ids.actor), { count: 1, recipe: 'ore-to-metal' })).status, 200, 'A consumes two ore into one metal');
+    assert.equal((await operate(policyOrigin, '/local/territory/transfer', playerHeaders(policy.ids.actor), { direction: 'to-port', variety: policy.ids.varieties.metal, count: 1 })).status, 200, 'A transfers produced metal to port inventory');
     const before = await policyState();
     assert.equal(before.state.rawInventory[policy.ids.varieties.ore], 0);
     assert.equal(before.state.rawInventory[policy.ids.varieties.metal], 0);
@@ -107,7 +107,7 @@ test('actual HTTP circulation keeps Territory decisions, Registry adoption, and 
     await pump(authority.authority.server);
     const entryId = String(entry.id);
     assert.equal((await policyState()).state.vessels[authority.ids.vessel]!.manifest.entries.length, 0, 'initial Registry vessel is locally empty');
-    assert.equal((await operate(policyOrigin, '/local/load', playerHeaders(policy.ids.actor), { vessel: authority.ids.vessel, variety: policy.ids.varieties.metal, count: 1 })).status, 200, 'active possessor loads through actual Player-authenticated endpoint');
+    assert.equal((await operate(policyOrigin, '/local/territory/load', playerHeaders(policy.ids.actor), { vessel: authority.ids.vessel, variety: policy.ids.varieties.metal, count: 1 })).status, 200, 'active possessor loads through actual Player-authenticated endpoint');
     const loaded = await policyState();
     assert.equal(loaded.state.portInventory[policy.ids.varieties.metal], 0);
     assert.deepEqual(loaded.state.vessels[authority.ids.vessel]!.manifest.entries, [{ variety: policy.ids.varieties.metal, count: 1, data: {} }]);
@@ -152,12 +152,12 @@ test('actual HTTP circulation keeps Territory decisions, Registry adoption, and 
     const waiting = await simulationState();
     assert.equal(waiting.visits[bEntryId]?.decision.accepted, true, 'B accepts after checking signed evidence and binding');
     assert.equal(waiting.simulation.vessels[0]?.status, 'pending', 'entry does not immediately imply berth');
-    assert.equal((await operate(simOrigin, '/local/unload', registryAuth, { entryRequest: bEntryId, cargo: { entries: [{ variety: policy.ids.varieties.metal, count: 1, data: {} }] }, duration: 2 })).status, 403, 'admin credential cannot impersonate the Player possessor');
+    assert.equal((await operate(simOrigin, '/local/territory/unload', registryAuth, { entryRequest: bEntryId, cargo: { entries: [{ variety: policy.ids.varieties.metal, count: 1, data: {} }] }, duration: 2 })).status, 403, 'admin credential cannot impersonate the Player possessor');
     await tick(1);
     const berthed = await simulationState();
     assert.equal(berthed.simulation.vessels[0]?.status, 'berthed', 'B completes berthing only on a simulation tick');
     const possessorAuth = playerHeaders(simulation.ids.actor);
-    const unload = await operate(simOrigin, '/local/unload', possessorAuth, { entryRequest: bEntryId, cargo: { entries: [{ variety: policy.ids.varieties.metal, count: 1, data: {} }] }, duration: 2 });
+    const unload = await operate(simOrigin, '/local/territory/unload', possessorAuth, { entryRequest: bEntryId, cargo: { entries: [{ variety: policy.ids.varieties.metal, count: 1, data: {} }] }, duration: 2 });
     assert.equal(unload.status, 200, `B schedules timed unload: ${await unload.clone().text()}`);
     const pendingUnload = await simulationState();
     assert.equal(pendingUnload.simulation.handlingJobs[0]?.operation, 'unload', 'cargo remains reserved while unload is incomplete');
@@ -171,7 +171,7 @@ test('actual HTTP circulation keeps Territory decisions, Registry adoption, and 
     assert.equal(unloaded.simulation.rawStock[0]?.count, 1);
     await pump(authority.authority.server);
     artifacts.activityWrappers.push((await archivedActivities(simulation.host.server, 'CargoOperationEvent')).filter((activity) => (activity.object as Record<string, unknown>).operation === 'unload').at(-1));
-    assert.equal((await operate(simOrigin, '/local/manufacture', possessorAuth, { count: 1, recipe: 'imported' })).status, 200, 'B schedules imported-metal reprocessing');
+    assert.equal((await operate(simOrigin, '/local/territory/manufacture', possessorAuth, { count: 1, recipe: 'imported' })).status, 200, 'B schedules imported-metal reprocessing');
     const reserved = await simulationState();
     assert.equal(reserved.simulation.rawStock.length, 0, 'manufacturing immediately reserves and removes imported input');
     assert.deepEqual(reserved.simulation.productionJobs[0]?.inputs, [{ commodity: policy.ids.varieties.metal, count: 1 }]);
@@ -179,7 +179,7 @@ test('actual HTTP circulation keeps Territory decisions, Registry adoption, and 
     const refined = await simulationState();
     assert.equal(refined.simulation.productStock[0]?.commodity, simulation.ids.varieties.refined);
     assert.equal(refined.simulation.productStock[0]?.count, 1);
-    assert.equal((await operate(simOrigin, '/local/load', possessorAuth, { entryRequest: bEntryId, cargo: { entries: [{ variety: simulation.ids.varieties.refined, count: 1, data: {} }] }, duration: 1 })).status, 200, 'B schedules refined output for reload');
+    assert.equal((await operate(simOrigin, '/local/territory/load', possessorAuth, { entryRequest: bEntryId, cargo: { entries: [{ variety: simulation.ids.varieties.refined, count: 1, data: {} }] }, duration: 1 })).status, 200, 'B schedules refined output for reload');
     await tick(1);
     const reloaded = await simulationState();
     assert.equal(reloaded.simulation.productStock.length, 0);
@@ -212,17 +212,17 @@ test('actual HTTP circulation keeps Territory decisions, Registry adoption, and 
 
   await t.test('B-native production demonstrates shortage, reservations, and completed output on ticks', async () => {
     const auth = playerHeaders(simulation.ids.actor);
-    const shortage = await operate(simOrigin, '/local/manufacture', auth, { count: 1, recipe: 'native' });
+    const shortage = await operate(simOrigin, '/local/territory/manufacture', auth, { count: 1, recipe: 'native' });
     assert.equal(shortage.status, 400, 'manufacture without ore is rejected as an invalid domain operation');
     const before = await simulationState();
     assert.equal(before.simulation.productionJobs.length, 0);
-    assert.equal((await operate(simOrigin, '/local/mine', auth, { count: 1, duration: 2 })).status, 200, 'B-native mine job starts');
+    assert.equal((await operate(simOrigin, '/local/territory/mine', auth, { count: 1, duration: 2 })).status, 200, 'B-native mine job starts');
     const mining = await simulationState();
     assert.equal(mining.simulation.rawStock.length, 0, 'reserved mine output is not available before completion');
     assert.equal(mining.simulation.productionJobs[0]?.kind, 'mine');
     await tick(2);
     assert.equal((await simulationState()).simulation.rawStock[0]?.commodity, simulation.ids.varieties.ore);
-    assert.equal((await operate(simOrigin, '/local/manufacture', auth, { count: 1, recipe: 'native' })).status, 200, 'local ore can be reserved by B-native manufacture');
+    assert.equal((await operate(simOrigin, '/local/territory/manufacture', auth, { count: 1, recipe: 'native' })).status, 200, 'local ore can be reserved by B-native manufacture');
     const manufacturing = await simulationState();
     assert.equal(manufacturing.simulation.rawStock.length, 0, 'reserved ore cannot be reused');
     assert.deepEqual(manufacturing.simulation.productionJobs[0]?.inputs, [{ commodity: simulation.ids.varieties.ore, count: 1 }]);

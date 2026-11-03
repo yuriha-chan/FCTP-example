@@ -257,7 +257,7 @@ function deferred<T>(): Deferred<T> {
 }
 
 function authoritySource(authorityId: string): string {
-  return `${authorityId}/local/actions`;
+  return `${authorityId}/local/territory/actions`;
 }
 
 function operation(options: {
@@ -404,7 +404,7 @@ function jobRecord(options: {
     vesselId: options.vesselId ?? vesselA,
     operation: options.operation,
     status: options.status,
-    source: options.source ?? `${options.authorityId}/local/state`,
+    source: options.source ?? `${options.authorityId}/local/territory/state`,
     observedAt: options.observedAt ?? observedAt,
     ...(hasProgress ? {
       progress: {
@@ -1351,7 +1351,7 @@ test('keeps qualified jobs from two authorities distinct and refreshes remaining
   await waitForRegionText(region, /remaining[\s\S]{0,24}3/i, 'expected the refreshed remaining time');
   assert.equal(requestsOfKind(requests, 'refresh').length, 0, 'job refresh must not refresh every production source');
   assert.equal(requestsOfKind(requests, 'execute').length, 0, 'job refresh must not submit an operation');
-  assert.equal(requests.some((request) => request.pathname.includes('/local/tick')), false, 'job refresh must never advance simulation time');
+  assert.equal(requests.some((request) => request.pathname.includes('/local/territory/admin/tick')), false, 'job refresh must never advance simulation time');
 
   await setContext(page, { accountId: accountA, vesselId: vesselA, authorityId: policyAuthority, jobId: jobMissing });
   await setRevision(page, 1);

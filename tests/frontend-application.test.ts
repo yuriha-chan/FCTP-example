@@ -302,7 +302,7 @@ function vesselOf(input: {
     },
     registry: {
       authorityId: registry,
-      source: `${registry}/local/state`,
+      source: `${registry}/local/territory/state`,
       state: 'available',
       observedAt,
       cargo: { entries: [] },
@@ -341,7 +341,7 @@ function productionOperationOf(input: {
     blockers: input.blockers ?? [],
     available: input.available ?? true,
     ...(input.outputDestination === undefined ? {} : { outputDestination: input.outputDestination }),
-    source: input.source ?? `${input.authorityId}/local/actions`,
+    source: input.source ?? `${input.authorityId}/local/territory/actions`,
     observedAt: input.observedAt ?? observedAt
   };
 }
@@ -367,7 +367,7 @@ function productionJobOf(input: {
     vesselId: input.vesselId,
     operation: input.operation,
     status: input.status,
-    source: input.source ?? `${input.authorityId}/local/state`,
+    source: input.source ?? `${input.authorityId}/local/territory/state`,
     observedAt: input.observedAt ?? observedAt,
     ...(input.progress === undefined ? {} : { progress: input.progress }),
     ...(input.output === undefined ? {} : { output: input.output }),
@@ -883,7 +883,7 @@ function administrationTarget(
     roles,
     name,
     ...(kind === undefined ? {} : { kind }),
-    source: `${authorityId}/local/state`,
+    source: `${authorityId}/local/territory/state`,
     state: 'available',
     observedAt
   };
@@ -1847,7 +1847,7 @@ test('composes Authoring across topics with an exact draft, field picker, public
   );
   assert.equal(await readResource.evaluate((element) => element === document.activeElement), true);
 
-  assert.equal(mock.requests.filter((request) => request.path.includes('/local/tick')).length, 0);
+  assert.equal(mock.requests.filter((request) => request.path.includes('/local/territory/admin/tick')).length, 0);
   assert.equal(mock.requests.filter((request) => request.path === `/api/drafts/${encodeURIComponent(draftId)}/publish`).length, 1);
   const storageKeys = await page.evaluate(() => Object.keys(localStorage).sort());
   assert.deepEqual(storageKeys, ['fctp.authoring-edit', sessionKey].sort(), 'only the selected edit route may be persisted in browser storage');
@@ -2139,7 +2139,7 @@ test('composes Explore and Logistics for a verified vessel, a directed saved pla
   assert.equal(traverseCalls, 1, 'the traverse must be sent exactly once and never replayed by recovery');
   assert.equal(mock.requests.filter((request) => request.method === 'POST' && request.path.endsWith('/traverse')).length, 1);
   assert.equal(mock.requests.filter((request) => request.method === 'POST' && request.path === '/api/explore/refresh').length, 0);
-  assert.equal(mock.requests.filter((request) => request.path.includes('/local/tick')).length, 0);
+  assert.equal(mock.requests.filter((request) => request.path.includes('/local/territory/admin/tick')).length, 0);
   assert.deepEqual(errors, []);
 });
 
@@ -2170,7 +2170,7 @@ test('composes a place capability into Production, executes an advertised operat
     label: 'Mine ore',
     available: true,
     effect: 'Adds ore to the shared stock',
-    request: { method: 'POST', href: `${authorityId}/local/mine`, body: { count: 1 } }
+    request: { method: 'POST', href: `${authorityId}/local/territory/mine`, body: { count: 1 } }
   };
   const operations: ProductionOperation[] = [
     productionOperationOf({
@@ -2199,8 +2199,8 @@ test('composes a place capability into Production, executes an advertised operat
     })
   ];
   const authorities: ProductionData['authorities'] = [
-    { authorityId, kind: 'simulation', source: `${authorityId}/local/actions`, state: 'available', name: 'Simulation A Works', observedAt },
-    { authorityId: otherAuthority, kind: 'simulation', source: `${otherAuthority}/local/actions`, state: 'available', name: 'Simulation B Works', observedAt }
+    { authorityId, kind: 'simulation', source: `${authorityId}/local/territory/actions`, state: 'available', name: 'Simulation A Works', observedAt },
+    { authorityId: otherAuthority, kind: 'simulation', source: `${otherAuthority}/local/territory/actions`, state: 'available', name: 'Simulation B Works', observedAt }
   ];
   const pendingJob = productionJobOf({
     jobId,
@@ -2444,7 +2444,7 @@ test('composes a place capability into Production, executes an advertised operat
   assert.equal(executeCalls, 1, 'the operation must be sent exactly once');
   assert.equal(operationDetailReads, 0, 'operation selection must not depend on a redundant operation-detail read');
   assert.equal(jobRefreshCalls, 1, 'only the explicit job refresh may reconcile a job');
-  assert.equal(mock.requests.filter((request) => request.path.includes('/local/tick')).length, 0);
+  assert.equal(mock.requests.filter((request) => request.path.includes('/local/territory/admin/tick')).length, 0);
   assert.equal(mock.requests.filter((request) => request.method === 'POST' && request.path.endsWith('/refresh') && request.path.startsWith('/api/activity/')).length, 0);
   assert.deepEqual(errors, []);
 });
@@ -2607,7 +2607,7 @@ test('isolates opaque same-name accounts across Authoring, Activity, Logistics, 
               accountId: requestAccount,
               vesselId: request.query.vesselId ?? vesselFirst,
               authorities: requestAccount === first
-                 ? [{ authorityId: authorityFirst, kind: 'simulation', source: `${authorityFirst}/local/actions`, state: 'available', name: 'Alpha Works', observedAt }]
+                 ? [{ authorityId: authorityFirst, kind: 'simulation', source: `${authorityFirst}/local/territory/actions`, state: 'available', name: 'Alpha Works', observedAt }]
                 : [],
               jobs: requestAccount === first ? [job] : []
             }))

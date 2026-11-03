@@ -40,7 +40,7 @@ export async function discoverPolicyActions(input: {
     const reason = blockedByVisit ? 'no-persisted-local-visit' : !result.success ? result.error ?? 'blocked-by-local-domain-rules' : undefined;
     actions.push({ id, label, available: !reason, ...(reason ? { reason } : {}), request, effect });
   };
-  const post = (path: string, body: Record<string, unknown>) => ({ method: 'POST' as const, href: `${input.origin}/local/${path}`, body });
+  const post = (path: string, body: Record<string, unknown>) => ({ method: 'POST' as const, href: `${input.origin}/local/territory/${path}`, body });
   preview('mine-ore', 'Mine one ore', post('mine', { variety: input.ids.varieties.ore, count: 1 }), 'Consumes one unit of shared reserve/quota and adds shared warehouse stock.', (copy) => mineOre(copy, input.ids.varieties.ore, 1));
   preview('manufacture-metal', 'Manufacture one metal', post('manufacture', { recipe: 'ore-to-metal', count: 1 }), 'Consumes shared warehouse ingredients and adds shared warehouse output.', (copy) => manufacture(copy, 'ore-to-metal', 1));
   for (const [variety, label] of [[input.ids.varieties.ore, 'ore'], [input.ids.varieties.metal, 'metal']] as const) {
@@ -62,7 +62,7 @@ export async function discoverPolicyActions(input: {
         id: `traverse-${String(route.id).split('/').at(-1)}`,
         label: `Traverse selected route to ${input.ids.ports.indexOf(route.to as URI) === 0 ? 'East Haven' : 'West Haven'}`,
         available: true,
-        request: { method: 'POST', href: `${input.origin}/local/traverse`, body: { vessel: input.vessel, route: route.id } },
+        request: { method: 'POST', href: `${input.origin}/local/territory/traverse`, body: { vessel: input.vessel, route: route.id } },
         effect: 'Moves this persisted visit to the route destination port with an authoritative local movement event.'
       });
     }

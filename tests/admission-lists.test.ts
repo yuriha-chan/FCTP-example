@@ -127,11 +127,11 @@ async function policyHttpFixture() {
   await app.host.listen(Number(new URL(origin).port));
   const adminHeaders = { Authorization: `Bearer ${adminSecret}`, 'Content-Type': 'application/json' };
   const state = async (): Promise<{ admission: Record<string, unknown> }> => {
-    const response = await fetch(`${origin}/local/state`, { headers: { Authorization: `Bearer ${adminSecret}` } });
+    const response = await fetch(`${origin}/local/territory/state`, { headers: { Authorization: `Bearer ${adminSecret}` } });
     assert.equal(response.status, 200);
     return await response.json() as { admission: Record<string, unknown> };
   };
-  const post = (body: unknown): Promise<Response> => fetch(`${origin}/local/admin/admission`, {
+  const post = (body: unknown): Promise<Response> => fetch(`${origin}/local/territory/admin/admission`, {
     method: 'POST', headers: adminHeaders, body: JSON.stringify(body)
   });
   return {
@@ -201,11 +201,11 @@ async function simulationHttpFixture() {
   await app.host.listen(Number(new URL(origin).port));
   const adminHeaders = { Authorization: `Bearer ${adminSecret}`, 'Content-Type': 'application/json' };
   const state = async (): Promise<{ admission: Record<string, unknown> }> => {
-    const response = await fetch(`${origin}/local/state`, { headers: { Authorization: `Bearer ${adminSecret}` } });
+    const response = await fetch(`${origin}/local/territory/state`, { headers: { Authorization: `Bearer ${adminSecret}` } });
     assert.equal(response.status, 200);
     return await response.json() as { admission: Record<string, unknown> };
   };
-  const post = (body: unknown): Promise<Response> => fetch(`${origin}/local/admin/admission`, {
+  const post = (body: unknown): Promise<Response> => fetch(`${origin}/local/territory/admin/admission`, {
     method: 'POST', headers: adminHeaders, body: JSON.stringify(body)
   });
   return {

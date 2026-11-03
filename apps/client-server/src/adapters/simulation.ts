@@ -35,7 +35,7 @@ export async function readSimulationSnapshot(
   diplomaticToken: string,
   signal: AbortSignal
 ): Promise<SimulationSnapshot> {
-  const infoResponse = await fetcher(new URL('/local/info', authorityId).href, {
+  const infoResponse = await fetcher(new URL('/local/territory/info', authorityId).href, {
     method: 'GET',
     headers: { Accept: 'application/json' },
     cache: 'no-store',
@@ -44,7 +44,7 @@ export async function readSimulationSnapshot(
   if (!infoResponse.ok) throw new Error(`Simulation info unavailable: HTTP ${infoResponse.status}`);
   const infoValue: unknown = await infoResponse.json();
   if (!isRecord(infoValue) || infoValue.kind !== 'simulation') throw new Error('Authority is not a simulation Territory');
-  const endpoint = new URL('/local/actions', authorityId);
+  const endpoint = new URL('/local/territory/actions', authorityId);
   endpoint.searchParams.set('vessel', vesselId);
   const source = endpoint.href;
   const response = await fetcher(source, {
@@ -182,7 +182,7 @@ export function simulationExecution(snapshot: SimulationSnapshot, actionId: stri
 }
 
 export function simulationStateSource(authorityId: string): string {
-  return new URL('/local/state', authorityId).href;
+  return new URL('/local/territory/state', authorityId).href;
 }
 
 export function simulationTerritorySummary(snapshot: SimulationSnapshot): Record<string, unknown> {

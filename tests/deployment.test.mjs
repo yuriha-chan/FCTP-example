@@ -161,11 +161,11 @@ test('territory deployments preserve peer defaults and do not automatically tick
     policy = await startDeployment('policy', policyConfig);
     simulation = await startDeployment('simulation', simulationConfig);
 
-    const policyInfoResponse = await globalThis.fetch(`${policyOrigin}/local/info`);
+    const policyInfoResponse = await globalThis.fetch(`${policyOrigin}/local/territory/info`);
     assert.equal(policyInfoResponse.status, 200);
     const policyInfo = await policyInfoResponse.json();
     assert.equal(policyInfo.actor, `${policyOrigin}/actors/territory`);
-    const policyStateResponse = await globalThis.fetch(`${policyOrigin}/local/state`, { headers: { authorization: 'Bearer territory-admin' } });
+    const policyStateResponse = await globalThis.fetch(`${policyOrigin}/local/territory/state`, { headers: { authorization: 'Bearer territory-admin' } });
     const policyState = await policyStateResponse.json();
     assert.deepEqual(policyState.admission.trustedRegistry, { mode: 'allowlist', allowlist: [], denylist: [] });
     assert.deepEqual(policyState.admission.acceptedRegistry, { mode: 'denylist', allowlist: [], denylist: [] });
@@ -174,7 +174,7 @@ test('territory deployments preserve peer defaults and do not automatically tick
     assert.equal('registryAcceptance' in policyState.admission, false);
     assert.equal('territoryAcceptance' in policyState.admission, false);
 
-    const simulationStateUrl = `${simulationOrigin}/local/state`;
+    const simulationStateUrl = `${simulationOrigin}/local/territory/state`;
     const readSimulation = async () => (await globalThis.fetch(simulationStateUrl, { headers: { authorization: 'Bearer territory-admin' } })).json();
     assert.equal((await readSimulation()).simulation.tick, 0);
     await delay(30);

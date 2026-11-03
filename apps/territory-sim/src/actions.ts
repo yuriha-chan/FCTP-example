@@ -38,9 +38,9 @@ export function discoverSimulationActions(input: {
   const request = (path: string, body: Record<string, unknown>): NonNullable<LocalAction['request']> => ({ method: 'POST', href: `${origin}${path}`, body });
   const preview = (id: string, label: string, href: string, body: Record<string, unknown>, effect: string, operation: (clone: SimulationState) => void): LocalAction => previewSimulationAction(simulation, id, label, request(href, body), effect, operation);
   const actions: LocalAction[] = [
-    preview('mine', 'Mine one ore', '/local/mine', { count: 1, duration: 1 }, 'Queues one ore for a later tick.', (clone) => { startMining(clone, 1, 1); }),
-    preview('manufacture-native', 'Manufacture one native metal', '/local/manufacture', { recipe: 'native', count: 1 }, 'Consumes one ore and queues one native metal.', (clone) => { startManufacturing(clone, 'native', 1); }),
-    preview('manufacture-imported', 'Manufacture one refined metal', '/local/manufacture', { recipe: 'imported', count: 1 }, 'Consumes one imported metal and queues one refined metal.', (clone) => { startManufacturing(clone, 'imported', 1); }),
+    preview('mine', 'Mine one ore', '/local/territory/mine', { count: 1, duration: 1 }, 'Queues one ore for a later tick.', (clone) => { startMining(clone, 1, 1); }),
+    preview('manufacture-native', 'Manufacture one native metal', '/local/territory/manufacture', { recipe: 'native', count: 1 }, 'Consumes one ore and queues one native metal.', (clone) => { startManufacturing(clone, 'native', 1); }),
+    preview('manufacture-imported', 'Manufacture one refined metal', '/local/territory/manufacture', { recipe: 'imported', count: 1 }, 'Consumes one imported metal and queues one refined metal.', (clone) => { startManufacturing(clone, 'imported', 1); }),
   ];
   const active = visit && !visit.exited;
   if (active && simVessel) {
@@ -53,7 +53,7 @@ export function discoverSimulationActions(input: {
       const id = item ? `load:${encodeURIComponent(item.commodity)}:${encodeURIComponent(item.id ?? JSON.stringify(item.data ?? {}))}` : 'load';
       const cargoEntry = item && item.quantityKind === 'Item' ? { variety: item.commodity, id: item.id!, data: item.data ?? {} } : { variety: item?.commodity ?? simulation.config.commodities.ore, count: 1, data: item?.data ?? {} };
       const body = { entryRequest, cargo: { entries: [cargoEntry] }, duration: 1 };
-      const action = preview(id, item ? `Load one ${item.commodity}` : 'Load one available unit', '/local/load', body, 'Reserves shared local stock and schedules handling.', (clone) => {
+      const action = preview(id, item ? `Load one ${item.commodity}` : 'Load one available unit', '/local/territory/load', body, 'Reserves shared local stock and schedules handling.', (clone) => {
         if (!item) throw new Error('insufficient unreserved product stock: no stock available');
         scheduleHandling(clone, simVessel.id, 'load', [{ ...item, count: 1 }], 1);
       });
@@ -64,7 +64,7 @@ export function discoverSimulationActions(input: {
       const id = item ? `unload:${encodeURIComponent(item.commodity)}:${encodeURIComponent(item.id ?? JSON.stringify(item.data ?? {}))}` : 'unload';
       const cargoEntry = item && item.quantityKind === 'Item' ? { variety: item.commodity, id: item.id!, data: item.data ?? {} } : { variety: item?.commodity ?? simulation.config.commodities.ore, count: 1, data: item?.data ?? {} };
       const body = { entryRequest, cargo: { entries: [cargoEntry] }, duration: 1 };
-      actions.push(preview(id, item ? `Unload one ${item.commodity}` : 'Unload one carried unit', '/local/unload', body, 'Reserves one carried unit and warehouse capacity for scheduled handling.', (clone) => {
+      actions.push(preview(id, item ? `Unload one ${item.commodity}` : 'Unload one carried unit', '/local/territory/unload', body, 'Reserves one carried unit and warehouse capacity for scheduled handling.', (clone) => {
         if (!item) throw new Error('insufficient unreserved vessel cargo: no cargo available');
         scheduleHandling(clone, simVessel.id, 'unload', [{ ...item, count: 1 }], 1);
       }));

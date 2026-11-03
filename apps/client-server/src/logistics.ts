@@ -189,7 +189,7 @@ interface TerritoryAuthority {
 }
 
 async function territoryInfo(fetcher: typeof fetch, authorityId: string, signal: AbortSignal): Promise<{ kind: 'policy' | 'simulation'; info: Record<string, unknown> }> {
-  const response = await fetcher(new URL('/local/info', authorityId).href, {
+  const response = await fetcher(new URL('/local/territory/info', authorityId).href, {
     method: 'GET', headers: { Accept: 'application/json' }, cache: 'no-store', signal
   });
   if (!response.ok) throw new Error(`Territory info unavailable: HTTP ${response.status}`);
@@ -369,7 +369,7 @@ export function createLogisticsService(
     const operations: ProductionOperation[] = [];
     const authorityRecords: ProductionAuthorityRecord[] = [];
     for (const authority of authorities) {
-      const source = new URL('/local/actions', authority.actorId).href;
+      const source = new URL('/local/territory/actions', authority.actorId).href;
       const observation = entries.find((candidate) => candidate.source === source);
       const value = observationValue<Record<string, unknown>>(observation);
       const kind = value?.kind === 'simulation' ? 'simulation' : value?.kind === 'policy' ? 'policy' : undefined;
@@ -541,7 +541,7 @@ export function createLogisticsService(
       });
       for (const authority of await territoryAuthorities()) {
         const diplomatic = await deriveDiplomaticToken(token, authority.actorId as URI);
-        const source = new URL('/local/actions', authority.actorId).href;
+        const source = new URL('/local/territory/actions', authority.actorId).href;
         await observations.refresh({
           key: logisticsKey(accountId, vesselId),
           source,
@@ -628,7 +628,7 @@ export function createLogisticsService(
       const authorities = await territoryAuthorities();
       for (const authority of authorities) {
         const diplomatic = await deriveDiplomaticToken(token, authority.actorId as URI);
-        const source = new URL('/local/actions', authority.actorId).href;
+        const source = new URL('/local/territory/actions', authority.actorId).href;
         let territorySummary: Record<string, unknown> | undefined;
         await observations.refresh({
           key: productionKey(accountId, vesselId),
@@ -995,7 +995,7 @@ export function createWorkflowActionHandlers(
 
   const submitLocalMovement = async (leg: JourneyStep, account: AccountRecord & { login: { status: 'signed-in'; nativeToken: string } }, vesselId: string, signal: AbortSignal): Promise<string> => {
     const token = await deriveDiplomaticToken(account.login.nativeToken, leg.territoryId as URI);
-    const response = await fetcher(new URL('/local/traverse', leg.territoryId).href, {
+    const response = await fetcher(new URL('/local/territory/traverse', leg.territoryId).href, {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ vessel: vesselId, route: leg.routeId }),
@@ -1054,7 +1054,7 @@ export function createWorkflowActionHandlers(
 
   const recoverLocalMovement = async (leg: JourneyStep, account: AccountRecord & { login: { status: 'signed-in'; nativeToken: string } }, vesselId: string, signal: AbortSignal): Promise<boolean> => {
     const token = await deriveDiplomaticToken(account.login.nativeToken, leg.territoryId as URI);
-    const endpoint = new URL('/local/actions', leg.territoryId);
+    const endpoint = new URL('/local/territory/actions', leg.territoryId);
     endpoint.searchParams.set('vessel', vesselId);
     const response = await fetcher(endpoint.href, { method: 'GET', headers: { Accept: 'application/json', Authorization: `Bearer ${token}` }, cache: 'no-store', signal });
     if (!response.ok) return false;

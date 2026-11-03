@@ -117,7 +117,7 @@ export async function startDemo(options: StartDemoOptions) {
       vesselBuildingRegistry: { mode: 'allowlist', allowlist: [authority.ids.actor.registry], denylist: [] }
     };
     if (freshPolicy) {
-      const admission = await fetch(new URL('/local/admin/admission', origins.policy), {
+      const admission = await fetch(new URL('/local/territory/admin/admission', origins.policy), {
         method: 'POST',
         headers: { Authorization: `Bearer ${secrets.policy}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...admissionFixture, publicPorts: policy.ids.ports })
@@ -125,7 +125,7 @@ export async function startDemo(options: StartDemoOptions) {
       if (!admission.ok) throw new Error(`Demo admission fixture failed: HTTP ${admission.status}`);
     }
     if (freshSimulation) {
-      const admission = await fetch(new URL('/local/admin/admission', origins.simulation), {
+      const admission = await fetch(new URL('/local/territory/admin/admission', origins.simulation), {
         method: 'POST',
         headers: { Authorization: `Bearer ${secrets.simulation}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(admissionFixture)

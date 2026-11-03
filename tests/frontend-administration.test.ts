@@ -210,7 +210,7 @@ function makeTarget(authorityId: string, options: {
     roles: options.roles ?? ['territory'],
     ...(options.name === undefined ? {} : { name: options.name }),
     ...(options.kind === undefined ? {} : { kind: options.kind }),
-    source: options.source ?? `${authorityId}/local/state`,
+    source: options.source ?? `${authorityId}/local/territory/state`,
     state: options.state ?? 'available',
     ...(options.observedAt === undefined ? {} : { observedAt: options.observedAt }),
     ...(options.error === undefined ? {} : { error: options.error })
@@ -647,7 +647,7 @@ test('performs one retained read on open and renders target-owned scope without 
   await waitForText(region, 'Alpha Territory', 'expected the selected target name');
   await waitForText(region, observedAt, 'expected the target observation time');
   await waitForText(region, /policy/i, 'expected the target kind');
-  await waitForText(region, `${authorityPolicy}/local/state`, 'expected the exact observed source');
+  await waitForText(region, `${authorityPolicy}/local/territory/state`, 'expected the exact observed source');
 
   assert.equal(requests.length, 1, 'opening should perform exactly one retained read');
   const read = requests[0]!;

@@ -15,7 +15,7 @@ export function decodeOperationId(operationId: string): { authorityId: string; a
 
 export function validateOperationRequest(authorityId: string, kind: string, request: { method: string; href: string }): void {
   const url = new URL(request.href);
-  if (request.method !== 'POST' || url.origin !== new URL(authorityId).origin || url.pathname !== `/local/${kind}` || url.search || url.hash || url.username || url.password) {
+  if (request.method !== 'POST' || url.origin !== new URL(authorityId).origin || url.pathname !== `/local/territory/${kind}` || url.search || url.hash || url.username || url.password) {
     throw new TypeError('Operation endpoint does not match the selected authority and operation');
   }
 }

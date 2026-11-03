@@ -1022,7 +1022,7 @@ test('observation refresh bounds a hung source without blocking independent refr
   try {
     const hung = application.observations.refresh({
       key: 'territory:slow:state',
-      source: 'https://slow.test:4200/local/state',
+      source: 'https://slow.test:4200/local/territory/state',
       load: async (signal) => {
         signal.addEventListener('abort', () => { aborted = true; });
         await gate;
@@ -1039,7 +1039,7 @@ test('observation refresh bounds a hung source without blocking independent refr
     assert.equal(settled, 'written');
     const independent = await application.observations.refresh({
       key: 'territory:fast:state',
-      source: 'https://fast.test:4200/local/state',
+      source: 'https://fast.test:4200/local/territory/state',
       load: async () => ({ ready: true })
     });
     assert.equal(independent.state, 'available');
@@ -1053,7 +1053,7 @@ test('observation refresh bounds a hung source without blocking independent refr
     assert.deepEqual(await application.state.read((state) => state.drafts['draft:independent']), { id: 'draft:independent' });
     release?.();
     await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.equal((await application.observations.readOne('territory:slow:state', 'https://slow.test:4200/local/state')).state, 'unavailable');
+    assert.equal((await application.observations.readOne('territory:slow:state', 'https://slow.test:4200/local/territory/state')).state, 'unavailable');
   } finally {
     release?.();
     await application.close();
@@ -1713,14 +1713,14 @@ test('explore exposes competing vessel position observations from two authoritie
     });
     await opened.application.observations.refresh({
       key: `position:${firstAccount.id}:${vessel}`,
-      source: 'https://territory.test:4200/local/state',
+      source: 'https://territory.test:4200/local/territory/state',
       load: async () => ({ vessel, placeId: 'https://territory.test:4200/objects/ports/main', status: 'pending' })
     });
     const response = await fetch(new URL(`/api/explore/places?accountId=${encodeURIComponent(firstAccount.id)}&vesselId=${encodeURIComponent(vessel)}`, opened.client.origin));
     assert.equal(response.status, 200);
     const body = await readJsonResponse(response);
     const registry = findRecord(body, (record) => record.source === 'https://registry.test:4200/local/registry/state');
-    const territory = findRecord(body, (record) => record.source === 'https://territory.test:4200/local/state');
+    const territory = findRecord(body, (record) => record.source === 'https://territory.test:4200/local/territory/state');
     assert.equal(isRecord(registry?.value) ? registry.value.status : undefined, 'berthed');
     assert.equal(isRecord(territory?.value) ? territory.value.status : undefined, 'pending');
     assert.notEqual((registry?.value as Record<string, unknown> | undefined)?.placeId, (territory?.value as Record<string, unknown> | undefined)?.placeId, 'the two authorities keep their own recorded positions');
@@ -1790,7 +1790,7 @@ test('Explore never returns another account or vessel capability snapshot in pag
     const vessel = 'https://vessels.test/one';
     await opened.application.observations.refresh({
       key: `explore\0capabilities\0${firstAccount.id}\0${vessel}\0https://authority.test/actor`,
-      source: 'https://authority.test/local/actions',
+      source: 'https://authority.test/local/territory/actions',
       load: async () => ({ territoryId: 'https://authority.test/actor', accountId: firstAccount.id, vesselId: vessel, actions: [{ id: 'private-op', label: 'Account private operation', available: true, effect: 'private' }] })
     });
     for (const query of ['', `?accountId=${encodeURIComponent(secondAccount.id)}&vesselId=${encodeURIComponent(vessel)}`, `?accountId=${encodeURIComponent(firstAccount.id)}&vesselId=${encodeURIComponent('https://vessels.test/two')}`]) {
@@ -1839,7 +1839,7 @@ test('Explore follows explicitly linked Territory geography outward without assu
     const body = await refreshed.json();
     assert.ok(placeRecords(body).some((place) => place.id === end));
     assert.ok(findRecord(body, (record) => record.id === 'https://two.test/onward' && record.from === middle && record.to === end));
-    assert.equal(calls.some((uri) => new URL(uri).pathname === '/local/actions'), false);
+    assert.equal(calls.some((uri) => new URL(uri).pathname === '/local/territory/actions'), false);
     const route = await fetch(new URL('/api/explore/routes', opened.client.origin), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accountId: firstAccount.id, from: start, to: end })
     });
@@ -2286,8 +2286,8 @@ test('logistics refresh retains scoped Registry and Territory observations, read
     assert.ok(findObservation(refreshed, world.origins.policy, ['available', 'empty']), 'Policy Territory observation is retained independently');
     assert.ok(findObservation(refreshed, world.origins.simulation, ['available', 'empty']), 'Simulation Territory observation is retained independently');
     assert.ok(opened.calls.some((call) => call.url.includes('/local/registry/state')), 'refresh reads Registry state');
-    assert.ok(opened.calls.some((call) => new URL(call.url).origin === world.origins.policy && call.url.includes('/local/actions')), 'refresh reads Policy actions');
-    assert.ok(opened.calls.some((call) => new URL(call.url).origin === world.origins.simulation && call.url.includes('/local/actions')), 'refresh reads Simulation actions');
+    assert.ok(opened.calls.some((call) => new URL(call.url).origin === world.origins.policy && call.url.includes('/local/territory/actions')), 'refresh reads Policy actions');
+    assert.ok(opened.calls.some((call) => new URL(call.url).origin === world.origins.simulation && call.url.includes('/local/territory/actions')), 'refresh reads Simulation actions');
 
     const retainedCalls = opened.calls.length;
     const retainedResponse = await fetch(new URL(`${logisticsPath(vessel)}?accountId=${encodeURIComponent(accountId)}`, opened.client.origin));
@@ -2552,10 +2552,10 @@ test('production never sends credentials to a foreign advertised operation endpo
       return Response.json({ success: true });
     }
     const response = await fetch(input, init);
-    if (new URL(uri).origin === world.origins.policy && new URL(uri).pathname === '/local/actions' && response.ok) {
+    if (new URL(uri).origin === world.origins.policy && new URL(uri).pathname === '/local/territory/actions' && response.ok) {
       const payload = await response.json() as { actions: Array<{ id: string; request?: { href: string; method: string } }> };
       const mine = payload.actions.find((action) => action.id === 'mine-ore');
-      if (mine?.request) mine.request.href = 'https://foreign.test/local/mine';
+      if (mine?.request) mine.request.href = 'https://foreign.test/local/territory/mine';
       return Response.json(payload);
     }
     return response;
@@ -2584,7 +2584,7 @@ test('Policy completion cannot reuse an audit entry from a previous identical op
   const world = await startProductionWorld(directory);
   let acknowledgeOnly = false;
   const fetcher: typeof fetch = (input, init) => {
-    if (acknowledgeOnly && String(input) === `${world.origins.policy}/local/mine` && init?.method === 'POST') return Promise.resolve(Response.json({ success: true }));
+    if (acknowledgeOnly && String(input) === `${world.origins.policy}/local/territory/mine` && init?.method === 'POST') return Promise.resolve(Response.json({ success: true }));
     return fetch(input, init);
   };
   const opened = await openProductionClient(join(directory, 'client.json'), world, { fetch: fetcher });
@@ -2714,7 +2714,7 @@ test('production tracks Simulation jobs and handling as pending until test-admin
     assert.equal(entry.submission.status, 'accepted');
     await exchangeWorld(world.authority.authority.server, world.simulation.host.server);
     assert.equal((await world.simulation.territory.state()).simulation.vessels[0]?.status, 'pending', 'entry does not itself berth');
-    assert.equal((await adminRequest('/local/admin/tick')).status, 200);
+    assert.equal((await adminRequest('/local/territory/admin/tick')).status, 200);
     await exchangeWorld(world.simulation.host.server, world.authority.authority.server);
     assert.equal((await world.simulation.territory.state()).simulation.vessels[0]?.status, 'berthed');
 
@@ -2746,7 +2746,7 @@ test('production tracks Simulation jobs and handling as pending until test-admin
     assert.match(JSON.stringify(stillPending), /pending|progress|remaining|queued/i);
     assert.equal((await world.simulation.territory.state()).simulation.tick, tickBefore, 'job refresh never ticks the world');
 
-    assert.equal((await adminRequest('/local/admin/tick')).status, 200);
+    assert.equal((await adminRequest('/local/territory/admin/tick')).status, 200);
     await exchangeWorld(world.simulation.host.server, world.authority.authority.server);
     const completedJob = await refreshJob(miningJob.id);
     assert.match(JSON.stringify(completedJob), /completed|evidence/i);
@@ -2766,7 +2766,7 @@ test('production tracks Simulation jobs and handling as pending until test-admin
     const pendingHandling = await refreshJob(handlingJob.id);
     assert.match(JSON.stringify(pendingHandling), /pending|progress|remaining|queued/i);
 
-    assert.equal((await adminRequest('/local/admin/tick')).status, 200);
+    assert.equal((await adminRequest('/local/territory/admin/tick')).status, 200);
     await exchangeWorld(world.simulation.host.server, world.authority.authority.server);
     const completedHandling = await refreshJob(handlingJob.id);
     assert.match(JSON.stringify(completedHandling), /completed|evidence/i);
@@ -2781,7 +2781,7 @@ test('production tracks Simulation jobs and handling as pending until test-admin
     assert.equal(unloading.status, 200);
     const unloadJob = unloading.action?.resultReferences.find((reference) => reference.kind === 'job');
     assert.ok(unloadJob);
-    assert.equal((await adminRequest('/local/admin/tick')).status, 200);
+    assert.equal((await adminRequest('/local/territory/admin/tick')).status, 200);
     await exchangeWorld(world.simulation.host.server, world.authority.authority.server);
     await refreshJob(unloadJob.id);
     assert.equal((await world.simulation.territory.state()).simulation.vessels[0]?.cargo.length, 0);
@@ -2791,8 +2791,8 @@ test('production tracks Simulation jobs and handling as pending until test-admin
     assert.equal(manufacturing.action?.outcome.status, 'pending');
     const manufactureJob = manufacturing.action?.resultReferences.find((reference) => reference.kind === 'job');
     assert.ok(manufactureJob);
-    assert.equal((await adminRequest('/local/admin/tick')).status, 200);
-    assert.equal((await adminRequest('/local/admin/tick')).status, 200);
+    assert.equal((await adminRequest('/local/territory/admin/tick')).status, 200);
+    assert.equal((await adminRequest('/local/territory/admin/tick')).status, 200);
     const manufactured = await refreshJob(manufactureJob.id);
     assert.match(JSON.stringify(manufactured), /completed/);
     assert.equal((await world.simulation.territory.state()).simulation.productStock.find((item) => item.commodity === world.simulation.ids.varieties.metal)?.count, 1);
@@ -3317,7 +3317,7 @@ test('administration page checks Home entries and refresh isolates a failed sour
     const newCalls = opened.calls.slice(refreshCalls);
     assert.ok(newCalls.some((call) => new URL(call.url).origin === world.origins.policy), 'refresh reads the selected target');
     assert.equal(newCalls.some((call) => new URL(call.url).origin === world.origins.simulation), false, 'refresh does not read an unselected target');
-    assert.ok(opened.calls.some((call) => new URL(call.url).origin === world.origins.policy && call.url.includes('/local/admin/entry-requests')), 'refresh retains pending entry requests');
+    assert.ok(opened.calls.some((call) => new URL(call.url).origin === world.origins.policy && call.url.includes('/local/territory/admin/entry-requests')), 'refresh retains pending entry requests');
     assert.match(JSON.stringify(refreshed.body), new RegExp(escapeRegExp(world.policy.ids.actor)));
     assert.match(JSON.stringify(refreshed.body), /available|empty|stale|not-retrieved/i);
 
@@ -3455,7 +3455,7 @@ test('administration approves and rejects manual entry requests with real Regist
   const adminHeaders = { Authorization: `Bearer ${world.adminSecret}`, 'Content-Type': 'application/json' };
   try {
     for (const [origin, target] of [[world.origins.policy, world.policy], [world.origins.simulation, world.simulation]] as const) {
-      const response = await fetch(`${origin}/local/admin/admission`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ reviewMode: 'manual' }) });
+      const response = await fetch(`${origin}/local/territory/admin/admission`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ reviewMode: 'manual' }) });
       assert.equal(response.status, 200, `manual review is configured for ${target.ids.actor}`);
     }
     const refreshAdministration = async (authorityId: string): Promise<unknown> => {
@@ -3523,7 +3523,7 @@ test('administration approves and rejects manual entry requests with real Regist
     assert.equal((await world.authority.registry.state(world.authority.ids.vessel)).events.some((event) => event.type === 'BerthingEvent' && event.request === simulationReference.id), false, 'simulation approval waits for a tick');
     const beforeTick = await readActivityAction(opened.client.origin, accountId, simulationAction.id);
     assert.notEqual(beforeTick.outcome.status, 'completed', 'simulation approval is not berthing completion before the tick');
-    const tick = await fetch(`${world.origins.simulation}/local/admin/tick`, { method: 'POST', headers: adminHeaders, body: '{}' });
+    const tick = await fetch(`${world.origins.simulation}/local/territory/admin/tick`, { method: 'POST', headers: adminHeaders, body: '{}' });
     assert.equal(tick.status, 200);
     await exchangeWorld(world.simulation.host.server, world.authority.authority.server);
     assert.equal((await world.authority.registry.state(world.authority.ids.vessel)).events.some((event) => event.type === 'BerthingEvent' && event.request === simulationReference.id), true, 'the delayed simulation BerthingEvent is real Registry evidence');
@@ -3553,7 +3553,7 @@ test('acknowledged administration control needs observed submitted values before
   const opened = await openProductionClient(join(directory, 'client.json'), world, {
     fetch: async (input, init) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
-      if (url.origin === world.origins.policy && url.pathname === '/local/admin/admission' && init?.method === 'POST') return Response.json({ accepted: true });
+      if (url.origin === world.origins.policy && url.pathname === '/local/territory/admin/admission' && init?.method === 'POST') return Response.json({ accepted: true });
       return fetch(input, init);
     }
   });
@@ -3624,7 +3624,7 @@ test('traverse executes a saved connected route through actual local movement, s
   const policyWest = world.policy.ids.ports[1]!;
   const simulationMain = world.simulation.ids.ports[0]!;
   try {
-    const admission = await fetch(`${world.origins.policy}/local/admin/admission`, {
+    const admission = await fetch(`${world.origins.policy}/local/territory/admin/admission`, {
       method: 'POST', headers: adminHeaders, body: JSON.stringify({ publicPorts: world.policy.ids.ports })
     });
     assert.equal(admission.status, 200, 'both policy ports are readable in the connected fixture');
@@ -3728,7 +3728,7 @@ test('traverse executes a saved connected route through actual local movement, s
     assert.equal((await registryEntryRequests(world, vessel, world.simulation.ids.actor)).length, retriesBefore, 'an unavailable observation never resubmits the child entry');
     delete control.fail;
 
-    const tick = await fetch(`${world.origins.simulation}/local/admin/tick`, { method: 'POST', headers: adminHeaders, body: '{}' });
+    const tick = await fetch(`${world.origins.simulation}/local/territory/admin/tick`, { method: 'POST', headers: adminHeaders, body: '{}' });
     assert.equal(tick.status, 200);
     await exchangeWorld(world.simulation.host.server, world.authority.authority.server);
     action = await refreshJourneyUntil(opened.client.origin, first.id, action.id, (candidate) => candidate.outcome.status === 'completed', 'the journey completes only after delayed berth evidence');
@@ -3759,11 +3759,11 @@ test('traverse retains manual destination review, never resubmits on concurrent 
   const vessel = world.authority.ids.vessel;
   const adminHeaders = task08AdminHeaders(world);
   try {
-    const admission = await fetch(`${world.origins.policy}/local/admin/admission`, {
+    const admission = await fetch(`${world.origins.policy}/local/territory/admin/admission`, {
       method: 'POST', headers: adminHeaders, body: JSON.stringify({ publicPorts: world.policy.ids.ports })
     });
     assert.equal(admission.status, 200);
-    const manual = await fetch(`${world.origins.simulation}/local/admin/admission`, {
+    const manual = await fetch(`${world.origins.simulation}/local/territory/admin/admission`, {
       method: 'POST', headers: adminHeaders, body: JSON.stringify({ reviewMode: 'manual' })
     });
     assert.equal(manual.status, 200);
@@ -3804,7 +3804,7 @@ test('traverse retains manual destination review, never resubmits on concurrent 
     assert.notEqual(action.outcome.status, 'completed');
     assert.equal(actionJourneyLegs(action).length, 3, 'pending review retains per-leg progress');
 
-    const rejected = await fetch(`${world.origins.simulation}/local/admin/entry-requests/${encodeURIComponent(requestId)}/reject`, {
+    const rejected = await fetch(`${world.origins.simulation}/local/territory/admin/entry-requests/${encodeURIComponent(requestId)}/reject`, {
       method: 'POST', headers: adminHeaders, body: JSON.stringify({ reason: 'destination-rejected' })
     });
     assert.equal(rejected.status, 200);
@@ -3857,7 +3857,7 @@ test('local journey completion requires observed movement rather than an acknowl
   let movementPosts = 0;
   const fetcher: typeof fetch = async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
-    if (url.origin === world.origins.policy && url.pathname === '/local/traverse' && init?.method === 'POST') {
+    if (url.origin === world.origins.policy && url.pathname === '/local/territory/traverse' && init?.method === 'POST') {
       movementPosts += 1;
       return Response.json({ success: true, event: {
         id: `${world.origins.policy}/objects/policy/voyage/unapplied`, type: 'VoyageEvent', kind: 'local-movement',
@@ -3872,7 +3872,7 @@ test('local journey completion requires observed movement rather than an acknowl
   const accountId = world.accounts.first.id;
   const vessel = world.authority.ids.vessel;
   try {
-    await fetch(`${world.origins.policy}/local/admin/admission`, { method: 'POST', headers: task08AdminHeaders(world), body: JSON.stringify({ publicPorts: world.policy.ids.ports }) });
+    await fetch(`${world.origins.policy}/local/territory/admin/admission`, { method: 'POST', headers: task08AdminHeaders(world), body: JSON.stringify({ publicPorts: world.policy.ids.ports }) });
     await refreshExplore(opened.client.origin);
     const plan = await saveJourneyPlan(opened.client.origin, accountId, world.policy.ids.ports[0]!, world.policy.ids.ports[1]!);
     await submitLogisticsEntryFor(opened.client.origin, world, accountId, vessel, 'policy');
@@ -3910,13 +3910,13 @@ test('a lost Registry submission response remains uncertain across restart witho
   const accountId = world.accounts.first.id;
   const vessel = world.authority.ids.vessel;
   try {
-    await fetch(`${world.origins.policy}/local/admin/admission`, { method: 'POST', headers: task08AdminHeaders(world), body: JSON.stringify({ publicPorts: world.policy.ids.ports }) });
+    await fetch(`${world.origins.policy}/local/territory/admin/admission`, { method: 'POST', headers: task08AdminHeaders(world), body: JSON.stringify({ publicPorts: world.policy.ids.ports }) });
     await refreshExplore(opened.client.origin);
     const plan = await saveJourneyPlan(opened.client.origin, accountId, world.policy.ids.ports[1]!, world.simulation.ids.ports[0]!);
     await submitLogisticsEntryFor(opened.client.origin, world, accountId, vessel, 'policy');
     await exchangeWorld(world.authority.authority.server, world.policy.host.server);
     const token = await deriveDiplomaticToken(world.nativeTokens.first, world.policy.ids.actor);
-    assert.equal((await fetch(`${world.origins.policy}/local/traverse`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ vessel, route: world.policy.ids.routes[1] }) })).status, 200);
+    assert.equal((await fetch(`${world.origins.policy}/local/territory/traverse`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ vessel, route: world.policy.ids.routes[1] }) })).status, 200);
     const posted = await traverseJourney(opened.client.origin, accountId, vessel, String(plan.id));
     assert.equal(posted.status, 200);
     let action = await refreshActivityAction(opened.client.origin, accountId, posted.action!.id);

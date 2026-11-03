@@ -33,9 +33,9 @@ const approachRouteId = 'https://territory.test:4300/objects/routes/approach';
 const coastalRouteId = 'https://territory.test:4300/objects/routes/coastal';
 const returnRouteId = 'https://territory.test:4300/objects/routes/return';
 const farRouteId = 'https://territory.test:4300/objects/routes/far';
-const policySource = 'https://territory.test:4300/local/actions';
-const simulationSource = 'https://simulation.test:4400/local/actions';
-const simulation2Source = 'https://simulation2.test:4500/local/actions';
+const policySource = 'https://territory.test:4300/local/territory/actions';
+const simulationSource = 'https://simulation.test:4400/local/territory/actions';
+const simulation2Source = 'https://simulation2.test:4500/local/territory/actions';
 const vesselAliceId = 'https://home.test:4200/objects/vessels/alice';
 const vesselOutsiderId = 'https://home.test:4200/objects/vessels/outsider';
 const vesselBrokenId = 'https://home.test:4200/objects/vessels/broken';
@@ -244,7 +244,7 @@ function capabilityRecord(): Record<string, unknown> {
     id: 'mine',
     label: 'Mine ore',
     available: true,
-    request: { method: 'POST', href: `${territoryId.replace('/actors/territory', '')}/local/mine`, body: { count: 1 } },
+    request: { method: 'POST', href: `${territoryId.replace('/actors/territory', '')}/local/territory/mine`, body: { count: 1 } },
     effect: 'Adds ore to the shared stock'
   };
 }
@@ -770,8 +770,8 @@ test('capability continuation carries place, authority, vessel and capability id
 
 test('inserts the retained Port picker, inspects without selecting, cancels, and groups only directed nearby ports', async (t) => {
   const positioned = listWithPositions([
-    { portId: westId, source: `${territoryId}/local/actions#primary` },
-    { portId: westId, source: `${territoryId}/local/actions#secondary` }
+    { portId: westId, source: `${territoryId}/local/territory/actions#primary` },
+    { portId: westId, source: `${territoryId}/local/territory/actions#secondary` }
   ]);
   const { page, requests, errors } = await openFixture(t, {
     screen: 'explore',
@@ -816,8 +816,8 @@ test('inserts the retained Port picker, inspects without selecting, cancels, and
 
 test('does not derive a confident nearby origin when retained position observations conflict', async (t) => {
   const positioned = listWithPositions([
-    { portId: westId, source: `${territoryId}/local/actions#primary` },
-    { portId: eastId, source: `${territoryId}/local/actions#secondary` }
+    { portId: westId, source: `${territoryId}/local/territory/actions#primary` },
+    { portId: eastId, source: `${territoryId}/local/territory/actions#secondary` }
   ]);
   const { page, errors } = await openFixture(t, {
     screen: 'explore',
@@ -870,7 +870,7 @@ test('creates an exact directed route plan, hands off only exact workflow contex
   const proposed = await regionText(page, 'Explore');
   assert.ok(proposed.includes(eastId) && proposed.includes(westId), 'the plan must retain exact origin and destination IDs');
   assert.ok(proposed.includes('Far Isle endpoint is not retrieved'), 'known route blockers must be visible');
-  assert.equal(proposed.includes('https://territory.test:4300/local/mine'), false, 'advertised request hrefs must not become executable UI');
+  assert.equal(proposed.includes('https://territory.test:4300/local/territory/mine'), false, 'advertised request hrefs must not become executable UI');
 
   await clickButton(page, 'Use this plan');
   const logistics = await events(page, 'logistics');
@@ -1225,7 +1225,7 @@ test('reads the exact route plan, displays directed legs, and submits only accou
   assert.match(reconciled, /EntryRejected/i, 'a rejected leg must stay rejected');
   assert.ok(reconciled.includes('Readback failed'), 'an unverified leg must stay unverified');
   assert.equal(requestsFor(requests, 'POST', `/api/logistics/vessels/${encodeURIComponent(vesselAliceId)}/traverse`).length, 1, 'refreshing status must never replay the traverse');
-  assert.equal(requests.some((request) => request.pathname.includes('/local/tick')), false, 'page reads and reconciliation must not advance simulation time');
+  assert.equal(requests.some((request) => request.pathname.includes('/local/territory/admin/tick')), false, 'page reads and reconciliation must not advance simulation time');
   assert.deepEqual(errors, []);
 });
 
@@ -1274,7 +1274,7 @@ test('keeps an unverified traverse unverified and never automatically resubmits 
   await waitFor(() => requests.filter((request) => request.method === 'POST' && request.pathname === `/api/activity/${encodeURIComponent(activityId)}/refresh`).length === 1, 'explicit refresh must reconcile the uncertain action');
   await waitForRegionText(page, 'Vessel travel', /Unverified/i, 'reconciliation still unverified must remain visible');
   assert.equal(requestsFor(requests, 'POST', `/api/logistics/vessels/${encodeURIComponent(vesselAliceId)}/traverse`).length, 1, 'reconciliation must not resubmit the traverse');
-  assert.equal(requests.some((request) => request.pathname.includes('/local/tick')), false, 'reconciliation must not advance simulation time');
+  assert.equal(requests.some((request) => request.pathname.includes('/local/territory/admin/tick')), false, 'reconciliation must not advance simulation time');
   assert.deepEqual(errors, []);
 });
 

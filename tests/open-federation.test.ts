@@ -147,8 +147,8 @@ test('a Policy app accepts a foreign Home Player declaration and authorizes play
     await deliverTokenDigest(authority, app, player, token, `${authority.actor('home').id}/token-digest/foreign-player`);
 
     const headers = { Authorization: `Bearer ${token}` };
-    assert.equal((await fetch(`${origin}/local/state`, { headers })).status, 200);
-    const mined = await fetch(`${origin}/local/mine`, {
+    assert.equal((await fetch(`${origin}/local/territory/state`, { headers })).status, 200);
+    const mined = await fetch(`${origin}/local/territory/mine`, {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ count: 1 })
@@ -183,8 +183,8 @@ test('a Simulation app accepts a foreign Home Player declaration and authorizes 
     await deliverTokenDigest(authority, app, player, token, `${authority.actor('home').id}/token-digest/foreign-player`);
 
     const headers = { Authorization: `Bearer ${token}` };
-    assert.equal((await fetch(`${origin}/local/state`, { headers })).status, 200);
-    const mined = await fetch(`${origin}/local/mine`, {
+    assert.equal((await fetch(`${origin}/local/territory/state`, { headers })).status, 200);
+    const mined = await fetch(`${origin}/local/territory/mine`, {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ count: 1 })

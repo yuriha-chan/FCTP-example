@@ -38,8 +38,8 @@ after(async () => {
 test('serves authority and Territory resources', async () => {
   const get = (base: string, path: string) => fetch(new URL(path, base));
   const authorityInfo = await get(demo.origins.authority, '/local/info');
-  const policyInfo = await get(demo.origins.policy, '/local/info');
-  const simulationInfo = await get(demo.origins.simulation, '/local/info');
+  const policyInfo = await get(demo.origins.policy, '/local/territory/info');
+  const simulationInfo = await get(demo.origins.simulation, '/local/territory/info');
   assert.equal(authorityInfo.status, 200);
   assert.equal(policyInfo.status, 200);
   assert.equal(simulationInfo.status, 200);

@@ -48,7 +48,7 @@ export async function readPolicySnapshot(
   diplomaticToken: string,
   signal: AbortSignal
 ): Promise<PolicySnapshot> {
-  const infoResponse = await fetcher(new URL('/local/info', authorityId).href, {
+  const infoResponse = await fetcher(new URL('/local/territory/info', authorityId).href, {
     method: 'GET',
     headers: { Accept: 'application/json' },
     cache: 'no-store',
@@ -57,7 +57,7 @@ export async function readPolicySnapshot(
   if (!infoResponse.ok) throw new Error(`Policy info unavailable: HTTP ${infoResponse.status}`);
   const infoValue: unknown = await infoResponse.json();
   if (!isRecord(infoValue) || infoValue.kind !== 'policy') throw new Error('Authority is not a policy Territory');
-  const endpoint = new URL('/local/actions', authorityId);
+  const endpoint = new URL('/local/territory/actions', authorityId);
   endpoint.searchParams.set('vessel', vesselId);
   const source = endpoint.href;
   const response = await fetcher(source, {
@@ -222,7 +222,7 @@ export function policyExecutionSource(snapshot: PolicySnapshot, action: LocalAct
 }
 
 export function policyStateSource(authorityId: string): string {
-  return new URL('/local/state', authorityId).href;
+  return new URL('/local/territory/state', authorityId).href;
 }
 
 export function policyAuditAction(kind: ProductionOperation['kind'], body: Record<string, unknown>): string {

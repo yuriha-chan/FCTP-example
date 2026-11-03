@@ -141,12 +141,12 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
   });
   host.server.addRoute(async ({ request, response, url, base }) => {
     if (!url.pathname.startsWith('/local/')) return false;
-    const send = (status: number, value: unknown): void => { response.writeHead(status, { 'Content-Type': 'application/json', ...(url.pathname === '/local/actions' ? { 'Cache-Control': 'no-store' } : {}) }); response.end(JSON.stringify(value)); };
-    if (url.pathname === '/local/info' && request.method === 'GET') {
-      send(200, { kind: 'policy', actor: actorId, ids, endpoints: ['/local/info', '/local/state', '/local/actions', '/local/traverse', '/local/mine', '/local/manufacture', '/local/transfer', '/local/load', '/local/unload', '/local/territory/permissions', '/local/admin/policy', '/local/admin/admission'], production: { mining: { input: null, output: ore.id }, recipes: [{ id: 'ore-to-metal', input: ore.id, output: metal.id }] } });
+    const send = (status: number, value: unknown): void => { response.writeHead(status, { 'Content-Type': 'application/json', ...(url.pathname === '/local/territory/actions' ? { 'Cache-Control': 'no-store' } : {}) }); response.end(JSON.stringify(value)); };
+    if (url.pathname === '/local/territory/info' && request.method === 'GET') {
+      send(200, { kind: 'policy', actor: actorId, ids, endpoints: ['/local/territory/info', '/local/territory/state', '/local/territory/actions', '/local/territory/traverse', '/local/territory/mine', '/local/territory/manufacture', '/local/territory/transfer', '/local/territory/load', '/local/territory/unload', '/local/territory/permissions', '/local/territory/admin/policy', '/local/territory/admin/admission'], production: { mining: { input: null, output: ore.id }, recipes: [{ id: 'ore-to-metal', input: ore.id, output: metal.id }] } });
       return true;
     }
-    if (url.pathname === '/local/actions' && request.method === 'GET') {
+    if (url.pathname === '/local/territory/actions' && request.method === 'GET') {
       try {
         const player = await authenticatedPlayer(request, host, actorId);
         if (!player) { send(401, { error: 'unauthorized' }); return true; }
@@ -159,7 +159,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
       }
       return true;
     }
-    if (url.pathname === '/local/state' && request.method === 'GET') {
+    if (url.pathname === '/local/territory/state' && request.method === 'GET') {
       const player = await authenticatedPlayer(request, host, actorId);
       if (!player && !await base.checkAdmin(request, mutableActor)) { send(401, { error: 'unauthorized' }); return true; }
       const ledger = await territory.ledger;
@@ -179,7 +179,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
       send(200, { [handle]: admin ? ['admin'] : [] });
       return true;
     }
-    const adminRoute = url.pathname === '/local/admin/policy' || url.pathname === '/local/admin/admission';
+    const adminRoute = url.pathname === '/local/territory/admin/policy' || url.pathname === '/local/territory/admin/admission';
     if (adminRoute && request.method === 'POST') {
       if (!hasBearer(request)) { send(401, { error: 'unauthorized' }); return true; }
       if (!await base.checkAdmin(request, mutableActor)) { send(401, { error: 'unauthorized' }); return true; }
@@ -194,11 +194,11 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
       await publishResources(host, ids, mutableActor, portDocuments, routes, ore, metal, actorId, (await territory.ledger).admission.publicPorts);
       send(200, { admission: (await territory.ledger).admission }); return true;
     }
-    if (url.pathname === '/local/admin/entry-requests' && request.method === 'GET') {
+    if (url.pathname === '/local/territory/admin/entry-requests' && request.method === 'GET') {
       if (!hasBearer(request) || !await base.checkAdmin(request, mutableActor)) { send(401, { error: 'unauthorized' }); return true; }
       send(200, { requests: await territory.entryRequests() }); return true;
     }
-    const decision = /^\/local\/admin\/entry-requests\/([^/]+)\/(approve|reject)$/.exec(url.pathname);
+    const decision = /^\/local\/territory\/admin\/entry-requests\/([^/]+)\/(approve|reject)$/.exec(url.pathname);
     if (decision && request.method === 'POST') {
       if (!hasBearer(request) || !await base.checkAdmin(request, mutableActor)) { send(401, { error: 'unauthorized' }); return true; }
       let requestId: string;
@@ -209,7 +209,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
       if (!result) { send(404, { error: 'not-found' }); return true; }
       send(200, result); return true;
     }
-    if (url.pathname === '/local/traverse' && request.method === 'POST') {
+    if (url.pathname === '/local/territory/traverse' && request.method === 'POST') {
       const player = await authenticatedPlayer(request, host, actorId);
       if (!player) { send(401, { error: 'unauthorized' }); return true; }
       const input = await readJson(request);
@@ -218,21 +218,21 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
       send(result.success ? 200 : result.status ?? 409, result);
       return true;
     }
-    const operation = ['/local/mine', '/local/manufacture', '/local/transfer', '/local/load', '/local/unload'].includes(url.pathname);
+    const operation = ['/local/territory/mine', '/local/territory/manufacture', '/local/territory/transfer', '/local/territory/load', '/local/territory/unload'].includes(url.pathname);
     if (operation && request.method === 'POST') {
       const player = await authenticatedPlayer(request, host, actorId);
       if (!player) { send(401, { error: 'unauthorized' }); return true; }
       const input = await readJson(request);
       if (!Number.isSafeInteger(input.count) || (input.count as number) < 1) { send(400, { error: 'invalid-input' }); return true; }
-      if (url.pathname === '/local/mine') {
+      if (url.pathname === '/local/territory/mine') {
         if (input.variety !== undefined && input.variety !== ore.id) { send(400, { error: 'invalid-input' }); return true; }
         const result = await territory.mine(ore.id, input.count as number, player); send(result.success ? 200 : 409, result); return true;
       }
-      if (url.pathname === '/local/manufacture') {
+      if (url.pathname === '/local/territory/manufacture') {
         if (input.recipe !== 'ore-to-metal') { send(400, { error: 'invalid-input' }); return true; }
         const result = await territory.manufacture(input.recipe, input.count as number, player); send(result.success ? 200 : 409, result); return true;
       }
-      if (url.pathname === '/local/transfer') {
+      if (url.pathname === '/local/territory/transfer') {
         if (!isVariety(input.variety, ids) || !['to-port', 'to-warehouse'].includes(String(input.direction))) { send(400, { error: 'invalid-input' }); return true; }
         const result = input.direction === 'to-port' ? await territory.transferWarehouseToPort(input.variety, input.count as number, player) : await territory.transferPortToWarehouse(input.variety, input.count as number, player);
         send(result.success ? 200 : 409, result); return true;
