@@ -33,7 +33,8 @@ export async function readSimulationSnapshot(
   authorityId: string,
   vesselId: string,
   diplomaticToken: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  accountActor?: string
 ): Promise<SimulationSnapshot> {
   const infoResponse = await fetcher(new URL('/local/territory/info', authorityId).href, {
     method: 'GET',
@@ -49,7 +50,7 @@ export async function readSimulationSnapshot(
   const source = endpoint.href;
   const response = await fetcher(source, {
     method: 'GET',
-    headers: { Accept: 'application/json', Authorization: `Bearer ${diplomaticToken}` },
+    headers: { Accept: 'application/json', Authorization: `Bearer ${diplomaticToken}`, ...(accountActor === undefined ? {} : { 'X-FCTP-Account': accountActor }) },
     cache: 'no-store',
     signal
   });
@@ -278,11 +279,11 @@ export interface SimulationStateView {
   payload: Record<string, unknown>;
 }
 
-export async function readSimulationState(fetcher: typeof fetch, authorityId: string, diplomaticToken: string, signal: AbortSignal): Promise<SimulationStateView> {
+export async function readSimulationState(fetcher: typeof fetch, authorityId: string, diplomaticToken: string, signal: AbortSignal, accountActor?: string): Promise<SimulationStateView> {
   const source = simulationStateSource(authorityId);
   const response = await fetcher(source, {
     method: 'GET',
-    headers: { Accept: 'application/json', Authorization: `Bearer ${diplomaticToken}` },
+    headers: { Accept: 'application/json', Authorization: `Bearer ${diplomaticToken}`, ...(accountActor === undefined ? {} : { 'X-FCTP-Account': accountActor }) },
     cache: 'no-store',
     signal
   });

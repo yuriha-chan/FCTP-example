@@ -274,11 +274,11 @@ async function territoryInfo(fetcher: typeof fetch, authorityId: string, signal:
   return { kind: info.kind, info };
 }
 
-async function territorySnapshot(fetcher: typeof fetch, authorityId: string, vesselId: string, token: string, signal: AbortSignal): Promise<PolicySnapshot | SimulationSnapshot> {
+async function territorySnapshot(fetcher: typeof fetch, authorityId: string, vesselId: string, token: string, signal: AbortSignal, accountActor?: string): Promise<PolicySnapshot | SimulationSnapshot> {
   const { kind } = await territoryInfo(fetcher, authorityId, signal);
   return kind === 'policy'
-    ? readPolicySnapshot(fetcher, authorityId, vesselId, token, signal)
-    : readSimulationSnapshot(fetcher, authorityId, vesselId, token, signal);
+    ? readPolicySnapshot(fetcher, authorityId, vesselId, token, signal, accountActor)
+    : readSimulationSnapshot(fetcher, authorityId, vesselId, token, signal, accountActor);
 }
 
 export function createLogisticsService(
@@ -588,7 +588,7 @@ export function createLogisticsService(
       key: jobKey(accountId, vesselId, jobId),
       source,
       load: (signal) => call(async () => {
-        const view = await readSimulationState(fetcher, retained.authorityId, token, signal);
+        const view = await readSimulationState(fetcher, retained.authorityId, token, signal, account.actorId);
         const context: SimulationJobContext = {
           authorityId: retained.authorityId,
           accountId,
@@ -711,7 +711,7 @@ export function createLogisticsService(
           key: logisticsKey(accountId, vesselId),
           source,
           load: (signal) => call(async () => {
-            const snapshot = await territorySnapshot(fetcher, authority.actorId, vesselId, diplomatic, signal);
+            const snapshot = await territorySnapshot(fetcher, authority.actorId, vesselId, diplomatic, signal, account.actorId);
             const summary = snapshot.kind === 'policy' ? policyTerritorySummary(snapshot) : simulationTerritorySummary(snapshot);
             return { recordType: 'territory', ...summary, observedAt: new Date().toISOString() };
           })
@@ -799,7 +799,7 @@ export function createLogisticsService(
           key: productionKey(accountId, vesselId),
           source,
           load: (signal) => call(async () => {
-            const snapshot = await territorySnapshot(fetcher, authority.actorId, vesselId, diplomatic, signal);
+            const snapshot = await territorySnapshot(fetcher, authority.actorId, vesselId, diplomatic, signal, account.actorId);
             const operations = snapshot.kind === 'policy' ? policyOperations(snapshot) : simulationOperations(snapshot);
             territorySummary = snapshot.kind === 'policy' ? policyTerritorySummary(snapshot) : simulationTerritorySummary(snapshot);
             return {
@@ -851,7 +851,7 @@ export function createLogisticsService(
       if (!decoded) throw new LogisticsRequestError(404, 'operation-not-found');
       const token = account.login.status === 'signed-in' ? account.login.nativeToken : '';
       const diplomatic = await deriveDiplomaticToken(token, operation.authorityId as URI);
-      const fresh = await call((signal) => territorySnapshot(fetcher, operation.authorityId, vesselId, diplomatic, signal));
+      const fresh = await call((signal) => territorySnapshot(fetcher, operation.authorityId, vesselId, diplomatic, signal, account.actorId));
       const freshOperations = fresh.kind === 'policy' ? policyOperations(fresh) : simulationOperations(fresh);
       const current = freshOperations.find((candidate) => candidate.operationId === operationId);
       if (!current) throw new LogisticsRequestError(409, 'operation-no-longer-advertised');
@@ -1123,12 +1123,12 @@ export function createWorkflowActionHandlers(
       const authorityKind = requiredString(input.intent.inputs, 'authorityKind');
       const account = await accountFor(input.accountId);
       const token = await deriveDiplomaticToken(account.login.nativeToken, authorityId as URI);
-      const snapshot = await call((signal) => territorySnapshot(fetcher, authorityId, vesselId, token, signal));
+      const snapshot = await call((signal) => territorySnapshot(fetcher, authorityId, vesselId, token, signal, account.actorId));
        const execution = authorityKind === 'policy'
         ? policyExecution(snapshot as PolicySnapshot, actionId, kind, input.intent.inputs)
          : simulationExecution(snapshot as SimulationSnapshot, actionId, kind, input.intent.inputs);
       const before = authorityKind === 'policy'
-        ? await readPolicyState(fetcher, authorityId, token, input.signal)
+        ? await readPolicyState(fetcher, authorityId, token, input.signal, account.actorId)
         : undefined;
       const evidenceBaseline = before === undefined ? undefined : [{
         source: before.source,
@@ -1137,7 +1137,7 @@ export function createWorkflowActionHandlers(
       }];
       const response = await fetcher(execution.operation.request!.href, {
         method: 'POST',
-        headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(account.actorId === undefined ? {} : { 'X-FCTP-Account': account.actorId }) },
         body: JSON.stringify(execution.body),
         cache: 'no-store',
         signal: input.signal
@@ -1178,9 +1178,9 @@ export function createWorkflowActionHandlers(
         const vesselId = requiredString(input.intent.inputs, 'vesselId');
         const account = await accountFor(input.accountId);
         const token = await deriveDiplomaticToken(account.login.nativeToken, authorityId as URI);
-        const snapshot = await call((signal) => territorySnapshot(fetcher, authorityId, vesselId, token, signal));
+        const snapshot = await call((signal) => territorySnapshot(fetcher, authorityId, vesselId, token, signal, account.actorId));
         const execution = policyExecution(snapshot as PolicySnapshot, actionId, kind, input.intent.inputs);
-        const view = await call((signal) => readPolicyState(fetcher, authorityId, token, signal));
+        const view = await call((signal) => readPolicyState(fetcher, authorityId, token, signal, account.actorId));
         const audit = Array.isArray(view.state.audit) ? view.state.audit.filter(isRecord) : [];
         const auditLength = input.action.submission.evidenceBaseline?.find((evidence) => evidence.source === view.source)?.changes?.auditLength;
         if (typeof auditLength !== 'number' || !Number.isSafeInteger(auditLength) || auditLength < 0) return { status: 'unverified', error: 'Pre-submission Policy observation is unavailable' };
@@ -1204,7 +1204,7 @@ export function createWorkflowActionHandlers(
       if (!reference) return { status: 'unverified', error: 'A job reference is required' };
       const account = await accountFor(input.accountId);
       const token = await deriveDiplomaticToken(account.login.nativeToken, authorityId as URI);
-      const view = await call((signal) => readSimulationState(fetcher, authorityId, token, signal));
+      const view = await call((signal) => readSimulationState(fetcher, authorityId, token, signal, account.actorId));
       const context: SimulationJobContext = {
         authorityId,
         accountId: input.accountId,
@@ -1278,7 +1278,7 @@ export function createWorkflowActionHandlers(
     const token = await deriveDiplomaticToken(account.login.nativeToken, leg.territoryId as URI);
     const response = await fetcher(new URL('/local/territory/traverse', leg.territoryId).href, {
       method: 'POST',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(account.actorId === undefined ? {} : { 'X-FCTP-Account': account.actorId }) },
       body: JSON.stringify({ vessel: vesselId, route: leg.routeId }),
       cache: 'no-store',
       signal
@@ -1337,7 +1337,7 @@ export function createWorkflowActionHandlers(
     const token = await deriveDiplomaticToken(account.login.nativeToken, leg.territoryId as URI);
     const endpoint = new URL('/local/territory/actions', leg.territoryId);
     endpoint.searchParams.set('vessel', vesselId);
-    const response = await fetcher(endpoint.href, { method: 'GET', headers: { Accept: 'application/json', Authorization: `Bearer ${token}` }, cache: 'no-store', signal });
+    const response = await fetcher(endpoint.href, { method: 'GET', headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, ...(account.actorId === undefined ? {} : { 'X-FCTP-Account': account.actorId }) }, cache: 'no-store', signal });
     if (!response.ok) return false;
     const payload = await response.json() as unknown;
     const visits = isRecord(payload) && isRecord(payload.state) && Array.isArray(payload.state.visits) ? payload.state.visits.filter(isRecord) : [];

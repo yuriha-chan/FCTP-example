@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { FCTPActor, URI } from '@fctp/protocol';
 import { validateHomeAccountName, type GeneratedActorKey } from '@fctp/identity';
-import { configuredAdministrator, createHost, FctpServer, type ActivityHandler, type FctpServerOptions } from '@fctp/server-base';
+import { accountIdFromRequest, configuredAdministrator, createHost, FctpServer, type ActivityHandler, type FctpServerOptions } from '@fctp/server-base';
 
 export type AuthorityRole = 'registry' | 'home' | 'player';
 export type AuthorityActors = Record<AuthorityRole, FCTPActor & Record<string, unknown>> & Record<string, FCTPActor & Record<string, unknown>>;
@@ -94,7 +94,7 @@ export async function createAuthority(options: CreateAuthorityOptions): Promise<
       if (administratorActorId === undefined) return false;
       const authorization = request.headers.authorization ?? '';
       if (!authorization.startsWith('Bearer ')) return false;
-      return await host.server.authenticateDiplomaticToken(resourceActorId, authorization.slice(7)) === administratorActorId;
+      return await host.server.authenticateDiplomaticToken(resourceActorId, authorization.slice(7), accountIdFromRequest(request)) === administratorActorId;
     },
     key: (role) => host.key(role),
     registerActor: async (name, actor) => {

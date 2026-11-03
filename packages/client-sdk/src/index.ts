@@ -69,7 +69,7 @@ export class FctpClient {
     return (await this.resources.get<T>(uri, { ...requestOptions, ...(token ? { token } : {}) })).value;
   }
 
-  async resolveReference<T extends Record<string, unknown>>(value: unknown, resourceServer?: URI, options: { nativeToken?: string; accept?: string } = {}): Promise<T> {
+  async resolveReference<T extends Record<string, unknown>>(value: unknown, resourceServer?: URI, options: { nativeToken?: string; accountActor?: URI; accept?: string } = {}): Promise<T> {
     let reference: URI | undefined;
     if (typeof value === 'string') {
       reference = value;
@@ -81,6 +81,7 @@ export class FctpClient {
     return this.getPublicFirst<T>(reference, {
       ...(resourceServer ? { resourceServer } : {}),
       ...(options.nativeToken !== undefined ? { nativeToken: options.nativeToken } : {}),
+      ...(options.accountActor !== undefined ? { accountActor: options.accountActor } : {}),
       ...(options.accept !== undefined ? { accept: options.accept } : {})
     });
   }
@@ -99,7 +100,7 @@ export class FctpClient {
     return result;
   }
 
-  async getPublicFirst<T>(uri: URI, options: { nativeToken?: string; resourceServer?: URI; accept?: string; resolveAudience?: () => Promise<URI | undefined>; responseType?: 'text' } = {}): Promise<T> {
+  async getPublicFirst<T>(uri: URI, options: { nativeToken?: string; accountActor?: URI; resourceServer?: URI; accept?: string; resolveAudience?: () => Promise<URI | undefined>; responseType?: 'text' } = {}): Promise<T> {
     const accept = options.accept ?? 'application/ld+json, application/json';
     const response = await this.#requestResource(uri, accept);
     if (response.ok) return decodeResource<T>(response, options.responseType);
@@ -108,37 +109,45 @@ export class FctpClient {
     const audience = options.resourceServer || await options.resolveAudience?.();
     if (audience === undefined) throw new TypeError('resourceServer Actor ID is required to derive a diplomatic token');
     const token = await deriveDiplomaticToken(options.nativeToken, audience);
-    const authenticated = await this.#requestResource(uri, accept, token);
+    const authenticated = await this.#requestResource(uri, accept, token, options.accountActor);
     if (!authenticated.ok) throw resourceError(authenticated.status);
     return decodeResource<T>(authenticated, options.responseType);
   }
 
-  async #requestResource(uri: URI, accept: string, token?: string): Promise<Response> {
+  async #requestResource(uri: URI, accept: string, token?: string, accountActor?: URI): Promise<Response> {
     const headers = new Headers({ Accept: accept });
     if (token !== undefined) headers.set('Authorization', `Bearer ${token}`);
+    if (token !== undefined && accountActor !== undefined) headers.set('X-FCTP-Account', accountActor);
     return this.#fetcher(uri, { method: 'GET', headers, cache: 'no-store' });
   }
 
-  async readCollection<T extends Record<string, unknown>>(uri: URI, resourceServer: URI, nativeToken?: string): Promise<T[]> {
+  async readCollection<T extends Record<string, unknown>>(uri: URI, resourceServer: URI, nativeToken?: string, accountActor?: URI): Promise<T[]> {
     const result: T[] = [];
     const visited = new Set<string>();
     let pageUri: URI | undefined = uri;
     while (pageUri !== undefined) {
       if (visited.has(pageUri)) throw new Error(`Collection pagination loop at ${pageUri}`);
       visited.add(pageUri);
-      const page: unknown = await this.getPublicFirst<unknown>(pageUri, { ...(nativeToken === undefined ? {} : { nativeToken }), resourceServer });
+      const page: unknown = await this.getPublicFirst<unknown>(pageUri, {
+        ...(nativeToken === undefined ? {} : { nativeToken }),
+        ...(accountActor === undefined ? {} : { accountActor }),
+        resourceServer
+      });
       if (!isRecord(page)) throw new TypeError('Collection page must be an object');
       const items = page.orderedItems ?? page.items ?? [];
       if (!Array.isArray(items)) throw new TypeError('Collection items must be an array');
-      for (const item of items) result.push(await this.#resolveCollectionItem<T>(item, resourceServer, nativeToken));
+      for (const item of items) result.push(await this.#resolveCollectionItem<T>(item, resourceServer, nativeToken, accountActor));
       const next = page.next;
       pageUri = typeof next === 'string' ? next as URI : isRecord(next) && typeof next.id === 'string' ? next.id as URI : undefined;
     }
     return result;
   }
 
-  async #resolveCollectionItem<T extends Record<string, unknown>>(value: unknown, resourceServer: URI, nativeToken?: string): Promise<T> {
-    return this.resolveReference<T>(value, resourceServer, nativeToken === undefined ? {} : { nativeToken });
+  async #resolveCollectionItem<T extends Record<string, unknown>>(value: unknown, resourceServer: URI, nativeToken?: string, accountActor?: URI): Promise<T> {
+    return this.resolveReference<T>(value, resourceServer, {
+      ...(nativeToken === undefined ? {} : { nativeToken }),
+      ...(accountActor === undefined ? {} : { accountActor })
+    });
   }
 
   async getActorResource<T>(actor: FCTPActor & { resources?: Record<string, unknown> }, resourceName: string, options: ResourceRequestOptions & { nativeToken?: Uint8Array | string } = {}): Promise<T> {

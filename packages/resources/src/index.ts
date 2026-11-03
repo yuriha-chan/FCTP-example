@@ -6,7 +6,7 @@ export class ResourceError extends Error {
 }
 
 interface CachedResource { body: unknown; etag?: string }
-export interface ResourceRequestOptions { token?: string; accept?: string; signal?: AbortSignal; cache?: boolean }
+export interface ResourceRequestOptions { token?: string; accountActor?: URI; accept?: string; signal?: AbortSignal; cache?: boolean }
 export interface ResourceResult<T> { value: T; etag?: string; notModified: boolean }
 
 export class ResourceClient {
@@ -14,10 +14,11 @@ export class ResourceClient {
   constructor(private readonly fetcher: typeof fetch = fetch) {}
 
   async get<T>(uri: URI, options: ResourceRequestOptions = {}): Promise<ResourceResult<T>> {
-    const cacheKey = `${uri}\u0000${options.token ?? ''}\u0000${options.accept ?? 'application/ld+json, application/json'}`;
+    const cacheKey = `${uri}\u0000${options.token ?? ''}\u0000${options.accountActor ?? ''}\u0000${options.accept ?? 'application/ld+json, application/json'}`;
     const cached = options.cache === false ? undefined : this.#cache.get(cacheKey);
     const headers = new Headers({ Accept: options.accept ?? 'application/ld+json, application/json' });
     if (options.token) headers.set('Authorization', `Bearer ${options.token}`);
+    if (options.token && options.accountActor) headers.set('X-FCTP-Account', options.accountActor);
     if (cached?.etag) headers.set('If-None-Match', cached.etag);
     const fetcher = this.fetcher;
     const response = await fetcher(uri, { method: 'GET', headers, ...(options.signal ? { signal: options.signal } : {}), cache: 'no-store' });

@@ -4,7 +4,7 @@ import { resolveActor } from '@fctp/identity';
 import type { FCTPActor, Port } from '@fctp/protocol';
 import type { ArrivalRequest, CargoManifest, DepartureEvent, DepartureRequest, EntryRequest, ExitEvent, Quantity, URI, Vessel, VesselCreationRequest } from '@fctp/protocol';
 import { validateModel } from '@fctp/protocol';
-import { resolveExitEvidence, type LocalAction, type LocalActionDiscovery } from '@fctp/server-base';
+import { accountIdFromRequest, resolveExitEvidence, type LocalAction, type LocalActionDiscovery } from '@fctp/server-base';
 import type { Authority } from './bootstrap.js';
 import type { InitialVesselOffer } from './home.js';
 
@@ -148,7 +148,7 @@ export function installRegistry(authority: Authority, options: InstallRegistryOp
       const header = request.headers.authorization ?? '';
       const token = header.startsWith('Bearer ') ? header.slice(7) : '';
       if (!token) { send(401); return true; }
-      const caller = await authority.server.authenticateDiplomaticToken(registryId, token);
+      const caller = await authority.server.authenticateDiplomaticToken(registryId, token, accountIdFromRequest(request));
       if (!caller) { send(401); return true; }
       const handle = authority.actor('registry').webfinger;
       if (typeof handle !== 'string' || !handle) { send(500); return true; }

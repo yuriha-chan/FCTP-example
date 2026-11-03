@@ -168,6 +168,7 @@ function createScopedExploreService(
     const sdk = new FctpClient({ fetcher: (input, init) => fetcher(input, { ...init, signal }) });
     return sdk.getPublicFirst(uri as URI, {
       ...(account?.login.status === 'signed-in' ? { nativeToken: account.login.nativeToken } : {}),
+      ...(account?.actorId === undefined ? {} : { accountActor: account.actorId as URI }),
       ...(authorityId === undefined ? {} : { resourceServer: authorityId as URI })
     });
   };
@@ -303,7 +304,7 @@ function createScopedExploreService(
       const snapshot = await call(async (signal): Promise<ExploreCapabilitySnapshot> => {
         const response = await fetcher(endpoint.href, {
           method: 'GET',
-          headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+          headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, ...(account.actorId === undefined ? {} : { 'X-FCTP-Account': account.actorId }) },
           cache: 'no-store',
           signal
         });

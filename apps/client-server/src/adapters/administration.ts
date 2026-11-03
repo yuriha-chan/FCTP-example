@@ -43,10 +43,10 @@ export function administrationControlPath(kind: AdministrationTargetKind, contro
   return undefined;
 }
 
-async function readJson(fetcher: typeof fetch, source: string, token: string, signal: AbortSignal): Promise<unknown> {
+async function readJson(fetcher: typeof fetch, source: string, token: string, signal: AbortSignal, accountActor?: string): Promise<unknown> {
   const response = await fetcher(source, {
     method: 'GET',
-    headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+    headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, ...(accountActor === undefined ? {} : { 'X-FCTP-Account': accountActor }) },
     cache: 'no-store',
     signal
   });
@@ -58,12 +58,13 @@ export async function readAdministrationTarget(
   fetcher: typeof fetch,
   target: AdministrationTarget,
   token: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  accountActor?: string
 ): Promise<AdministrationTargetRead> {
   const kind = administrationTargetKind(target.roles);
   if (kind === 'home') {
     const source = new URL('/local/home/accounts', target.authorityId).href;
-    const payload = record(await readJson(fetcher, source, token, signal));
+    const payload = record(await readJson(fetcher, source, token, signal, accountActor));
     return {
       source,
       value: { authorityId: target.authorityId, roles: target.roles, kind, accounts: Array.isArray(payload.accounts) ? payload.accounts : [] }
@@ -71,14 +72,14 @@ export async function readAdministrationTarget(
   }
   if (kind === 'registry') {
     const source = new URL('/local/registry/fleet', target.authorityId).href;
-    const payload = record(await readJson(fetcher, source, token, signal));
+    const payload = record(await readJson(fetcher, source, token, signal, accountActor));
     return { source, value: { authorityId: target.authorityId, roles: target.roles, kind, fleet: payload } };
   }
   const stateSource = new URL('/local/territory/state', target.authorityId).href;
   const requestsSource = new URL('/local/territory/admin/entry-requests', target.authorityId).href;
   const [statePayload, requestsPayload] = await Promise.all([
-    readJson(fetcher, stateSource, token, signal),
-    readJson(fetcher, requestsSource, token, signal)
+    readJson(fetcher, stateSource, token, signal, accountActor),
+    readJson(fetcher, requestsSource, token, signal, accountActor)
   ]);
   const state = record(statePayload);
   const simulation = isRecord(state.simulation);
@@ -103,12 +104,13 @@ export async function submitAdministrationPost(
   path: string,
   token: string,
   body: Record<string, unknown>,
-  signal: AbortSignal
+  signal: AbortSignal,
+  accountActor?: string
 ): Promise<{ source: string; value: unknown }> {
   const source = new URL(path, authorityId).href;
   const response = await fetcher(source, {
     method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(accountActor === undefined ? {} : { 'X-FCTP-Account': accountActor }) },
     body: JSON.stringify(body),
     cache: 'no-store',
     signal

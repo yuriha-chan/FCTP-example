@@ -1,11 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { WEBFINGER_CONTEXT, createLocalDocumentLoader, generateActorKey, importActorKey, parseWebFingerAddress, signJsonLd, type DocumentLoader, type GeneratedActorKey, type JsonDocument } from '@fctp/identity';
-import type { FCTPActor } from '@fctp/protocol';
+import { WEBFINGER_CONTEXT, createLocalDocumentLoader, generateActorKey, importActorKey, parseWebFingerAddress, resolveHomeAuthority, signJsonLd, type DocumentLoader, type GeneratedActorKey, type JsonDocument } from '@fctp/identity';
+import { validateModel, type FCTPActor, type TokenDeclaration, type URI } from '@fctp/protocol';
 import type { Activity } from '@fctp/federation';
 import { FctpServer, type ActivityHandler, type FctpServerOptions } from './server.js';
 import { createInboundVerifier } from './verification.js';
 import { readNodeInfo } from './nodeinfo.js';
+import { SIGNED_REQUEST_HEADER } from './signed-request.js';
 
 export interface HostActorDescriptor {
   name: string;
@@ -83,13 +85,65 @@ export async function createHost(options: CreateHostOptions): Promise<Host> {
     if (actors[name]!.id !== keys[name]!.keyPair.controller || !Array.isArray(actors[name]!.publicKeys) || !actors[name]!.publicKeys.includes(keys[name]!.keyPair.id)) throw new TypeError(`Actor ${name} must identify and publish its persisted key`);
   }
   const loader = createLocalDocumentLoader(new Map(Object.values(keys).map(({ keyPair, publicKey }) => [keyPair.id, publicKey])));
+  const fetcher = options.fetcher ?? fetch;
+  const fetchTokenDeclaration: NonNullable<FctpServerOptions['fetchTokenDeclaration']> = async (accountId, resourceServerId) => {
+    const name = descriptors.find(({ name: candidate }) => actors[candidate]!.id === resourceServerId)?.name;
+    const key = name === undefined ? undefined : keys[name];
+    if (key === undefined) return undefined;
+    const discoveryFetcher: typeof fetch = (input, init) => fetcher(input, {
+      ...init,
+      signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000)
+    });
+    let home: Awaited<ReturnType<typeof resolveHomeAuthority>>;
+    try {
+      home = await resolveHomeAuthority(accountId, discoveryFetcher);
+    } catch {
+      return undefined;
+    }
+    const target = new URL('/local/home/token-digest', new URL(home.actor.id).origin);
+    target.searchParams.set('actor', accountId);
+    const signed = await signJsonLd({
+      '@context': ['https://www.w3.org/ns/activitystreams'],
+      id: `${resourceServerId.replace(/\/$/, '')}/requests/${randomUUID()}`,
+      type: 'TokenDigestRequest',
+      actor: resourceServerId,
+      object: accountId,
+      target: target.href,
+      published: new Date().toISOString()
+    }, key.keyPair, loader);
+    let response: Response;
+    try {
+      response = await fetcher(target, {
+        method: 'GET',
+        headers: { Accept: 'application/json', [SIGNED_REQUEST_HEADER]: Buffer.from(JSON.stringify(signed), 'utf8').toString('base64url') },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5_000)
+      });
+    } catch {
+      return undefined;
+    }
+    if (!response.ok) return undefined;
+    let payload: unknown;
+    try {
+      payload = await response.json() as unknown;
+    } catch {
+      return undefined;
+    }
+    if (!isRecord(payload)) return undefined;
+    const type = 'tokenDigest' in payload ? 'TokenDigest' : 'tokenRevoke' in payload ? 'TokenRevoke' : undefined;
+    if (type === undefined) return undefined;
+    const validation = validateModel<TokenDeclaration>(payload, type);
+    if (!validation.success || validation.data.actor !== accountId) return undefined;
+    return { declaration: validation.data, homeActorId: home.actor.id as URI };
+  };
   const server = new FctpServer({
     storeFile: options.storeFile,
     origin: base,
-    ...(options.fetcher ? { fetcher: options.fetcher } : {}),
-    verifyInbound: options.verifyInbound ?? createInboundVerifier({ ...(options.fetcher ? { fetcher: options.fetcher } : {}), loader, resolveExpectedIssuer: options.resolveExpectedIssuer ?? (async () => undefined) }),
+    fetcher,
+    verifyInbound: options.verifyInbound ?? createInboundVerifier({ fetcher, loader, resolveExpectedIssuer: options.resolveExpectedIssuer ?? (async () => undefined) }),
     ...(options.authorizeResource ? { authorizeResource: options.authorizeResource } : {}),
     authorizeAdmin: options.authorizeAdmin ?? (async () => false),
+    fetchTokenDeclaration,
     ...(options.nodeInfo ? { nodeInfo: readNodeInfo(options.nodeInfo.name, process.env, advertisedHomeAccountName) } : {}),
     signActivity: async (actorId, activity) => {
       const name = descriptors.find(({ name: candidate }) => actors[candidate]!.id === actorId)?.name;
@@ -168,6 +222,10 @@ function homeAccountHandleName(value: unknown): string | undefined {
     if (!(error instanceof TypeError)) throw error;
     return undefined;
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function withWebFingerContext(context: unknown): unknown {

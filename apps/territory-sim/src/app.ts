@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { validateModel, type Area, type Asset, type CargoManifest, type Listing, type Production, type Route, type URI, type Variety, type Vessel } from '@fctp/protocol';
-import { ADMISSION_FIELDS, configuredAdministrator, createHost, entryAdmissionAllows, isAdmissionList, type FctpServerOptions } from '@fctp/server-base';
+import { ADMISSION_FIELDS, accountIdFromRequest, configuredAdministrator, createHost, entryAdmissionAllows, isAdmissionList, type FctpServerOptions } from '@fctp/server-base';
 import { discoverSimulationActions } from './actions.js';
 import { installSimulationTerritory, simulationExpectedIssuer, type SimulationTerritory } from './territory.js';
 
@@ -104,7 +104,7 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
       if (!administrator) return false;
       const header = request.headers.authorization ?? '';
       if (!header.startsWith('Bearer ')) return false;
-      return await hostRef.current!.server.authenticateDiplomaticToken(actorId, header.slice(7)) === administrator.actorId;
+      return await hostRef.current!.server.authenticateDiplomaticToken(actorId, header.slice(7), accountIdFromRequest(request)) === administrator.actorId;
     },
     authorizeResource: resourceAuth,
     resolveExpectedIssuer: async (_local, sender, activity) => {
@@ -157,7 +157,7 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
     const textResource = url.pathname.startsWith('/objects/text/') || url.pathname === '/objects/maps/territory/ascii';
     if (textResource && request.method === 'GET') {
       const tokenHeader = request.headers.authorization ?? '';
-      const resourcePlayer = tokenHeader.startsWith('Bearer ') ? await host.server.authenticateDiplomaticToken(actorId, tokenHeader.slice(7)) : undefined;
+      const resourcePlayer = tokenHeader.startsWith('Bearer ') ? await host.server.authenticateDiplomaticToken(actorId, tokenHeader.slice(7), accountIdFromRequest(request)) : undefined;
       if (!resourcePlayer) { json(response, 401, { error: 'unauthorized' }); return true; }
       const content = url.pathname === '/objects/maps/territory/ascii' ? '~~~~~\n~H..~\n~..M~\n~~~~~' : `${url.pathname.split('/').at(-1)} production asset`;
       response.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'private, no-store' });
@@ -173,7 +173,7 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
       const header = request.headers.authorization ?? '';
       const token = header.startsWith('Bearer ') ? header.slice(7) : '';
       if (!token) { json(response, 401, { error: 'unauthorized' }); return true; }
-      const caller = await host.server.authenticateDiplomaticToken(actorId as URI, token);
+      const caller = await host.server.authenticateDiplomaticToken(actorId as URI, token, accountIdFromRequest(request));
       if (!caller) { json(response, 401, { error: 'unauthorized' }); return true; }
       const handle = host.actor('territory').webfinger;
       if (typeof handle !== 'string' || !handle) { json(response, 500, { error: 'actor-handle-unavailable' }); return true; }
@@ -183,7 +183,7 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
       return true;
     }
     const auth = request.headers.authorization ?? '';
-    const player = auth.startsWith('Bearer ') ? await host.server.authenticateDiplomaticToken(actorId, auth.slice(7)) : undefined;
+    const player = auth.startsWith('Bearer ') ? await host.server.authenticateDiplomaticToken(actorId, auth.slice(7), accountIdFromRequest(request)) : undefined;
     const isPlayer = Boolean(player);
     const isAdmin = await host.server.checkAdmin(request, host.actor('territory'));
     if (url.pathname === '/local/territory/actions' && request.method === 'GET') {

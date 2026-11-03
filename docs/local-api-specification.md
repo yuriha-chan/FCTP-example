@@ -119,6 +119,12 @@ Clients MUST rely on the HTTP status code and MUST NOT require an error body. So
 
 Clients MUST NOT cache authenticated Basic API responses unless a route explicitly permits caching. Servers SHOULD send `Cache-Control: no-store` for authenticated Basic API responses.
 
+### 4.7 Account hint for diplomatic credentials
+
+A Client presenting a diplomatic token to a resource server SHOULD include the acting Player Actor ID in the `X-FCTP-Account` request header. The value MUST be an absolute HTTP(S) Actor URI with no userinfo, query, or fragment.
+
+The header is a lookup hint, not authorization. The resource server MUST still verify the presented token. A resource server that has no retained `TokenDigest` or `TokenRevoke` record for the named account and its own Actor MAY retrieve the declaration from the account's Home using Section 8.7 before deciding that authentication failed. A resource server MUST NOT use the hint to authorize an account without a matching declaration.
+
 ## 5. Required Permission
 
 An administrator is an account authorized by the target server's deployment configuration to perform administrative operations on that server. Administrator permission is target-specific.
@@ -443,6 +449,7 @@ A Home server MUST implement the following routes.
 | `GET /local/home/accounts` | administrator | None | `200 { accounts: Array<{ handle, actorId, available }> }` |
 | `POST /local/home/accounts/availability` | administrator | `{ handle: string, available: boolean }` | `200 { handle, actorId, available }` |
 | `POST /local/home/login` | none | `{ handle: string, password: string }` | `200` with `HomeLoginResult` |
+| `GET /local/home/token-digest?actor=<Player Actor URI>` | signed resource server | Signed `TokenDigestRequest` | `200` with `TokenDigest` or `TokenRevoke` |
 | `GET /local/home/proxy?uri=<URI>&resourceActor=<Actor URI>` | player | Query parameters | `200` with the upstream resource JSON |
 
 ### 8.1 Home vessel list
@@ -510,6 +517,40 @@ Home MUST accept a password only on `/local/home/login`; no other local route ma
 Success MUST return the upstream JSON value. A missing parameter MUST return `400 { "error": "uri-and-resourceActor-required" }`. A resource-permission or retrieval failure MUST return the upstream `ResourceError` status with `{ "error": "<code>" }`.
 
 The proxy MUST NOT mutate local world state.
+
+### 8.7 Home token declaration retrieval
+
+`GET /local/home/token-digest?actor=<Player Actor URI>` lets a resource server obtain the current credential declaration for an account without administrator provisioning.
+
+The request MUST include an `X-FCTP-Signed-Request` header containing the base64url encoding of a JSON-LD signed object:
+
+```ts
+interface TokenDigestRequest {
+  '@context': string[];
+  id: string;
+  type: 'TokenDigestRequest';
+  actor: string;
+  object: string;
+  target: string;
+  published: string;
+  proof: unknown;
+}
+```
+
+`actor` MUST be the requesting resource server Actor URI. `object` MUST equal the `actor` query parameter and name the Player account. `target` MUST equal the exact request URL, including the query. `id` MUST be an absolute HTTP(S) URI. `published` MUST be an ISO 8601 timestamp within five minutes of the request.
+
+Home MUST verify the proof using the public key published by `actor`, require the proof key to be attributed to `actor`, and accept only the signature of `actor` itself. Home MUST require the account to be a local Player.
+
+Success MUST return `200` with either the current `TokenDigest` or `TokenRevoke` for the requesting resource server and account. The response is a declaration object, not an Activity. Home MUST use the existing per-resource revision; the first retrieval initializes a revision and records the resource server for later rotation and revocation delivery. Repeated retrieval MUST NOT create a new revision or mutate otherwise.
+
+Errors:
+
+- `400 { "error": "invalid-request" }` for a malformed request document, mismatched target, or mismatched account query.
+- `401 { "error": "unauthorized" }` for a missing or invalid signature, an unattributed key, or an unavailable Actor.
+- `404 { "error": "unknown-player" }` for an account that is not a local Player.
+- `500 { "error": "token-declaration-unavailable" }` for a local failure.
+
+The route MUST NOT return a native or diplomatic token. It returns only the declaration digest or revocation.
 
 ## 9. Registry
 

@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Route, URI, Variety } from '@fctp/protocol';
-import { ADMISSION_FIELDS, configuredAdministrator, createHost, isAdmissionList, type Host } from '@fctp/server-base';
+import { ADMISSION_FIELDS, accountIdFromRequest, configuredAdministrator, createHost, isAdmissionList, type Host } from '@fctp/server-base';
 import { ActionDiscoveryError, discoverPolicyActions } from './actions.js';
 import { territoryAProduction, type Policy } from './domain.js';
 import { expectedIssuer, installPolicyTerritory, type PolicyTerritoryLedger } from './territory.js';
@@ -92,7 +92,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
       if (!administrator) return false;
       const header = request.headers.authorization ?? '';
       if (!header.startsWith('Bearer ')) return false;
-      return await hostRef.current!.server.authenticateDiplomaticToken(actorId, header.slice(7)) === administrator.actorId;
+      return await hostRef.current!.server.authenticateDiplomaticToken(actorId, header.slice(7), accountIdFromRequest(request)) === administrator.actorId;
     },
     authorizeResource: async (_request, _actor, resourceId, player) => {
       const ledger = await territory.ledger;
@@ -161,7 +161,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
       const header = request.headers.authorization ?? '';
       const token = header.startsWith('Bearer ') ? header.slice(7) : '';
       if (!token) { send(401, { error: 'unauthorized' }); return true; }
-      const caller = await host.server.authenticateDiplomaticToken(actorId as URI, token);
+      const caller = await host.server.authenticateDiplomaticToken(actorId as URI, token, accountIdFromRequest(request));
       if (!caller) { send(401, { error: 'unauthorized' }); return true; }
       const handle = host.actor('territory').webfinger;
       if (typeof handle !== 'string' || !handle) { send(500, { error: 'actor-handle-unavailable' }); return true; }
@@ -296,7 +296,7 @@ async function matchesSecret(request: IncomingMessage, expected: string): Promis
 async function authenticatedPlayer(request: IncomingMessage, host: Host, actorId: URI): Promise<URI | undefined> {
   const header = request.headers.authorization;
   if (!header?.startsWith('Bearer ')) return undefined;
-  return await host.server.authenticateDiplomaticToken(actorId, header.slice(7));
+  return await host.server.authenticateDiplomaticToken(actorId, header.slice(7), accountIdFromRequest(request));
 }
 async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []; let size = 0;

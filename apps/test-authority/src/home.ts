@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import { createTokenDigest, createTokenRevoke, deriveDiplomaticToken, encodeNativeToken, type HomeLoginResult } from '@fctp/auth';
 import { parseHandle } from '@fctp/identity';
 import { ResourceClient, ResourceError } from '@fctp/resources';
+import { SIGNED_REQUEST_HEADER, accountIdFromRequest, verifySignedRequest } from '@fctp/server-base';
 import type { FCTPActor, TokenDeclaration, URI, Vessel } from '@fctp/protocol';
 import type { Authority } from './bootstrap.js';
 
@@ -143,6 +144,37 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
     return player;
   };
 
+  const persistPlayer = async (id: URI, player: PlayerState): Promise<void> => {
+    await authority.server.store.transaction((store) => {
+      const home = (store.domain.home ??= { players: {} }) as HomeState;
+      home.players[id] = player;
+    });
+  };
+
+  const tokenDeclarationFor = (id: URI, resource: UsedResource): Promise<TokenDeclaration> => serializePlayer(id, async () => {
+    requirePlayer(id);
+    const player = await readPlayer(id) ?? { resources: {}, revisions: {} };
+    const existing = player.revisions[resource.id];
+    if (player.available !== false && player.nativeToken) {
+      if (existing === undefined) {
+        player.resources[resource.id] = resource;
+        player.revisions[resource.id] = 1;
+        await persistPlayer(id, player);
+        const token = await deriveDiplomaticToken(player.nativeToken, resource.id);
+        return { type: 'TokenDigest', ...(await createTokenDigest(id, 1, token)) };
+      }
+      const token = await deriveDiplomaticToken(player.nativeToken, resource.id);
+      return { type: 'TokenDigest', ...(await createTokenDigest(id, existing, token)) };
+    }
+    const revision = existing ?? 1;
+    if (existing === undefined) {
+      player.resources[resource.id] = resource;
+      player.revisions[resource.id] = revision;
+      await persistPlayer(id, player);
+    }
+    return { type: 'TokenRevoke', ...createTokenRevoke(id, revision) };
+  });
+
   const setAvailability = (id: URI, available: boolean): Promise<void> => serializePlayer(id, async () => {
     requirePlayer(id);
     const current = await readPlayer(id);
@@ -265,8 +297,31 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
         { method: 'POST', path: '/local/home/rotate', authentication: 'admin' },
         { method: 'POST', path: '/local/home/revoke', authentication: 'admin' },
         { method: 'POST', path: '/local/home/digest-request', authentication: 'admin' },
+        { method: 'GET', path: '/local/home/token-digest?actor=', authentication: 'signed resource-server GET' },
         { method: 'GET', path: '/local/home/proxy?uri=&resourceActor=', authentication: 'native-token' }
       ] });
+      return true;
+    }
+    if (request.method === 'GET' && url.pathname === '/local/home/token-digest') {
+      const encoded = request.headers[SIGNED_REQUEST_HEADER];
+      if (typeof encoded !== 'string' || !encoded) { sendJson(401, { error: 'unauthorized' }); return true; }
+      const verified = await verifySignedRequest(encoded, url.href, fetcher);
+      if (!verified) { sendJson(401, { error: 'unauthorized' }); return true; }
+      if (url.searchParams.get('actor') !== verified.objectId) { sendJson(400, { error: 'invalid-request' }); return true; }
+      try {
+        requirePlayer(verified.objectId);
+      } catch {
+        sendJson(404, { error: 'unknown-player' });
+        return true;
+      }
+      try {
+        sendJson(200, await tokenDeclarationFor(verified.objectId, {
+          id: verified.actorId,
+          inbox: verified.actor.inbox as URI
+        }));
+      } catch {
+        sendJson(500, { error: 'token-declaration-unavailable' });
+      }
       return true;
     }
     if (request.method === 'GET' && url.pathname === '/local/home/vessels') {
@@ -285,7 +340,7 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
       const token = header.startsWith('Bearer ') ? header.slice(7) : '';
       if (!token) { sendJson(401, { error: 'unauthorized' }); return true; }
       let callerId = await service.authenticateNativeToken(token);
-      if (callerId === undefined) callerId = await authority.server.authenticateDiplomaticToken(authority.actor('home').id, token);
+      if (callerId === undefined) callerId = await authority.server.authenticateDiplomaticToken(authority.actor('home').id, token, accountIdFromRequest(request));
       if (callerId === undefined) { sendJson(401, { error: 'unauthorized' }); return true; }
       const handle = authority.actor('home').webfinger;
       if (typeof handle !== 'string' || !handle) { sendJson(500, { error: 'actor-handle-unavailable' }); return true; }

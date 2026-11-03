@@ -7,6 +7,7 @@ import { TokenCredentialStore, digestDiplomaticToken, type CredentialState } fro
 import { validateModel, type FCTPActor, type TokenDeclaration, type URI } from '@fctp/protocol';
 import { JsonSnapshotStore, type StoreState } from './store.js';
 import { nodeInfoDocument, nodeInfoLinks, type NodeInfoRuntime } from './nodeinfo.js';
+import { ACCOUNT_HEADER, accountIdFromRequest } from './signed-request.js';
 
 export interface VerificationReport {
   cryptographic: { verified: boolean; error?: string };
@@ -26,6 +27,10 @@ export type ActivityHandler = (context: HandlerContext, object: unknown, activit
 export interface ActorRegistration { actor: FCTPActor & Record<string, unknown>; document?: Record<string, unknown> }
 export interface CustomRouteContext { request: IncomingMessage; response: ServerResponse; url: URL; base: FctpServer }
 export type CustomRoute = (context: CustomRouteContext) => boolean | Promise<boolean>;
+export interface TokenDeclarationFetch {
+  declaration: TokenDeclaration;
+  homeActorId: URI;
+}
 export interface FctpServerOptions {
   storeFile: string;
   origin?: string;
@@ -33,6 +38,7 @@ export interface FctpServerOptions {
   verifyInbound?: (localActorId: URI, senderActorId: URI, activity: Activity) => Promise<VerificationReport>;
   authorizeAdmin?: (request: IncomingMessage, actor: FCTPActor) => Promise<boolean>;
   authorizeResource?: (request: IncomingMessage, actor: FCTPActor, resourceId: URI, player?: URI) => Promise<{ allowed: boolean; player?: URI }>;
+  fetchTokenDeclaration?: (accountId: URI, resourceServerId: URI) => Promise<TokenDeclarationFetch | undefined>;
   signActivity?: (actorId: URI, activity: Activity) => Promise<Activity>;
   corsOrigin?: string;
   nodeInfo?: NodeInfoRuntime;
@@ -49,6 +55,7 @@ export class FctpServer {
   readonly #verifyInbound: NonNullable<FctpServerOptions['verifyInbound']>;
   readonly #authorizeAdmin: NonNullable<FctpServerOptions['authorizeAdmin']>;
   readonly #authorizeResource: NonNullable<FctpServerOptions['authorizeResource']>;
+  readonly #fetchTokenDeclaration: FctpServerOptions['fetchTokenDeclaration'];
   readonly #origin: string | undefined;
   readonly #corsOrigin: string;
   readonly #nodeInfo: NodeInfoRuntime | undefined;
@@ -66,6 +73,7 @@ export class FctpServer {
     }));
     this.#authorizeAdmin = options.authorizeAdmin ?? (async () => false);
     this.#authorizeResource = options.authorizeResource ?? (async () => ({ allowed: false }));
+    this.#fetchTokenDeclaration = options.fetchTokenDeclaration;
     const origin = options.origin === undefined ? undefined : new URL(options.origin);
     if (origin && (!['http:', 'https:'].includes(origin.protocol) || origin.pathname !== '/' || origin.search || origin.hash || origin.username || origin.password)) {
       throw new TypeError('origin must be an HTTP(S) origin');
@@ -111,10 +119,7 @@ export class FctpServer {
     });
   }
 
-  async authenticateDiplomaticToken(resourceServerId: URI, token: string): Promise<URI | undefined> {
-    const credentials = await this.store.read((state) => Object.entries(state.credentials)
-      .filter(([key]) => key.startsWith(`${resourceServerId}\u0000`))
-      .map(([key, value]) => [key.slice(resourceServerId.length + 1), value as CredentialState] as const));
+  async authenticateDiplomaticToken(resourceServerId: URI, token: string, accountId?: URI): Promise<URI | undefined> {
     let digest: string;
     try {
       digest = await digestDiplomaticToken(token);
@@ -122,10 +127,25 @@ export class FctpServer {
       if (error instanceof TypeError || error instanceof DOMException) return undefined;
       throw error;
     }
-    for (const [playerId, credential] of credentials) {
-      if (credential.status === 'active' && safeEqual(credential.tokenDigest, digest)) return playerId;
+    const readCredentials = () => this.store.read((state) => Object.entries(state.credentials)
+      .filter(([key]) => key.startsWith(`${resourceServerId}\u0000`))
+      .map(([key, value]) => [key.slice(resourceServerId.length + 1), value as CredentialState] as const));
+    const match = (credentials: ReadonlyArray<readonly [string, CredentialState]>): URI | undefined =>
+      credentials.find(([, credential]) => credential.status === 'active' && safeEqual(credential.tokenDigest, digest))?.[0] as URI | undefined;
+    const first = await readCredentials();
+    const existing = match(first);
+    if (existing !== undefined) return existing;
+    if (accountId === undefined || this.#fetchTokenDeclaration === undefined) return undefined;
+    if (first.some(([playerId]) => playerId === accountId)) return undefined;
+    let fetched: Awaited<ReturnType<NonNullable<FctpServerOptions['fetchTokenDeclaration']>>>;
+    try {
+      fetched = await this.#fetchTokenDeclaration(accountId, resourceServerId);
+      if (fetched === undefined) return undefined;
+      await this.applyTokenDeclaration(resourceServerId, fetched.homeActorId, fetched.declaration);
+    } catch {
+      return undefined;
     }
-    return undefined;
+    return match(await readCredentials());
   }
 
   on(actorId: URI, objectType: string, handler: ActivityHandler): () => void {
@@ -312,7 +332,7 @@ export class FctpServer {
 
   async #handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     response.setHeader('Access-Control-Allow-Origin', this.#corsOrigin);
-    response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, If-None-Match');
+    response.setHeader('Access-Control-Allow-Headers', `Authorization, Content-Type, If-None-Match, ${ACCOUNT_HEADER}`);
     response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     if (request.method === 'OPTIONS') { response.writeHead(204).end(); return; }
     const url = new URL(request.url ?? '/', this.#base(request));
@@ -396,7 +416,7 @@ export class FctpServer {
       const authorization = request.headers.authorization;
       if (!authorization?.startsWith('Bearer ')) { json(response, 401, { error: 'unauthorized' }); return; }
       const token = authorization.slice('Bearer '.length);
-      const player = actorDocument ? await this.authenticateDiplomaticToken(String(actorDocument.id), token) : undefined;
+      const player = actorDocument ? await this.authenticateDiplomaticToken(String(actorDocument.id), token, accountIdFromRequest(request)) : undefined;
       if (!actorDocument || !player) { json(response, 401, { error: 'unauthorized' }); return; }
       const result = await this.#authorizeResource(request, actorDocument as FCTPActor, id, player);
       if (!result.allowed) { json(response, 403, { error: 'forbidden' }); return; }

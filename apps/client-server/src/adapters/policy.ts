@@ -46,7 +46,8 @@ export async function readPolicySnapshot(
   authorityId: string,
   vesselId: string,
   diplomaticToken: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  accountActor?: string
 ): Promise<PolicySnapshot> {
   const infoResponse = await fetcher(new URL('/local/territory/info', authorityId).href, {
     method: 'GET',
@@ -62,7 +63,7 @@ export async function readPolicySnapshot(
   const source = endpoint.href;
   const response = await fetcher(source, {
     method: 'GET',
-    headers: { Accept: 'application/json', Authorization: `Bearer ${diplomaticToken}` },
+    headers: { Accept: 'application/json', Authorization: `Bearer ${diplomaticToken}`, ...(accountActor === undefined ? {} : { 'X-FCTP-Account': accountActor }) },
     cache: 'no-store',
     signal
   });
@@ -256,11 +257,11 @@ export interface PolicyStateView {
   state: Record<string, unknown>;
 }
 
-export async function readPolicyState(fetcher: typeof fetch, authorityId: string, diplomaticToken: string, signal: AbortSignal): Promise<PolicyStateView> {
+export async function readPolicyState(fetcher: typeof fetch, authorityId: string, diplomaticToken: string, signal: AbortSignal, accountActor?: string): Promise<PolicyStateView> {
   const source = policyStateSource(authorityId);
   const response = await fetcher(source, {
     method: 'GET',
-    headers: { Accept: 'application/json', Authorization: `Bearer ${diplomaticToken}` },
+    headers: { Accept: 'application/json', Authorization: `Bearer ${diplomaticToken}`, ...(accountActor === undefined ? {} : { 'X-FCTP-Account': accountActor }) },
     cache: 'no-store',
     signal
   });
