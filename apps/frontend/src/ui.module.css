@@ -1,0 +1,143 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badgeAccent {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.badgeWarning {
+  color: var(--warning);
+  border-color: currentColor;
+  background: transparent;
+}
+
+.badgeDanger {
+  color: var(--danger);
+  border-color: currentColor;
+  background: transparent;
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 1.25rem 1.5rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.emptyTitle {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.emptyBody {
+  margin: 0;
+  max-width: 40rem;
+  color: var(--text-muted);
+}
+
+.emptyActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: minmax(7rem, max-content) 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0;
+}
+
+.kv dt {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.kv dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 32rem) {
+  .kv {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .kv dd {
+    margin-bottom: 0.5rem;
+  }
+}
+
+.technical summary {
+  font-size: 0.9rem;
+}
+
+.technical pre {
+  margin: 0.5rem 0 0;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 2.25rem;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.button[data-hovered] {
+  background: var(--surface-raised);
+}
+
+.button[data-focus-visible] {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.button[data-disabled],
+.button[data-pending] {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.buttonPrimary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.buttonPrimary[data-hovered] {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+.buttonQuiet {
+  border-color: transparent;
+  background: transparent;
+}

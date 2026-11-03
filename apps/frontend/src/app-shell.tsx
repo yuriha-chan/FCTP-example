@@ -29,6 +29,7 @@ import {
 import { canonicalizeRoute, navigateToTopic, useRoute, type AppRoute, type TopicId } from './router';
 import { createShellState } from './shell-state';
 import { useBoundFields } from './use-bound-state';
+import { EmptyState } from './ui';
 import styles from './shell.module.css';
 
 export type { TopicId } from './router';
@@ -60,33 +61,33 @@ interface TopicDefinition {
 const TOPICS: readonly TopicDefinition[] = [
   {
     id: 'connections',
-    label: 'Connections',
-    description: 'Manage the servers and accounts this client is connected to.'
+    label: 'Worlds & accounts',
+    description: 'See which worlds and servers this client can reach, and which accounts you are signed in with.'
   },
   {
     id: 'explore',
     label: 'Explore',
-    description: 'Discover places, routes, and available activities once an exploration workflow is connected.'
+    description: 'Browse places, ports and routes, and plan where your vessels go next.'
   },
   {
     id: 'logistics',
-    label: 'Logistics & Production',
-    description: 'Operate vessels and production workflows once they are connected.'
+    label: 'Voyages & production',
+    description: 'Move vessels between ports and run production jobs for your cargo.'
   },
   {
     id: 'authoring',
-    label: 'Author & Publish',
-    description: 'Author and publish content once an authoring workflow is connected.'
+    label: 'Create',
+    description: 'Design new items and varieties, then publish them for others to produce and trade.'
   },
   {
     id: 'activity',
     label: 'Activity',
-    description: 'Follow submitted actions and their outcomes once an activity workflow is connected.'
+    description: 'Follow the actions you have submitted and see how each one turned out.'
   },
   {
     id: 'administration',
     label: 'Administration',
-    description: 'Review authority-scoped administration once an administration workflow is connected.'
+    description: 'Review and adjust the settings of the territories and authorities you manage.'
   }
 ];
 
@@ -306,7 +307,10 @@ export function AppShell(props: AppShellProps): ReactElement {
   return (
     <section aria-label="Client" className={style('shell')}>
       <header className={style('header')}>
-        <h1 className={style('title')}>Client</h1>
+        <div className={style('brand')}>
+          <h1 className={style('title')}>Common Realms</h1>
+          <span className={style('subtitle')}>Client</span>
+        </div>
         <div className={style('accounts')}>
           {accounts.length === 0 ? null : (
             <MenuTrigger>
@@ -371,11 +375,30 @@ export function AppShell(props: AppShellProps): ReactElement {
           </Dialog>
         </Modal>
       </ModalOverlay>
-      {listError === undefined ? null : (
-        <p role="status" className={style('error')}>Accounts could not be refreshed: {listError}</p>
+      {listError === undefined && actionError === undefined && !(listLoading && accounts.length === 0) ? null : (
+        <div className={style('notices')}>
+          {listError === undefined ? null : (
+            <p role="status" className={style('error')}>Accounts could not be refreshed: {listError}</p>
+          )}
+          {actionError === undefined ? null : <p role="alert" className={style('error')}>{actionError}</p>}
+          {listLoading && accounts.length === 0 ? <p role="status" className={style('muted')}>Loading accounts…</p> : null}
+        </div>
       )}
-      {actionError === undefined ? null : <p role="alert" className={style('error')}>{actionError}</p>}
-      {listLoading && accounts.length === 0 ? <p role="status" className={style('muted')}>Loading accounts…</p> : null}
+      {!listLoading && listError === undefined && accounts.length === 0 ? (
+        <div className={style('welcome')}>
+          <EmptyState
+            title="Welcome to Common Realms"
+            actions={(
+              <Button className={style('primary')} onPress={() => { shellState.signInOpen = true; }}>
+                Sign in
+              </Button>
+            )}
+          >
+            Sign in with your Home account to explore worlds, move cargo and publish your own items.
+            You can browse the tabs below first; most actions need an account.
+          </EmptyState>
+        </div>
+      ) : null}
       <Tabs
         className={style('tabs')}
         selectedKey={topic}

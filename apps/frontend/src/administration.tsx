@@ -18,6 +18,7 @@ import {
   readAdministration,
   refreshAdministration
 } from './application-api';
+import { TechnicalDetails } from './ui';
 import cssStyles from './administration.module.css';
 
 type ClassName = 'administration' | 'heading' | 'status' | 'section' | 'subheading'
@@ -854,10 +855,7 @@ function ResultView({ result, onOpenAction }: {
           {action.intent.kind === 'administration-entry-request' ? (
             <p className={styles.meta}>Approval is not a berthing event; only the responsible Territory's event can establish berthing.</p>
           ) : null}
-          <details>
-            <summary>Submitted inputs</summary>
-            <pre className={styles.meta}>{JSON.stringify(action.intent.inputs, null, 2)}</pre>
-          </details>
+          <TechnicalDetails summary="Submitted inputs" value={action.intent.inputs} />
           {action.resultReferences.length === 0 ? null : (
             <p className={styles.meta}>
               References: {action.resultReferences.map((reference) => `${reference.kind}: ${reference.id}`).join(', ')}
@@ -1240,10 +1238,7 @@ export function Administration(props: AdministrationProps): ReactElement {
 
                   {observed ? (
                     <div className={styles.controls} key={`controls\u0000${accountId}\u0000${selectedTarget.authorityId}`}>
-                      <details>
-                        <summary>Observed settings</summary>
-                        <pre className={styles.meta}>{JSON.stringify(rawState, null, 2)}</pre>
-                      </details>
+                      <TechnicalDetails summary="Observed settings" value={rawState} />
                       {controls.map((control) => {
                         const key = `${control.name}\u0000${revision}`;
                         if (control.name === 'policy') {

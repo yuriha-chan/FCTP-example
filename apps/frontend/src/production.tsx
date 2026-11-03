@@ -26,6 +26,7 @@ import type { ReferencePickerSelection, ReferencePickerSource } from './referenc
 import { ResourceReader } from './resource-reader';
 import type { ResourceReference } from './resource-reader';
 import type { VesselWorkflowContext } from './workflow-context';
+import { TechnicalDetails } from './ui';
 import cssStyles from './production.module.css';
 
 type ClassName = 'production' | 'heading' | 'subheading' | 'section' | 'meta' | 'error' | 'info'
@@ -216,7 +217,7 @@ function EvidenceList({ evidence }: { evidence: readonly ActionEvidence[] }): Re
         <li key={`${entry.source}\u0000${entry.observedAt}\u0000${index}`} className={styles.evidence}>
           <p className={styles.meta}>Evidence {entry.source} · {entry.observedAt}</p>
           {entry.changes === undefined ? null : (
-            <p className={styles.meta}>{JSON.stringify(entry.changes)}</p>
+            <TechnicalDetails summary="Changes" value={entry.changes} />
           )}
         </li>
       ))}

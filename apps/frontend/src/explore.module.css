@@ -3,8 +3,8 @@
   flex-direction: column;
   gap: 1.25rem;
   padding: 1.5rem;
-  color: var(--text, #1a1d21);
-  background: var(--surface, #ffffff);
+  color: var(--text);
+  background: var(--surface);
 }
 
 .heading {
@@ -32,10 +32,10 @@
 
 .button {
   padding: 0.35rem 0.75rem;
-  border: 1px solid var(--border, #d5d9df);
+  border: 1px solid var(--border);
   border-radius: 0.35rem;
   color: inherit;
-  background: var(--surface, #ffffff);
+  background: var(--surface);
   cursor: pointer;
 }
 
@@ -53,7 +53,7 @@
   flex-direction: column;
   gap: 0.25rem;
   padding: 0.75rem;
-  border: 1px solid var(--border, #e3e6ea);
+  border: 1px solid var(--border);
   border-radius: 0.35rem;
 }
 
@@ -64,11 +64,11 @@
 }
 
 .incoming {
-  border-left: 3px solid var(--accent, #3b6ea5);
+  border-left: 3px solid var(--accent);
 }
 
 .outgoing {
-  border-left: 3px solid var(--accent-strong, #1f4d7a);
+  border-left: 3px solid var(--accent-strong);
 }
 
 .name {
@@ -79,7 +79,7 @@
 
 .meta {
   margin: 0;
-  color: var(--text-muted, #5b636e);
+  color: var(--text-muted);
   overflow-wrap: anywhere;
 }
 
@@ -92,17 +92,17 @@
 
 .status {
   margin: 0;
-  color: var(--text-muted, #5b636e);
+  color: var(--text-muted);
 }
 
 .failure {
   margin: 0;
-  color: var(--danger, #a3271f);
+  color: var(--danger);
 }
 
 .error {
   margin: 0;
-  color: var(--danger, #a3271f);
+  color: var(--danger);
 }
 
 .details {
@@ -123,4 +123,10 @@
 
 .technical dd {
   margin: 0;
+}
+
+@media (max-width: 32rem) {
+  .technical {
+    grid-template-columns: 1fr;
+  }
 }

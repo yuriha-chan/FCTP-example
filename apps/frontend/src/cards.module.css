@@ -3,10 +3,10 @@
   flex-direction: column;
   gap: 0.25rem;
   padding: 0.75rem 1rem;
-  border: 1px solid var(--border, #c9ced6);
+  border: 1px solid var(--border);
   border-radius: 0.5rem;
-  background: var(--surface-raised, #f4f5f7);
-  color: var(--text, #1a1d21);
+  background: var(--surface-raised);
+  color: var(--text);
 }
 
 .name {
@@ -16,13 +16,13 @@
 
 .meta {
   display: block;
-  color: var(--muted, #5b6470);
+  color: var(--text-muted);
   font-size: 0.9em;
 }
 
 .status {
   display: block;
-  color: var(--muted, #5b6470);
+  color: var(--text-muted);
   font-size: 0.8em;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -50,13 +50,13 @@
 
 .state {
   display: block;
-  color: var(--muted, #5b6470);
+  color: var(--text-muted);
   font-size: 0.9em;
 }
 
 .handle {
-  color: var(--muted, #5b6470);
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
   font-size: 0.9em;
 }
 
@@ -67,7 +67,7 @@
 }
 
 .interactive:hover {
-  border-color: var(--border-strong, #8a94a3);
+  border-color: var(--border-strong);
 }
 
 .interactive:focus-visible {

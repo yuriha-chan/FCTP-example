@@ -1,9 +1,161 @@
+/*
+ * Design tokens for the Common Realms client.
+ * The palette follows the join site (deep harbour teal). Every component
+ * stylesheet reads these variables; do not hard-code colours or add fallbacks.
+ */
 :root {
+  color-scheme: light dark;
+
+  /* Surfaces */
+  --bg: #eef3f3;
   --surface: #ffffff;
-  --surface-raised: #f4f5f7;
-  --text: #1a1d21;
-  --text-muted: #5b636e;
-  --border: #c9ced6;
-  --accent: #0b6bcb;
+  --surface-raised: #f1f6f6;
+  --overlay-scrim: rgb(8 24 28 / 55%);
+
+  /* Text */
+  --text: #14262b;
+  --text-muted: #4a5f66;
+  --on-accent: #ffffff;
+
+  /* Lines */
+  --border: #ccd8da;
+  --border-strong: #7f979d;
+
+  /* Brand and status */
+  --accent: #0f6b78;
+  --accent-strong: #0a4f59;
+  --accent-soft: #dcecee;
   --danger: #b3261e;
+  --warning: #8a5a00;
+
+  /* Identity kinds (players, territories, registries, homes) */
+  --identity-player: #1d4ed8;
+  --identity-territory: #6d28d9;
+  --identity-registry: #0e7490;
+  --identity-home: #a14a08;
+
+  /* Shape and depth */
+  --radius-sm: 0.35rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --shadow-popover: 0 8px 24px rgb(8 24 28 / 18%);
+  --shadow-modal: 0 12px 32px rgb(8 24 28 / 28%);
+
+  /* Type */
+  --font-sans: system-ui, -apple-system, 'Segoe UI', 'Hiragino Sans', 'Noto Sans JP', 'Yu Gothic UI', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --focus-ring: 2px solid var(--accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0a181c;
+    --surface: #11282e;
+    --surface-raised: #183840;
+    --overlay-scrim: rgb(0 0 0 / 65%);
+
+    --text: #e6f0f1;
+    --text-muted: #a3b9be;
+    --on-accent: #06222a;
+
+    --border: #2b4a52;
+    --border-strong: #5f8089;
+
+    --accent: #5cc4d1;
+    --accent-strong: #8bd9e2;
+    --accent-soft: #17414a;
+    --danger: #ff9188;
+    --warning: #e8b96a;
+
+    --identity-player: #8fb1ff;
+    --identity-territory: #c4a8ff;
+    --identity-registry: #62d3ea;
+    --identity-home: #f0b070;
+
+    --shadow-popover: 0 8px 24px rgb(0 0 0 / 50%);
+    --shadow-modal: 0 12px 32px rgb(0 0 0 / 60%);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  line-height: 1.5;
+}
+
+h1, h2, h3, h4 {
+  line-height: 1.25;
+}
+
+/* Native controls that are not react-aria components still match the theme. */
+input,
+select,
+textarea {
+  max-width: 100%;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+textarea {
+  font-family: var(--font-mono);
+}
+
+label {
+  font-weight: 600;
+}
+
+pre {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 0.75rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+summary {
+  cursor: pointer;
+  color: var(--accent-strong);
+}
+
+button {
+  font: inherit;
+}
+
+:where(button, a, input, select, textarea, summary):focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+[data-disabled],
+:disabled {
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }

@@ -3,8 +3,8 @@
   flex-direction: column;
   gap: 1rem;
   padding: 1.5rem;
-  color: var(--text, #1a1d21);
-  background: var(--surface, #ffffff);
+  color: var(--text);
+  background: var(--surface);
 }
 
 .heading {
@@ -19,7 +19,7 @@
 
 .status {
   margin: 0;
-  color: var(--text-muted, #5b636e);
+  color: var(--text-muted);
 }
 
 .section {
@@ -36,18 +36,18 @@
 
 .meta {
   margin: 0;
-  color: var(--text-muted, #5b636e);
+  color: var(--text-muted);
   overflow-wrap: anywhere;
 }
 
 .failure {
   margin: 0;
-  color: var(--danger, #a3271f);
+  color: var(--danger);
 }
 
 .warning {
   margin: 0;
-  color: var(--warning, #8a5a00);
+  color: var(--warning);
 }
 
 .controls {
@@ -62,7 +62,7 @@
   flex-direction: column;
   gap: 0.5rem;
   padding: 1rem;
-  border: 1px solid var(--border, #d5d9df);
+  border: 1px solid var(--border);
   border-radius: 0.5rem;
 }
 
@@ -80,10 +80,10 @@
 .button {
   align-self: flex-start;
   padding: 0.35rem 0.75rem;
-  border: 1px solid var(--border, #d5d9df);
+  border: 1px solid var(--border);
   border-radius: 0.35rem;
   color: inherit;
-  background: var(--surface, #ffffff);
+  background: var(--surface);
   cursor: pointer;
 }
 
@@ -101,7 +101,7 @@
   flex-direction: column;
   gap: 0.35rem;
   padding: 0.75rem;
-  border: 1px solid var(--border, #e3e6ea);
+  border: 1px solid var(--border);
   border-radius: 0.35rem;
 }
 
@@ -110,7 +110,7 @@
   flex-direction: column;
   gap: 0.35rem;
   padding: 0.75rem;
-  border: 1px solid var(--border, #d5d9df);
+  border: 1px solid var(--border);
   border-radius: 0.5rem;
 }
 
