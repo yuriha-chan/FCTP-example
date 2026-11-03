@@ -227,6 +227,26 @@ test('Home stores verified administration entries in the account storage', async
   }
 });
 
+test('Home distinguishes a missing target credential from verified non-administration', async () => {
+  const fixture = await createAdminFixture('fctp-authority-administration-credential-');
+  try {
+    const registryInbox = fixture.app.authority.actor('registry').inbox as URI;
+    await fixture.app.home.revoke(fixture.playerId, { id: fixture.registryActorId, inbox: registryInbox });
+    assert.equal(await fixture.app.authority.server.processOutbox(), 1);
+    await fixture.app.authority.server.processInbox();
+
+    const response = await fetch(`${fixture.origin}/local/home/administration`, {
+      method: 'POST',
+      headers: bearer(fixture.playerNative),
+      body: JSON.stringify({ authorityId: fixture.registryActorId })
+    });
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: 'target-unauthorized' });
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
 test('a normal player Registry diplomatic token is rejected from Registry administration', async () => {
   const fixture = await createAdminFixture('fctp-authority-admin-registry-player-');
   try {

@@ -330,6 +330,7 @@ interface FixtureHomeAdministrationEntry {
 
 interface FixtureHomeAdministration {
   entries: Record<string, FixtureHomeAdministrationEntry>;
+  claimError?: { status: number; error: string };
 }
 
 interface FixtureHome {
@@ -452,6 +453,8 @@ function homeResponse(home: FixtureHome, url: URL, method: string, body: unknown
     if (method === 'POST') {
       const request = bodyRecord(body);
       const authorityId = typeof request.authorityId === 'string' ? request.authorityId : '';
+      const claimError = home.administration?.claimError;
+      if (claimError) return fixtureJson({ error: claimError.error }, claimError.status);
       const entry = home.administration?.entries[authorityId];
       if (!entry) return fixtureJson({ error: 'invalid-authority' }, 400);
       return fixtureJson({ entry: { authorityId, roles: entry.roles, permissions: ['admin'], ...(entry.name === undefined ? {} : { name: entry.name }) } });
@@ -1130,6 +1133,32 @@ test('administration claim resolves a server domain to its published Home author
       assert.equal(new URL(call.url).protocol, 'http:');
       assert.equal(new URL(call.url).host, '127.0.0.1:4599');
     }
+  } finally {
+    await opened.client.close();
+    await opened.application.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('administration claim preserves a target credential failure from Home', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-admin-claim-target-credential-'));
+  const storeFile = join(directory, 'client.store.json');
+  const home = claimHomeFixture();
+  const fixture = createFixtureFetch([{
+    ...home,
+    administration: { ...home.administration!, claimError: { status: 403, error: 'target-unauthorized' } }
+  }], claimAuthoritiesFixture());
+  const opened = await openFixtureApplication(storeFile, fixture.fetch);
+  const claim = (body: Record<string, unknown>) => fetch(new URL('/api/administration/claim', opened.client.origin), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  try {
+    await opened.application.state.transaction((state) => { state.accounts[claimAccount.id] = claimAccount; });
+    const response = await claim({ accountId: claimAccount.id, authority: 'home.test:4200' });
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: 'target-unauthorized' });
   } finally {
     await opened.client.close();
     await opened.application.close();

@@ -346,7 +346,7 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
           headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
           cache: 'no-store'
         });
-        if (response.status === 401) { sendJson(403, { error: 'not-administrator' }); return true; }
+        if (response.status === 401) { sendJson(403, { error: 'target-unauthorized' }); return true; }
         if (!response.ok) { sendJson(502, { error: 'target-permissions-unavailable' }); return true; }
         permissions = await response.json();
       } catch {

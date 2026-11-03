@@ -472,7 +472,8 @@ Home MUST store an entry only when the target permission map reports `admin`. Er
 | `400` | `invalid-request` | Malformed JSON or non-object body |
 | `400` | `invalid-authority` | Invalid URI, Actor document, ID, or role |
 | `401` | `unauthorized` | Missing or invalid `player` permission, or no retained Home player state |
-| `403` | `not-administrator` | Target reports no `admin` role for this account |
+| `403` | `target-unauthorized` | Target permission route returns `401` because the account's target credential is missing or invalid |
+| `403` | `not-administrator` | Target returns `200` without an `admin` role for this account |
 | `502` | `target-actor-unavailable` | Target Actor cannot be fetched |
 | `502` | `target-permissions-unavailable` | Target permission route fails other than `401` |
 | `502` | `invalid-target-permissions` | Target permission response is not an object, or its handle conflicts with the Actor's published handle |

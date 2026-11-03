@@ -105,6 +105,11 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+async function responseErrorCode(response: Response, fallback: string): Promise<string> {
+  const body = await response.json().catch(() => undefined);
+  return isRecord(body) && typeof body.error === 'string' && body.error ? body.error : fallback;
+}
+
 interface HomeAdministrationEntry {
   authorityId: string;
   roles: AuthorityRole[];
@@ -526,7 +531,10 @@ export function createAdministrationService(
         signal
       }));
       if (response.status === 401) throw new AdministrationRequestError(401, 'home-unauthorized');
-      if (response.status === 403) throw new AdministrationRequestError(403, 'not-administrator');
+      if (response.status === 403) {
+        const code = await responseErrorCode(response, 'not-administrator');
+        throw new AdministrationRequestError(403, code === 'target-unauthorized' ? code : 'not-administrator');
+      }
       if (response.status === 400) throw new AdministrationRequestError(400, 'invalid-authority');
       if (!response.ok) throw new AdministrationRequestError(502, 'home-administration-unavailable');
       await refreshHomeAdministration(account);
