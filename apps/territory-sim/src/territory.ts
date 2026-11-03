@@ -2,15 +2,15 @@ import { randomUUID } from 'node:crypto';
 import {
   validateModel,
   compareCargo,
+  type ArrivalRequest,
   type CargoManifest,
   type DepartureEvent,
   type DepartureRequest,
   type EntryRejected,
-  type EntryRequest,
   type ExitEvent,
   type URI,
 } from '@fctp/protocol';
-import { DEFAULT_ADMISSION, entryAdmissionAllows, type AdmissionList, type AdmissionPolicy, type HandlerContext, type Host } from '@fctp/server-base';
+import { DEFAULT_ADMISSION, admissionPermits, entryAdmissionAllows, type AdmissionList, type AdmissionPolicy, type HandlerContext, type Host } from '@fctp/server-base';
 import { resolveExitEvidence } from '@fctp/server-base';
 import {
   advanceTick,
@@ -34,6 +34,7 @@ export interface SimulationTerritoryOptions {
   territoryActor?: string;
   port: URI;
   route: URI;
+  routes?: Array<{ id: URI; from: string; to: string }>;
   config: SimulationConfig;
   trustedRegistry?: AdmissionList;
   acceptedRegistry?: AdmissionList;
@@ -48,13 +49,14 @@ export interface SimulationTerritoryOptions {
 }
 
 export interface SimulationVisit {
-  request: EntryRequest;
+  request: ArrivalRequest;
   registry: URI;
   possessor: URI;
   vessel: URI;
   simulationVessel: string;
   port: URI;
-  route: URI;
+  route?: URI;
+  arrivalType?: 'EntryRequest' | 'VesselCreationRequest';
   evidence?: ExitEvent;
   evidenceVerification?: unknown;
   decision: { accepted: boolean; reason: string; manifestSource?: 'request' | 'evidence' };
@@ -70,7 +72,7 @@ export type SimulationAdmission = AdmissionPolicy & {
 };
 
 export interface SimulationEntryRecord {
-  request: EntryRequest;
+  request: ArrivalRequest;
   hash: string;
   sender: URI;
   activityId: string;
@@ -115,7 +117,7 @@ const record = (value: unknown): value is Record<string, unknown> => typeof valu
 
 export function simulationExpectedIssuer(sender: URI, object: unknown, knownRegistry?: URI): URI | undefined {
   if (!record(object)) return undefined;
-  if (object.type === 'EntryRequest' && record(object.vessel) && object.vessel.registry === sender) return sender;
+  if ((object.type === 'EntryRequest' || object.type === 'VesselCreationRequest') && record(object.vessel) && object.vessel.registry === sender) return sender;
   if (object.type === 'DepartureRequest' && knownRegistry === sender) return sender;
   return undefined;
 }
@@ -130,6 +132,7 @@ export function installSimulationTerritory(host: Host, options: SimulationTerrit
   const tickDurationMs = options.tickDurationMs ?? 60_000;
   if (!Number.isFinite(Date.parse(epoch)) || !Number.isSafeInteger(tickDurationMs) || tickDurationMs < 1) throw new TypeError('Invalid simulation epoch or tick duration');
   const manifestPolicy = options.manifestPolicy ?? 'reject-difference';
+  const routeEndpoints = new Map((options.routes ?? []).map((route) => [route.id, route]));
   const initial: SimulationTerritoryState = {
     simulation: createSimulationState(options.config), visits: {}, handledIds: {}, decisions: [], evidence: {},
     admission: {
@@ -169,7 +172,7 @@ export function installSimulationTerritory(host: Host, options: SimulationTerrit
     actorId: actorId as URI, recipientActorId: registry, inbox: await inboxFor(registry), object, activityId,
   });
 
-  const reject = async (request: EntryRequest, registry: URI, reason: string): Promise<void> => {
+  const reject = async (request: ArrivalRequest, registry: URI, reason: string): Promise<void> => {
     const rejected: EntryRejected = { id: uri('entry-rejected'), type: 'EntryRejected', request: request.id, territory: actorId as URI, reason };
     const outgoing = await outbound(registry, rejected, `${rejected.id}/activity`);
     await commit((state) => {
@@ -180,7 +183,7 @@ export function installSimulationTerritory(host: Host, options: SimulationTerrit
 
   const admitState = (
     state: SimulationTerritoryState,
-    request: EntryRequest,
+    request: ArrivalRequest,
     evidence: ExitEvent | undefined,
     evidenceVerification: unknown,
     evidenceBinding: { bound: boolean } | undefined
@@ -189,26 +192,30 @@ export function installSimulationTerritory(host: Host, options: SimulationTerrit
     if (request.destination.territory !== actorId) {
       return { accepted: false, reason: 'registry-or-destination-not-accepted' };
     }
-    if (request.destination.port !== options.port || request.destination.route !== options.route) {
+    if (request.destination.port !== options.port || (request.type === 'EntryRequest' && request.destination.route !== options.route)) {
       return { accepted: false, reason: 'port-or-route-not-accepted' };
     }
-    if (request.journey.exitEvidence && !evidence) return { accepted: false, reason: 'exit-evidence-invalid-or-unbound' };
-    if (evidence) {
-      const verification = evidenceVerification as { cryptographic?: { verified?: boolean }; attribution?: { attributed?: boolean }; expectedIssuer?: { matches?: boolean } } | undefined;
-      if (!verification?.cryptographic?.verified || !verification.attribution?.attributed || !verification.expectedIssuer?.matches || !evidenceBinding?.bound) {
-        return { accepted: false, reason: 'exit-evidence-invalid-or-unbound' };
+    if (request.type === 'VesselCreationRequest') {
+      if (!admissionPermits(admission.vesselBuildingRegistry, request.vessel.registry)) return { accepted: false, reason: 'vessel-building-registry-not-accepted' };
+    } else {
+      if (request.journey.exitEvidence && !evidence) return { accepted: false, reason: 'exit-evidence-invalid-or-unbound' };
+      if (evidence) {
+        const verification = evidenceVerification as { cryptographic?: { verified?: boolean }; attribution?: { attributed?: boolean }; expectedIssuer?: { matches?: boolean } } | undefined;
+        if (!verification?.cryptographic?.verified || !verification.attribution?.attributed || !verification.expectedIssuer?.matches || !evidenceBinding?.bound) {
+          return { accepted: false, reason: 'exit-evidence-invalid-or-unbound' };
+        }
+      }
+      const allowed = entryAdmissionAllows(admission, request.vessel.registry, evidence?.territory);
+      if (!allowed.allowed) return { accepted: false, reason: allowed.reason ?? 'registry-or-destination-not-accepted' };
+      if (!evidence && admission.requireExitEvidence) {
+        return { accepted: false, reason: 'exit-evidence-required' };
+      }
+      const difference = evidence ? compareCargo(request.cargo, evidence.cargo) : undefined;
+      if (admission.manifestPolicy === 'reject-difference' && difference && (difference.leftOnly.length > 0 || difference.rightOnly.length > 0)) {
+        return { accepted: false, reason: 'cargo-differs-from-exit-evidence' };
       }
     }
-    const allowed = entryAdmissionAllows(admission, request.vessel.registry, evidence?.territory);
-    if (!allowed.allowed) return { accepted: false, reason: allowed.reason ?? 'registry-or-destination-not-accepted' };
-    if (!evidence && admission.requireExitEvidence) {
-      return { accepted: false, reason: 'exit-evidence-required' };
-    }
-    const manifestSource = evidence && admission.manifestPolicy === 'evidence' ? 'evidence' : 'request';
-    const difference = evidence ? compareCargo(request.cargo, evidence.cargo) : undefined;
-    if (admission.manifestPolicy === 'reject-difference' && difference && (difference.leftOnly.length > 0 || difference.rightOnly.length > 0)) {
-      return { accepted: false, reason: 'cargo-differs-from-exit-evidence' };
-    }
+    const manifestSource = request.type === 'EntryRequest' && evidence && admission.manifestPolicy === 'evidence' ? 'evidence' : 'request';
     const cargo = manifestSource === 'evidence' && evidence ? evidence.cargo : request.cargo;
     if (Object.values(state.visits).some((visit) => visit.decision.accepted && visit.vessel === request.vessel.id && !visit.exited)) {
       return { accepted: false, reason: 'vessel-already-visiting' };
@@ -227,7 +234,7 @@ export function installSimulationTerritory(host: Host, options: SimulationTerrit
     }
     const visit: SimulationVisit = {
       request: structuredClone(request), registry: request.vessel.registry, possessor: request.vessel.possessor,
-      vessel: request.vessel.id, simulationVessel, port: request.destination.port, route: request.destination.route,
+      vessel: request.vessel.id, simulationVessel, port: request.destination.port, ...(request.type === 'EntryRequest' ? { route: request.destination.route } : {}), arrivalType: request.type,
       ...(evidence ? { evidence: structuredClone(evidence), evidenceVerification } : {}),
       decision: { accepted: true, reason: 'locally-accepted', manifestSource }, exited: false,
     };
@@ -238,25 +245,25 @@ export function installSimulationTerritory(host: Host, options: SimulationTerrit
     return { accepted: true, reason: visit.decision.reason };
   };
 
-  const onEntry = async (context: HandlerContext, raw: unknown): Promise<void> => serialized(async () => {
-    const checked = validateModel<EntryRequest>(raw as Record<string, unknown>, 'EntryRequest');
-    if (!checked.success) throw new TypeError(`Invalid EntryRequest: ${checked.issues.map((issue) => issue.message).join(', ')}`);
+  const onArrival = (model: ArrivalRequest['type']) => async (context: HandlerContext, raw: unknown): Promise<void> => serialized(async () => {
+    const checked = validateModel<ArrivalRequest>(raw as Record<string, unknown>, model);
+    if (!checked.success) throw new TypeError(`Invalid ${model}: ${checked.issues.map((issue) => issue.message).join(', ')}`);
     const request = checked.data;
     const hash = JSON.stringify(request);
     const current = await snapshot();
     const previous = current.handledIds[request.id];
     if (previous) {
-      if (previous !== hash) throw new TypeError('Conflicting reuse of EntryRequest ID');
+      if (previous !== hash) throw new TypeError(`Conflicting reuse of ${model} ID`);
       return;
     }
     if (context.senderActor !== request.vessel.registry || !context.verification.cryptographic.verified || !context.verification.attribution.attributed || !context.verification.expectedIssuer.matches) {
       return;
     }
-    if (request.destination.territory !== actorId || request.destination.port !== options.port || request.destination.route !== options.route) {
+    if (request.destination.territory !== actorId || request.destination.port !== options.port || (request.type === 'EntryRequest' && request.destination.route !== options.route)) {
       await reject(request, request.vessel.registry, request.destination.territory !== actorId ? 'registry-or-destination-not-accepted' : 'port-or-route-not-accepted');
       return;
     }
-    const evidenceUri = request.journey.exitEvidence;
+    const evidenceUri = request.type === 'EntryRequest' ? request.journey.exitEvidence : undefined;
     let evidence: ExitEvent | undefined;
     let evidenceVerification: unknown;
     let evidenceBinding: { bound: boolean } | undefined;
@@ -308,7 +315,11 @@ export function installSimulationTerritory(host: Host, options: SimulationTerrit
     if (!visit || request.territory !== actorId || request.port !== visit.port || !context.verification.cryptographic.verified || !context.verification.attribution.attributed || !context.verification.expectedIssuer.matches) {
       throw new Error('DepartureRequest failed local vessel, port, territory, or verification checks');
     }
-    if (request.route && request.route !== visit.route) throw new Error('DepartureRequest route does not match the admitted route');
+    if (request.route !== undefined && request.route !== visit.route) {
+      const route = routeEndpoints.get(request.route);
+      if (!route || route.from !== visit.port) throw new Error('DepartureRequest route is not a valid outgoing route from the current port');
+    }
+    if (request.route === undefined && visit.route === undefined) throw new Error('DepartureRequest requires an explicit outgoing route');
     const next = structuredClone(current);
     const vessel = next.simulation.vessels.find((item) => item.id === visit.simulationVessel);
     if (!vessel || vessel.status !== 'berthed') throw new Error('Departure requires a berthed vessel');
@@ -318,7 +329,8 @@ export function installSimulationTerritory(host: Host, options: SimulationTerrit
     await commit((state) => Object.assign(state, next));
   });
 
-  host.server.on(actorId, 'EntryRequest', onEntry);
+  host.server.on(actorId, 'EntryRequest', onArrival('EntryRequest'));
+  host.server.on(actorId, 'VesselCreationRequest', onArrival('VesselCreationRequest'));
   host.server.on(actorId, 'DepartureRequest', onDeparture);
 
   return {
@@ -440,7 +452,9 @@ export function installSimulationTerritory(host: Host, options: SimulationTerrit
         if (!vessel || vessel.status !== 'berthed' || state.simulation.handlingJobs.some((job) => job.vessel === visit.simulationVessel)) continue;
         departVessel(state.simulation, visit.simulationVessel);
         const departure: DepartureEvent = { id: uri('departure'), type: 'DepartureEvent', vessel: visit.vessel, territory: actorId, port: visit.port, request: visit.departureRequest.id, effectiveAt: stamp(state.simulation.tick) };
-        const exitDraft: Omit<ExitEvent, 'proof'> = { id: uri('exit'), type: 'ExitEvent', vessel: visit.vessel, territory: actorId, route: visit.departureRequest.route ?? visit.route, entryRequest: visit.request.id, departureEvent: departure.id, cargo: cargoFromVessel(vessel.cargo), effectiveAt: stamp(state.simulation.tick) };
+        const exitRoute = visit.departureRequest.route ?? visit.route;
+        if (exitRoute === undefined) throw new Error('Departure route is not concrete');
+        const exitDraft: Omit<ExitEvent, 'proof'> = { id: uri('exit'), type: 'ExitEvent', vessel: visit.vessel, territory: actorId, route: exitRoute, entryRequest: visit.request.id, departureEvent: departure.id, cargo: cargoFromVessel(vessel.cargo), effectiveAt: stamp(state.simulation.tick) };
         const exit = await host.signObject(actorName, exitDraft as unknown as Record<string, unknown>) as ExitEvent;
         visit.departureEvent = departure; visit.exited = true;
         outgoing.push(await outbound(visit.registry, departure as unknown as Record<string, unknown>, `${departure.id}/activity`));

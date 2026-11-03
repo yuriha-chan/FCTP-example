@@ -1209,3 +1209,77 @@ test('does not show a mismatched action from either retained read or refresh', a
   assert.equal((await detail.innerText()).includes('wrong-action-private-marker'), false);
   assert.deepEqual(errors, []);
 });
+
+test('recovers the exact returned initial vessel resource for account context and never derives a destination from the local ID', async (t) => {
+  const localId = 'harbor-skiff-7';
+  const vesselUri = 'https://home.invalid/objects/vessels/retained-9';
+  const creationRequest = 'https://home.invalid/local/registry/requests/initial-9';
+  const action = makeAction({
+    id: 'https://activity.invalid/actions/initial-vessel-resource',
+    targetId: 'https://home.invalid/actors/registry',
+    intent: {
+      kind: 'initial-vessel',
+      inputs: {
+        localId,
+        name: 'Harbor Skiff',
+        portId: 'https://places.invalid/ports/east',
+        registryId: 'https://home.invalid/actors/registry'
+      }
+    },
+    resultReferences: [
+      { kind: 'resource', id: vesselUri },
+      { kind: 'request', id: creationRequest }
+    ]
+  });
+  const { page, errors } = await openFixture(t, {
+    actionId: action.id,
+    handler: () => ({ kind: 'page', page: detailPage(action) })
+  });
+
+  const detail = await waitForRegion(page, /action details/i, 'expected the initial vessel detail');
+  await waitForRegionText(detail, action.targetId, 'expected the initial vessel action');
+  await expandAllDetails(detail);
+  const text = await detail.innerText();
+  assert.ok(text.includes(localId), 'the typed local ID must remain retained metadata');
+  assert.ok(text.includes(vesselUri), 'the exact returned vessel resource reference must remain visible');
+
+  const openVessel = await waitForButton(detail, /^open vessel$/i, 'initial vessel recovery must open the exact returned resource');
+  await openVessel.click();
+
+  const calls = await recoveryCalls(page);
+  assert.deepEqual(calls.contexts.at(-1), { kind: 'vessel', vesselId: vesselUri }, 'recovery must use the exact returned vessel URI');
+  assert.equal(JSON.stringify(calls.contexts).includes(localId), false, 'the local ID must never be manufactured into a vessel destination');
+  assert.deepEqual(errors, []);
+});
+
+test('does not manufacture an initial vessel destination from a local ID when the resource reference is missing', async (t) => {
+  const localId = 'harbor-skiff-7';
+  const action = makeAction({
+    id: 'https://activity.invalid/actions/initial-vessel-without-resource',
+    targetId: 'https://home.invalid/actors/registry',
+    intent: {
+      kind: 'initial-vessel',
+      inputs: {
+        localId,
+        name: 'Harbor Skiff',
+        portId: 'https://places.invalid/ports/east',
+        registryId: 'https://home.invalid/actors/registry'
+      }
+    },
+    resultReferences: []
+  });
+  const { page, errors } = await openFixture(t, {
+    actionId: action.id,
+    handler: () => ({ kind: 'page', page: detailPage(action) })
+  });
+
+  const detail = await waitForRegion(page, /action details/i, 'expected the initial vessel detail');
+  await waitForRegionText(detail, action.targetId, 'expected the initial vessel action');
+  await expandAllDetails(detail);
+  assert.ok((await detail.innerText()).includes(localId), 'the typed local ID must remain retained metadata');
+
+  assert.equal(await detail.getByRole('button', { name: /^open vessel$/i }).count(), 0, 'a missing resource reference must not offer a vessel destination');
+  const calls = await recoveryCalls(page);
+  assert.deepEqual(calls.contexts, [], 'a missing resource reference must not emit a local-ID-derived context');
+  assert.deepEqual(errors, []);
+});

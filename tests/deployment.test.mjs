@@ -192,6 +192,63 @@ test('authority deployment config rejects invalid Home account names before star
   }
 });
 
+test('authority deployment accepts partial vessel preallocation and retained starting ports', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'deployment-initial-vessels-'));
+  const startingPorts = ['https://west.example.org/objects/ports/east', 'https://west.example.org/objects/ports/west'];
+  try {
+    await writeFile(join(directory, 'admin-secret'), 'initial-admin-secret\n');
+    await writeFile(join(directory, 'passwords.json'), JSON.stringify({ alice: 'alice-password', bob: 'bob-password' }));
+    await writeFile(join(directory, 'config.json'), JSON.stringify({
+      origin: 'https://authority.example.org', dataDir: './data',
+      adminSecretFile: './admin-secret', playerNames: ['alice', 'bob'],
+      vesselNames: { alice: 'alice-vessel' }, startingPorts,
+      accountPasswordsFile: './passwords.json'
+    }));
+    const config = await readDeploymentConfig('authority', join(directory, 'config.json'));
+    assert.deepEqual(config.startingPorts, startingPorts);
+    assert.deepEqual(config.vesselNames, { alice: 'alice-vessel' });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('authority deployment accepts explicitly empty vessel preallocation and defaults starting ports to empty', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'deployment-empty-vessels-'));
+  try {
+    await writeFile(join(directory, 'admin-secret'), 'empty-admin-secret\n');
+    await writeFile(join(directory, 'passwords.json'), JSON.stringify({ alice: 'alice-password' }));
+    await writeFile(join(directory, 'config.json'), JSON.stringify({
+      origin: 'https://authority.example.org', dataDir: './data',
+      adminSecretFile: './admin-secret', playerNames: ['alice'],
+      vesselNames: {}, accountPasswordsFile: './passwords.json'
+    }));
+    const config = await readDeploymentConfig('authority', join(directory, 'config.json'));
+    assert.deepEqual(config.vesselNames, {});
+    assert.deepEqual(config.startingPorts, []);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('authority deployment rejects invalid starting ports before startup', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'deployment-invalid-ports-'));
+  try {
+    await writeFile(join(directory, 'admin-secret'), 'ports-admin-secret\n');
+    await writeFile(join(directory, 'passwords.json'), JSON.stringify({ alice: 'alice-password' }));
+    const base = {
+      origin: 'https://authority.example.org', dataDir: './data',
+      adminSecretFile: './admin-secret', playerNames: ['alice'],
+      vesselNames: { alice: 'alice-vessel' }, accountPasswordsFile: './passwords.json'
+    };
+    for (const startingPorts of ['https://west.example.org/objects/ports/east', [42], ['not a uri']]) {
+      await writeFile(join(directory, 'config.json'), JSON.stringify({ ...base, startingPorts }));
+      await assert.rejects(readDeploymentConfig('authority', join(directory, 'config.json')), TypeError);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('deployment config carries the configured administrator for Authority and Territories', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'deployment-administrator-'));
   const handle = '@governor@authority.example.org';

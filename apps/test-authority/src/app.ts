@@ -16,13 +16,14 @@ export interface CreateAuthorityAppOptions {
   playerNames?: string[];
   administratorNames?: string[];
   vesselNames?: Record<string, string>;
+  startingPorts?: URI[];
   accountPasswords?: Record<string, string>;
   homeAccountName?: string;
 }
 
 export interface AuthorityAppIds {
   actor: Record<'registry' | 'home' | 'player', URI>;
-  vessel: URI;
+  vessel?: URI;
   players: Record<string, URI>;
   vessels: Record<string, URI>;
 }
@@ -37,6 +38,10 @@ export interface AuthorityApp {
 
 export async function createAuthorityApp(options: CreateAuthorityAppOptions): Promise<AuthorityApp> {
   const fetcher = options.fetcher ?? fetch;
+  const origin = new URL(options.origin).origin;
+  const playerNames = options.playerNames ?? ['player'];
+  const vesselAssignments = resolveVesselAssignments(playerNames, options.vesselNames);
+  const startingPorts = validateStartingPorts(options.startingPorts);
   const authority = await createAuthority({
     origin: options.origin,
     storeFile: options.storeFile,
@@ -53,18 +58,14 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
        resolveExpectedIssuer: async (_localActorId, senderActorId, activity) => registry.resolveExpectedIssuer(senderActorId, activity.object)
     })
   });
-  const origin = new URL(options.origin).origin;
   const home = installHome(authority, {
     fetcher,
     ...(options.accountPasswords ? { accountPasswords: options.accountPasswords } : {})
   });
   await home.ready;
   const authoring = installAuthoring(authority, home, origin);
-  const playerNames = options.playerNames ?? ['player'];
-  const vesselNames = playerNames.map((name, index) => options.vesselNames?.[name] ?? (index === 0 ? 'demo' : name));
-  if (new Set(vesselNames).size !== vesselNames.length || vesselNames.some((name) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name))) throw new TypeError('Vessel names must be unique and URL safe');
-  const vessels = Object.fromEntries(playerNames.map((name, index) => [name, {
-    id: `${origin}/objects/vessels/${vesselNames[index]}`,
+  const vessels = Object.fromEntries(vesselAssignments.map(([name, vesselName]) => [name, {
+    id: `${origin}/objects/vessels/${vesselName}`,
     registry: authority.actor('registry').id,
     possessor: authority.players[name]!.id,
     capacity: 100
@@ -72,20 +73,23 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
   const registry: Registry = installRegistry(authority, {
     fetcher,
     initialVessels: Object.values(vessels),
+    startingPorts,
     authenticatePlayer: async (request) => {
       const authorization = request.headers.authorization ?? '';
       return authorization.startsWith('Bearer ') ? home.authenticateNativeToken(authorization.slice(7)) : undefined;
     }
   });
   home.setOwnedVessels((playerActorId) => registry.owned(playerActorId));
+  home.setInitialVesselOffer((playerActorId) => registry.initialVesselOffer(playerActorId));
   const savedRegistry = await authority.server.store.read((store) => store.domain.registry as unknown);
+  const primaryVessel = playerNames[0] ? vessels[playerNames[0]] : undefined;
   const ids: AuthorityAppIds = {
     actor: {
       registry: authority.actor('registry').id,
       home: authority.actor('home').id,
       player: authority.actor('player').id
     },
-    vessel: vessels[playerNames[0]!]!.id,
+    ...(primaryVessel ? { vessel: primaryVessel.id } : {}),
     players: Object.fromEntries(Object.entries(authority.players).map(([name, player]) => [name, player.id])),
     vessels: Object.fromEntries(Object.entries(vessels).map(([name, vessel]) => [name, vessel.id]))
   };
@@ -127,6 +131,7 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
         { method: 'GET', path: '/local/registry/actions?vessel=<URI>', authentication: 'native Player; owned vessel' },
         { method: 'POST', path: '/local/home/issue', authentication: 'admin' },
         { method: 'POST', path: '/local/home/rotate', authentication: 'admin' },
+        { method: 'POST', path: '/local/registry/vessels', authentication: 'native Player' },
         { method: 'POST', path: '/local/registry/entry', authentication: 'admin' },
         { method: 'POST', path: '/local/registry/departure', authentication: 'admin' },
         { method: 'POST', path: '/local/registry/adoption', authentication: 'admin' },
@@ -136,4 +141,29 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
     return true;
   });
   return { authority, home, registry, authoring, ids };
+}
+
+function resolveVesselAssignments(playerNames: string[], configured: Record<string, string> | undefined): Array<[string, string]> {
+  if (configured !== undefined && (typeof configured !== 'object' || configured === null || Array.isArray(configured))) throw new TypeError('Vessel names must be unique and URL safe');
+  const assignments: Array<[string, string]> = [];
+  for (const [index, name] of playerNames.entries()) {
+    const vesselName = configured === undefined ? (index === 0 ? 'demo' : name) : configured[name];
+    if (vesselName === undefined) continue;
+    if (typeof vesselName !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(vesselName)) throw new TypeError('Vessel names must be unique and URL safe');
+    assignments.push([name, vesselName]);
+  }
+  if (new Set(assignments.map(([, vesselName]) => vesselName)).size !== assignments.length) throw new TypeError('Vessel names must be unique and URL safe');
+  return assignments;
+}
+
+function validateStartingPorts(value: unknown): URI[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new TypeError('Starting ports must be URIs');
+  return value.map((entry) => {
+    if (typeof entry !== 'string') throw new TypeError('Starting ports must be URIs');
+    let url: URL;
+    try { url = new URL(entry); } catch { throw new TypeError('Starting ports must be URIs'); }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new TypeError('Starting ports must be URIs');
+    return entry;
+  });
 }

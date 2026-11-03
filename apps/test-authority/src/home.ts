@@ -23,6 +23,13 @@ export interface HomeOptions {
   accountPasswords?: Record<string, string>;
 }
 
+export interface InitialVesselOffer {
+  available: boolean;
+  registry: URI;
+  capacity: number;
+  startingPorts: URI[];
+}
+
 export interface HomeService {
   readonly resources: ResourceClient;
   readonly ready: Promise<void>;
@@ -34,6 +41,7 @@ export interface HomeService {
   deriveToken(playerActorId: URI, resourceActorId: URI): Promise<string>;
   getResource<T>(playerActorId: URI, resourceActorId: URI, uri: URI): Promise<T>;
   setOwnedVessels(provider: (playerActorId: URI) => Promise<Vessel[]>): void;
+  setInitialVesselOffer(provider: (playerActorId: URI) => Promise<InitialVesselOffer>): void;
 }
 
 export function installHome(authority: Authority, options: HomeOptions = {}): HomeService {
@@ -43,6 +51,7 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
   const fetcher = options.fetcher ?? fetch;
   const playerQueues = new Map<URI, Promise<void>>();
   let ownedVessels: (playerActorId: URI) => Promise<Vessel[]> = async () => [];
+  let initialVesselOffer: (playerActorId: URI) => Promise<InitialVesselOffer> = async () => ({ available: false, registry: authority.actor('registry').id, capacity: 100, startingPorts: [] });
   const serializePlayer = <T>(id: URI, operation: () => Promise<T>): Promise<T> => {
     const previous = playerQueues.get(id) ?? Promise.resolve();
     const result = previous.then(operation);
@@ -217,6 +226,9 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
     },
     setOwnedVessels(provider) {
       ownedVessels = provider;
+    },
+    setInitialVesselOffer(provider) {
+      initialVesselOffer = provider;
     }
   };
 
@@ -262,7 +274,7 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
       const callerId = header.startsWith('Bearer ') ? await service.authenticateNativeToken(header.slice(7)) : undefined;
       if (!callerId) { sendJson(401, { error: 'unauthorized' }); return true; }
       try {
-        sendJson(200, { actor: callerId, vessels: await ownedVessels(callerId) });
+        sendJson(200, { actor: callerId, vessels: await ownedVessels(callerId), initialVessel: await initialVesselOffer(callerId) });
       } catch {
         sendJson(500, { error: 'vessel-listing-failed' });
       }

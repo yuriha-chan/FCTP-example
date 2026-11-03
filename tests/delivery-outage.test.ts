@@ -48,6 +48,8 @@ test('completed Territory load survives Registry outage and its durable signed d
   };
 
   authority = await createAuthorityApp({ origin: authorityOrigin, storeFile: authorityStore, keyFile: authorityKeys, adminSecret: admin });
+  const primaryVessel = authority.ids.vessel;
+  assert.ok(primaryVessel, 'the configured authority provides a primary vessel');
   policy = await createPolicyApp({
     origin: policyOrigin, storeFile: policyStore,
     adminSecret: admin, fetcher: captureTransport
@@ -86,7 +88,7 @@ test('completed Territory load survives Registry outage and its durable signed d
 
   const policyBeforeOutage = await json<{ state: { portInventory: Record<string, number>; vessels: Record<string, { manifest: { entries: unknown[] } }> } }>(await fetch(`${policyOrigin}/local/territory/state`, { headers: playerAuth }));
   assert.equal(policyBeforeOutage.state.portInventory[policy.ids.varieties.metal], 1);
-  assert.equal(policyBeforeOutage.state.vessels[authority.ids.vessel]!.manifest.entries.length, 0);
+  assert.equal(policyBeforeOutage.state.vessels[primaryVessel]!.manifest.entries.length, 0);
 
   const registryInbox = `${authorityOrigin}/actors/registry/inbox`;
   await authority.authority.close();

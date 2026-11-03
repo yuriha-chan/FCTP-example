@@ -1,4 +1,4 @@
-import { validateModel, type DepartureEvent, type DepartureRequest, type EntryRequest, type ExitEvent, type URI } from '@fctp/protocol';
+import { validateModel, type ArrivalRequest, type DepartureEvent, type DepartureRequest, type ExitEvent, type URI } from '@fctp/protocol';
 import { createLocalDocumentLoader } from '@fctp/identity';
 import { verifyPublishedDocument } from './verification.js';
 import type { VerificationReport } from './server.js';
@@ -7,7 +7,7 @@ export interface ExitEvidenceExpected { vessel: URI; registry: URI }
 export interface ExitEvidenceOptions { fetcher?: typeof fetch }
 export interface ExitEvidenceResult {
   exit?: ExitEvent;
-  entry?: EntryRequest;
+  entry?: ArrivalRequest;
   verification: VerificationReport;
   binding: { bound: boolean; reason?: string };
   difference?: never;
@@ -36,8 +36,8 @@ export async function resolveExitEvidence(
 
   const verification = await verifyPublishedDocument(exit, exit.territory, exit.territory, fetcher, createLocalDocumentLoader());
   try {
-    const entry = await resolveModel<EntryRequest>(exit.entryRequest, 'EntryRequest', fetcher);
-    if (entry.id !== exit.entryRequest) throw new Error('EntryRequest id does not match requested URI');
+    const entry = await resolveArrival(exit.entryRequest, fetcher);
+    if (entry.id !== exit.entryRequest) throw new Error('Arrival request id does not match requested URI');
     const reasons: string[] = [];
     if (exit.vessel !== expected.vessel) reasons.push('exit-vessel-mismatch');
     if (entry.vessel.id !== expected.vessel || entry.vessel.registry !== expected.registry) reasons.push('entry-vessel-or-registry-mismatch');
@@ -66,14 +66,28 @@ export async function resolveExitEvidence(
   }
 }
 
-async function resolveModel<T>(uri: URI, model: 'ExitEvent' | 'EntryRequest' | 'DepartureEvent' | 'DepartureRequest', fetcher: typeof fetch): Promise<T> {
-  const response = await fetcher(uri, { headers: { Accept: 'application/ld+json, application/json' } });
-  if (!response.ok) throw new Error(`Resource retrieval failed: HTTP ${response.status}`);
-  const value: unknown = await response.json();
+async function resolveModel<T>(uri: URI, model: 'ExitEvent' | 'DepartureEvent' | 'DepartureRequest', fetcher: typeof fetch): Promise<T> {
+  const value = await fetchDocument(uri, fetcher);
   const validated = validateModel<T & Record<string, unknown>>(value, model);
   if (!validated.success) throw new TypeError(`Invalid ${model}: ${validated.issues.map((issue) => `${issue.path} ${issue.message}`).join(', ')}`);
   if (validated.data.id !== uri) throw new Error(`${model} id does not match requested URI`);
   return validated.data;
+}
+
+async function resolveArrival(uri: URI, fetcher: typeof fetch): Promise<ArrivalRequest> {
+  const value = await fetchDocument(uri, fetcher);
+  const type = typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as { type?: unknown }).type : undefined;
+  if (type !== 'EntryRequest' && type !== 'VesselCreationRequest') throw new TypeError('Invalid arrival request type');
+  const validated = validateModel<ArrivalRequest>(value, type);
+  if (!validated.success) throw new TypeError(`Invalid ${type}: ${validated.issues.map((issue) => `${issue.path} ${issue.message}`).join(', ')}`);
+  if (validated.data.id !== uri) throw new Error(`${type} id does not match requested URI`);
+  return validated.data;
+}
+
+async function fetchDocument(uri: URI, fetcher: typeof fetch): Promise<unknown> {
+  const response = await fetcher(uri, { headers: { Accept: 'application/ld+json, application/json' } });
+  if (!response.ok) throw new Error(`Resource retrieval failed: HTTP ${response.status}`);
+  return await response.json();
 }
 
 function messageOf(error: unknown): string {

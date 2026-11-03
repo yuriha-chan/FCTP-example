@@ -400,10 +400,25 @@ export interface LogisticsVesselCandidate {
   error?: string;
 }
 
+export interface LogisticsInitialVesselOffer {
+  available: boolean;
+  registry: string;
+  capacity: number;
+  startingPorts: string[];
+}
+
+export interface LogisticsStartingPort {
+  portId: string;
+  port: SourcedObservation<{ id: string; name?: string; territory: string }>;
+  authority?: SourcedObservation<{ id: string; role: 'territory'; name?: string }>;
+}
+
 export interface LogisticsVesselCandidatesData {
   accountId: string;
   candidates: LogisticsVesselCandidate[];
   blockers: string[];
+  initialVessel?: SourcedObservation<LogisticsInitialVesselOffer>;
+  startingPorts?: LogisticsStartingPort[];
 }
 
 export interface LogisticsRegistryObservation {

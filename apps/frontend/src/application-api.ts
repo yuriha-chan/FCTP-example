@@ -373,6 +373,10 @@ export function readLogisticsVessel(accountId: string, vesselId: string): Promis
   return request(`/api/logistics/vessels/${encodeURIComponent(vesselId)}?accountId=${encodeURIComponent(accountId)}`);
 }
 
+export function submitInitialVessel(input: { accountId: string; vesselId: string; name: string; portId: string }): Promise<ActionResponse> {
+  return request('/api/logistics/vessels', { method: 'POST', body: JSON.stringify(input) });
+}
+
 export function refreshLogisticsVessel(accountId: string, vesselId: string): Promise<LogisticsVesselResponse> {
   return request(`/api/logistics/vessels/${encodeURIComponent(vesselId)}/refresh`, {
     method: 'POST',

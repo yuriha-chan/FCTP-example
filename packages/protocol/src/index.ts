@@ -56,12 +56,17 @@ export interface Yield extends ExtensionFields { probability: number; count: UIn
 export interface Item extends Identified { variety: URI; data: Record<string, unknown> }
 export interface Stack extends ExtensionFields { variety: URI; count: UInt; data: Record<string, unknown> }
 export type Quantity = Item | Stack;
-export interface Vessel extends Identified { registry: URI; possessor: URI; capacity: number; data?: Record<string, unknown> }
+export interface Vessel extends Identified { registry: URI; possessor: URI; capacity: number; name?: string; data?: Record<string, unknown> }
 export interface Journey extends ExtensionFields { events: URI[]; exitEvidence?: URI }
 export interface EntryRequest extends Identified {
   type: 'EntryRequest'; vessel: Vessel; cargo: CargoManifest; journey: Journey;
   destination: { territory: URI; port: URI; route: URI };
 }
+export interface VesselCreationRequest extends Identified {
+  type: 'VesselCreationRequest'; vessel: Vessel; cargo: CargoManifest;
+  destination: { territory: URI; port: URI };
+}
+export type ArrivalRequest = EntryRequest | VesselCreationRequest;
 export interface EntryRejected extends Identified { type: 'EntryRejected'; request: URI; territory: URI; reason?: string }
 export interface BerthingEvent extends Identified { type: 'BerthingEvent'; vessel: URI; territory: URI; port: URI; request: URI; effectiveAt: Instant }
 export interface CargoOperationEvent extends Identified {
@@ -88,7 +93,7 @@ export interface TokenRevoke extends ExtensionFields { tokenRevoke: 'revoke'; ac
 export type TokenDeclaration = TokenDigest | TokenRevoke;
 
 export type FctpModelName = 'Ref' | 'Identified' | 'Named' | 'Signed' | 'DataIntegrityProof' | 'Actor' | 'Territory' | 'Port' | 'Boundary' | 'Area' | 'Route' | 'RouteRequest' | 'RouteRequestApproval' | 'RouteRequestDenial' |
-  'Asset' | 'AssetGrant' | 'Variety' | 'Item' | 'Stack' | 'CargoManifest' | 'Vessel' | 'EntryRequest' |
+  'Asset' | 'AssetGrant' | 'Variety' | 'Item' | 'Stack' | 'CargoManifest' | 'Vessel' | 'EntryRequest' | 'VesselCreationRequest' |
   'EntryRejected' | 'BerthingEvent' | 'CargoOperationEvent' | 'DepartureRequest' | 'DepartureEvent' |
   'VoyageEvent' | 'ExitEvent' | 'Listing' | 'MapDescriptor' | 'MapRepresentation' | 'MapResource' |
   'Media' | 'Production' | 'Yield' | 'Journey' | 'TerritoryResources' | 'TokenDigest' | 'TokenRevoke';
@@ -111,6 +116,7 @@ export function validateModel<T extends ExtensionFields>(value: unknown, model: 
   const quantity = (q: unknown): boolean => record(q) && uri(q.variety) &&
     (q.id === undefined ? uint(q.count) && record(q.data) : uri(q.id) && record(q.data));
   const cargo = (v: unknown): boolean => record(v) && Array.isArray(v.entries) && v.entries.every(quantity);
+  const vessel = (v: unknown): boolean => record(v) && uri(v.id) && uri(v.registry) && uri(v.possessor) && typeof v.capacity === 'number' && v.capacity >= 0 && (!('name' in v) || string(v.name));
   const proof = (v: unknown): boolean => record(v) && v.type === 'DataIntegrityProof' && v.cryptosuite === 'eddsa-rdfc-2022' && uri(v.verificationMethod) && string(v.proofValue);
   const entries: Record<FctpModelName, () => void> = {
     Ref: () => { needUri('id'); },
@@ -137,9 +143,10 @@ export function validateModel<T extends ExtensionFields>(value: unknown, model: 
     Item: () => { needUri('id'); needUri('variety'); need('data', record, 'object'); },
     Stack: () => { needUri('variety'); need('count', uint, 'unsigned integer'); need('data', record, 'object'); },
     CargoManifest: () => { need('entries', (v) => Array.isArray(v) && v.every(quantity), 'quantity array'); },
-    Vessel: () => { needUri('id'); needUri('registry'); needUri('possessor'); need('capacity', (v) => typeof v === 'number' && v >= 0, 'nonnegative number'); },
+    Vessel: () => { needUri('id'); needUri('registry'); needUri('possessor'); need('capacity', (v) => typeof v === 'number' && v >= 0, 'nonnegative number'); if ('name' in value) need('name', string, 'string'); },
     Journey: () => { need('events', (v) => Array.isArray(v) && v.every(uri), 'URI array'); if ('exitEvidence' in value) needUri('exitEvidence'); },
-    EntryRequest: () => { needUri('id'); need('type', (v) => v === 'EntryRequest', 'EntryRequest'); need('vessel', (v) => record(v) && uri(v.id) && uri(v.registry) && uri(v.possessor) && typeof v.capacity === 'number' && v.capacity >= 0, 'Vessel'); need('cargo', cargo, 'CargoManifest'); need('journey', (v) => record(v) && Array.isArray(v.events) && v.events.every(uri) && (!('exitEvidence' in v) || uri(v.exitEvidence)), 'Journey'); need('destination', (v) => record(v) && uri(v.territory) && uri(v.port) && uri(v.route), 'destination'); },
+    EntryRequest: () => { needUri('id'); need('type', (v) => v === 'EntryRequest', 'EntryRequest'); need('vessel', vessel, 'Vessel'); need('cargo', cargo, 'CargoManifest'); need('journey', (v) => record(v) && Array.isArray(v.events) && v.events.every(uri) && (!('exitEvidence' in v) || uri(v.exitEvidence)), 'Journey'); need('destination', (v) => record(v) && uri(v.territory) && uri(v.port) && uri(v.route), 'destination'); },
+    VesselCreationRequest: () => { needUri('id'); need('type', (v) => v === 'VesselCreationRequest', 'VesselCreationRequest'); need('vessel', vessel, 'Vessel'); need('cargo', (v) => record(v) && Array.isArray(v.entries) && v.entries.length === 0, 'empty CargoManifest'); need('destination', (v) => record(v) && uri(v.territory) && uri(v.port) && !('route' in v), 'creation destination'); if ('journey' in value) issues.push({ path: '/journey', message: 'VesselCreationRequest must not include a journey' }); if ('route' in value) issues.push({ path: '/route', message: 'VesselCreationRequest must not include a route' }); if ('exitEvidence' in value) issues.push({ path: '/exitEvidence', message: 'VesselCreationRequest must not include exit evidence' }); },
     EntryRejected: () => { needUri('id'); need('type', (v) => v === 'EntryRejected', 'EntryRejected'); needUri('request'); needUri('territory'); },
     BerthingEvent: () => { needUri('id'); need('type', (v) => v === 'BerthingEvent', 'BerthingEvent'); needUri('vessel'); needUri('territory'); needUri('port'); needUri('request'); need('effectiveAt', (v) => typeof v === 'string' && validateInstant(v), 'RFC3339 instant'); },
     CargoOperationEvent: () => { needUri('id'); need('type', (v) => v === 'CargoOperationEvent', 'CargoOperationEvent'); needUri('vessel'); needUri('territory'); needUri('port'); need('operation', (v) => v === 'load' || v === 'unload', 'load or unload'); need('cargo', cargo, 'CargoManifest'); need('effectiveAt', (v) => typeof v === 'string' && validateInstant(v), 'RFC3339 instant'); },

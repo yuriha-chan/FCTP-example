@@ -48,6 +48,30 @@ function validateStringOrigins(value, field) {
   return value.map((entry) => canonicalOrigin(entry, field));
 }
 
+function validateStartingPorts(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) fail('Invalid starting ports');
+  return value.map((entry) => {
+    if (typeof entry !== 'string') fail('Invalid starting ports');
+    let url;
+    try { url = new globalThis.URL(entry); } catch { fail('Invalid starting ports'); }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) fail('Invalid starting ports');
+    return entry;
+  });
+}
+
+function validateVesselNames(value, playerNames) {
+  const source = value ?? {};
+  if (!record(source)) fail('Invalid vessel names');
+  const names = {};
+  for (const [name, vesselName] of Object.entries(source)) {
+    if (!playerNames.includes(name) || typeof vesselName !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(vesselName)) fail('Invalid vessel names');
+    names[name] = vesselName;
+  }
+  if (new Set(Object.values(names)).size !== Object.keys(names).length) fail('Invalid vessel names');
+  return names;
+}
+
 function validateAdministrator(value) {
   if (value === undefined) return undefined;
   if (typeof value !== 'string' || !/^@[A-Za-z0-9._-]+@[^@\s/]+$/.test(value)) fail('Invalid administrator');
@@ -88,7 +112,8 @@ export async function readDeploymentConfig(service, path) {
     const administrator = validateAdministrator(input.administrator);
     const homeAccountName = validateHomeAccountName(input.homeAccountName ?? 'system.home');
     if (administratorNames.some((name) => playerNames.includes(name))) fail('Invalid account names');
-    if (!record(input.vesselNames) || Object.keys(input.vesselNames).length !== playerNames.length || playerNames.some((name) => typeof input.vesselNames[name] !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(input.vesselNames[name])) || new Set(Object.values(input.vesselNames)).size !== playerNames.length) fail('Invalid vessel names');
+    const vesselNames = validateVesselNames(input.vesselNames, playerNames);
+    const startingPorts = validateStartingPorts(input.startingPorts);
     const adminSecret = await readSecret(resolveFile(input.adminSecretFile, base));
     const passwordFile = resolveFile(input.accountPasswordsFile, base);
     let accountPasswords;
@@ -98,7 +123,7 @@ export async function readDeploymentConfig(service, path) {
     try { accountPasswords = JSON.parse(await readFile(passwordFile, 'utf8')); } catch { fail('Invalid account password file'); }
     const accountNames = [...playerNames, ...administratorNames];
     if (!record(accountPasswords) || Object.keys(accountPasswords).length !== accountNames.length || accountNames.some((name) => typeof accountPasswords[name] !== 'string' || !accountPasswords[name])) fail('Invalid account passwords');
-    Object.assign(config, { playerNames, administratorNames, ...(administrator === undefined ? {} : { administrator }), homeAccountName, vesselNames: globalThis.structuredClone(input.vesselNames), adminSecret, accountPasswords });
+    Object.assign(config, { playerNames, administratorNames, ...(administrator === undefined ? {} : { administrator }), homeAccountName, vesselNames, startingPorts, adminSecret, accountPasswords });
   }
 
   if (service === 'policy' || service === 'simulation') {
@@ -141,7 +166,7 @@ export async function startDeployment(service, config) {
   try {
     if (service === 'authority') {
       const { createAuthorityApp } = await import('../apps/test-authority/dist/app.js');
-      app = await createAuthorityApp({ origin: config.origin, storeFile, keyFile, adminSecret: config.adminSecret, ...(config.administrator === undefined ? {} : { administrator: config.administrator }), playerNames: config.playerNames, administratorNames: config.administratorNames, vesselNames: config.vesselNames, accountPasswords: config.accountPasswords, homeAccountName: config.homeAccountName });
+      app = await createAuthorityApp({ origin: config.origin, storeFile, keyFile, adminSecret: config.adminSecret, ...(config.administrator === undefined ? {} : { administrator: config.administrator }), playerNames: config.playerNames, administratorNames: config.administratorNames, vesselNames: config.vesselNames, startingPorts: config.startingPorts, accountPasswords: config.accountPasswords, homeAccountName: config.homeAccountName });
     }
     if (service === 'policy') {
       const { createPolicyApp } = await import('../apps/territory-policy/dist/app.js');

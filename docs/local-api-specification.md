@@ -157,13 +157,13 @@ A `202` response, or any response indicating that a request was accepted, means 
 
 A response that carries a resulting local state or an authoritative local event may establish the local effect it describes. It MUST NOT be treated as completion of a downstream Registry or Territory effect.
 
-A Client MUST NOT treat an accepted entry request as a berth, an accepted departure request as a departure, an accepted cargo operation as a cargo change, or an accepted publication as a completed publication.
+A Client MUST NOT treat an accepted entry request as a berth, an accepted initial-vessel registration as a located vessel, an accepted departure request as a departure, an accepted cargo operation as a cargo change, or an accepted publication as a completed publication.
 
 ### 6.3 Completion evidence
 
 A Client MUST require the corresponding event or observation before claiming completion. In particular:
 
-- a berth requires a `BerthingEvent` for the exact entry request;
+- a berth requires a `BerthingEvent` for the exact entry or vessel-creation request;
 - a rejection requires an `EntryRejected` event;
 - a Registry departure requires the applicable Registry event and, where required, signed exit evidence;
 - a cargo or production operation requires the resulting state or event;
@@ -231,9 +231,9 @@ Required defaults:
 | `trustedRegistry` | `allowlist` | empty | Permits no Registry |
 | `acceptedRegistry` | `denylist` | empty | Permits any Registry |
 | `acceptedTerritory` | `allowlist` | empty | Permits no evidence Territory |
-| `vesselBuildingRegistry` | `allowlist` | empty | Permits no Registry; vessel creation is not defined by this convention |
+| `vesselBuildingRegistry` | `allowlist` | empty | Permits no Registry to have a vessel created |
 
-Entry without exit evidence MUST be governed by `trustedRegistry`. Entry with exit evidence MUST be governed by `acceptedRegistry` for the vessel's Registry and `acceptedTerritory` for the evidence Territory.
+Admission lists are independent. Entry without exit evidence MUST be governed by `trustedRegistry`. Entry with exit evidence MUST be governed by `acceptedRegistry` for the vessel's Registry and `acceptedTerritory` for the evidence Territory. An initial-vessel `VesselCreationRequest` MUST be governed only by `vesselBuildingRegistry` for the request's vessel Registry. It carries no route, journey, or exit evidence, so `trustedRegistry`, `acceptedRegistry`, `acceptedTerritory`, `requireExitEvidence`, and the entry-evidence and manifest rules MUST NOT be applied to it. A creation landing is a normal located visit; subsequent movement uses the ordinary entry and exit rules.
 
 The policy endpoint group additionally preserves `mismatchPolicy`, `reviewMode`, and `publicPorts`. The simulation endpoint group additionally preserves `manifestPolicy`, `reviewMode`, and `requireExitEvidence`.
 
@@ -396,7 +396,38 @@ Clients MAY use additional server-defined members but MUST NOT depend on their p
 
 ### 7.11 FCTP objects
 
-Requests and responses may contain FCTP objects defined by the FCTP protocol specification, including `Asset`, `Variety`, `AssetGrant`, `Vessel`, `CargoManifest`, `EntryRequest`, `DepartureRequest`, `EntryRejected`, `BerthingEvent`, `DepartureEvent`, `ExitEvent`, and `VoyageEvent`.
+Requests and responses may contain FCTP objects defined by the FCTP protocol specification, including `Asset`, `Variety`, `AssetGrant`, `Vessel`, `CargoManifest`, `EntryRequest`, `DepartureRequest`, `EntryRejected`, `BerthingEvent`, `DepartureEvent`, `ExitEvent`, and `VoyageEvent`. This convention also defines the `VesselCreationRequest` shape in Section 7.13.
+
+### 7.12 Initial vessel offer
+
+A Home vessel listing MAY include an initial-vessel offer:
+
+```ts
+interface InitialVesselOffer {
+  available: boolean;
+  registry: string;
+  capacity: number;
+  startingPorts: string[];
+}
+```
+
+`available` is `false` when the authenticated account already possesses a Registry vessel or has been issued an initial vessel. `registry` is the full Registry Actor URI that would allocate the vessel. `startingPorts` are retained configuration recommendations as absolute Port URIs; they are not permission, evidence of reachability, or a berth. `capacity` is the capacity the Registry would assign. A recommendation MUST NOT be treated as admission to the destination or as authorization to register any other Port.
+
+### 7.13 Vessel creation request
+
+An initial-vessel registration succeeds with `{ vessel: Vessel, request: VesselCreationRequest }`. The `VesselCreationRequest` is distinct from an `EntryRequest`:
+
+```ts
+interface VesselCreationRequest {
+  id: string;
+  type: 'VesselCreationRequest';
+  vessel: Vessel;
+  cargo: { entries: [] };
+  destination: { territory: string; port: string };
+}
+```
+
+It has no `route`, `journey`, or `exitEvidence`. The persisted request type MUST NOT be normalized into `EntryRequest`. The request ID is the arrival reference used by `BerthingEvent`, `EntryRejected`, `ExitEvent`, and Registry event binding.
 
 ## 8. Home
 
@@ -405,7 +436,7 @@ A Home server MUST implement the following routes.
 | Method and path | Required permission | Request | Success |
 |---|---|---|---|
 | `GET /local/home/endpoints` | none | None | `200 { endpoints: Array<{ method, path, permission }> }` |
-| `GET /local/home/vessels` | player | None | `200 { actor, vessels: Vessel[] }` |
+| `GET /local/home/vessels` | player | None | `200 { actor, vessels: Vessel[], initialVessel?: InitialVesselOffer }` |
 | `GET /local/home/permissions` | player | None | `200 { "<home-handle>": string[] }` |
 | `GET /local/home/administration` | player | None | `200 { actor, entries: AdministrationEntry[] }` |
 | `POST /local/home/administration` | player | `{ authorityId: string }` | `200 { entry: AdministrationEntry }` |
@@ -417,6 +448,8 @@ A Home server MUST implement the following routes.
 ### 8.1 Home vessel list
 
 `GET /local/home/vessels` MUST return only Registry vessels whose `possessor` equals the authenticated Player's Actor ID. It MUST NOT be treated as a full Registry fleet listing.
+
+The response MAY include `initialVessel` from the Home's Registry provider. The offer reflects retained configuration, not a world observation, admission decision, or reachability proof. `available` MUST be `false` when this account already possesses a Registry vessel or has been issued an initial vessel. `startingPorts` MUST list only configured recommended Port URIs. The route MUST perform no world IO and MUST NOT allocate, reserve, or register a vessel.
 
 The route MUST return `401 { "error": "unauthorized" }` for missing or invalid `player` permission. It MUST return `500 { "error": "vessel-listing-failed" }` if the owned-vessel listing fails.
 
@@ -487,6 +520,7 @@ A Registry server MUST implement the following routes.
 | `GET /local/registry/fleet` | administrator | None | `200` with the fleet map |
 | `GET /local/registry/state?vessel=<URI>` | player | Optional query | `200` with `VesselRegistryState` |
 | `GET /local/registry/actions?vessel=<URI>` | player | Required query | `200` with `LocalActionDiscovery` |
+| `POST /local/registry/vessels` | player | `{ id: string, name: string, port: string }` | `202 { vessel: Vessel, request: VesselCreationRequest }` |
 | `POST /local/registry/entry` | player | Entry request body | `202` with `EntryRequest` |
 | `POST /local/registry/departure` | player | Departure request body | `202` with `DepartureRequest` |
 | `POST /local/registry/adoption` | player | `{ adoption: boolean, vessel?: string }` | `200` with an empty body |
@@ -496,6 +530,8 @@ A Registry server MUST implement the following routes.
 A Registry administrator is an account authorized by the Registry's deployment configuration. An administrator MAY use a route marked `player` when the route's requirements explicitly allow administrator access.
 
 A Player caller MUST be accepted only for a vessel whose `possessor` equals that Player. If `vessel` is omitted, the Registry MUST use the default vessel when the caller is an administrator, or when the Player caller is its possessor.
+
+`POST /local/registry/vessels` is an account-scoped registration for a Player who does not yet possess a Registry vessel. It is not scoped to an existing vessel and MUST use the authenticated Player as the possessor.
 
 Registry error responses MAY be status-only. In particular:
 
@@ -544,6 +580,37 @@ The response MUST state that location and lifecycle reflect only events recorded
 `POST /local/registry/adoption` MUST accept a required boolean `adoption` and optional `vessel`. It MUST change the retained adoption flag and return `200` with an empty body.
 
 Acceptance of an entry or departure request MUST NOT be represented as completion of the corresponding world effect.
+
+A vessel created through initial-vessel registration has no arrival route. Its local visit MAY omit a route. A subsequent departure from that visit MUST supply a real owned outgoing route from the current port, and the resulting `ExitEvent` MUST carry that actual route. The creation request remains the original arrival reference for Registry event binding.
+
+### 9.5 Initial vessel registration
+
+`POST /local/registry/vessels` MUST accept only:
+
+```json
+{
+  "id": "<local vessel identifier>",
+  "name": "<display name>",
+  "port": "<recommended Port URI>"
+}
+```
+
+`id` MUST match `^[A-Za-z0-9][A-Za-z0-9._-]*$`; it is a local vessel identifier, not a URI, and MUST NOT be used as a caller-controlled resource URI. `name` MUST be a nonempty string after trimming. `port` MUST be an absolute Port URI currently listed in the Registry's configured starting-Port recommendations. The request MUST reject unknown or overriding fields, malformed IDs, and ports that are not recommended.
+
+The Registry MUST reject a caller that already possesses a Registry vessel or has been issued an initial vessel. It MUST resolve the exact published Port and its responsible Territory Actor without caller credentials: the Port document MUST have a matching `id`, and the Territory Actor document MUST have the exact `territory` ID, role `territory`, and an inbox. Caller credentials MUST NOT be sent to the resolved target. Public resolution SHOULD be bounded by a timeout.
+
+A successful registration MUST assign the authenticated Player as possessor, this Registry as Registry, capacity 100, the submitted display name, an empty cargo manifest, and a canonical vessel URI generated from the Registry origin and the local identifier. Ownership, initial-issuance, and collision checks MUST be atomic with allocation so concurrent submissions cannot allocate twice. The Registry MUST persist the vessel and the `VesselCreationRequest` atomically. The created vessel is initially unlocated and MUST have no berth until a `BerthingEvent`.
+
+Success MUST be `202 { vessel, request }` with the exact generated references. `request.destination` MUST name the resolved Territory and the submitted Port; `request.cargo.entries` MUST be empty. Acceptance MUST NOT be represented as a berth or as completion of the creation lifecycle.
+
+An ambiguous or lost registration response MUST be treated as unverified. A Client MUST NOT replay the registration or associate a response with a guessed local-ID URI; reconciliation MUST use the exact retained vessel and creation-request references.
+
+Errors:
+
+- `401 { "error": "unauthorized" }` for missing or invalid `player` permission;
+- `400` for malformed JSON, unsupported fields, an invalid local ID or name, an unrecommended Port, invalid resolved Port/Territory metadata, or an upstream response that is not successful or not JSON;
+- `409 { "error": "initial-vessel-unavailable" }` when the account already possesses a Registry vessel or has been issued an initial vessel, or the identifier collides;
+- `502` when a selected public Port or Territory fetch fails at the transport level.
 
 ## 10. Repository: Authoring
 
@@ -677,6 +744,8 @@ A terminal decision MUST be returned again without reversal or a second event. A
 
 A policy endpoint approval MAY produce a `BerthingEvent` immediately. A rejection MUST produce an `EntryRejected` event. A Client MUST NOT treat an accepted decision as a completed berth without the corresponding `BerthingEvent`.
 
+A `VesselCreationRequest` MUST be recognized as an arrival request distinct from `EntryRequest`. The policy endpoint MUST verify the actual Registry sender and proof, MUST require the vessel's Registry to pass `vesselBuildingRegistry`, and MUST NOT apply route, journey, exit-evidence, `trustedRegistry`, `acceptedRegistry`, or `acceptedTerritory` checks to it. The current `reviewMode` governs it consistently with other arrival requests. A creation approval MAY berth immediately. The `BerthingEvent` or `EntryRejected` MUST reference the creation request ID; the request MUST NOT be normalized into an `EntryRequest` and lose its authorization distinction.
+
 ## 12. Territory: Simulation Endpoints
 
 The following simulation endpoints are optional. A Territory server MAY implement any of them. If it implements an endpoint, it MUST satisfy the corresponding requirements.
@@ -772,6 +841,8 @@ A supplied section MUST contain all of its fields. `mining.capacity` and `manufa
 `GET /local/territory/admin/entry-requests` MUST return retained entry-request records. Decision routes MUST apply to the exact request ID and return a decision result containing `requestId`, `accepted`, and any available `reason`, `decision`, `event`, and `decidedAt`.
 
 A rejected request MUST produce an `EntryRejected` event. An approved request MAY remain pending until a later tick produces the `BerthingEvent`; the decision response MUST NOT by itself prove berthing. Terminal decisions MUST be returned again without reversal.
+
+A `VesselCreationRequest` MUST use the same arrival machinery but MUST be admitted only through `vesselBuildingRegistry` for the request's vessel Registry. It MUST NOT be subject to route, journey, exit-evidence, `trustedRegistry`, `acceptedRegistry`, `acceptedTerritory`, `requireExitEvidence`, or cargo-manifest comparison rules. An approved creation request remains pending until a later tick produces a `BerthingEvent` referencing the exact creation request ID. The request type MUST remain distinct from `EntryRequest`.
 
 ## 13. Discovery
 

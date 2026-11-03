@@ -114,7 +114,12 @@ interface RecoveryControlsProps {
 }
 
 function RecoveryControls({ record, onReadResource, onOpenContext, supportedContexts }: RecoveryControlsProps): ReactElement | null {
-  const vesselId = record.journey?.vesselId ?? intentInput(record, 'vesselId');
+  const initialVesselResource = record.intent.kind === 'initial-vessel'
+    ? record.resultReferences.find((reference) => reference.kind === 'resource' && reference.id.length > 0)
+    : undefined;
+  const vesselId = record.intent.kind === 'initial-vessel'
+    ? initialVesselResource?.id
+    : record.journey?.vesselId ?? intentInput(record, 'vesselId');
   const routePlanId = record.journey?.routePlanId;
   const authorityId = intentInput(record, 'authorityId');
   const resourceReferences = record.resultReferences.filter((reference) => reference.kind === 'resource');

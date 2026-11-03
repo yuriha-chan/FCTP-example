@@ -126,7 +126,9 @@ test('the configured administrator diplomatic token authorizes Registry fleet re
     const fleetResponse = await fetch(`${fixture.origin}/local/registry/fleet`, { headers: bearer(fixture.registryAdminToken) });
     assert.equal(fleetResponse.status, 200, 'the configured administrator diplomatic token authorizes the Registry fleet read');
     const fleet = await fleetResponse.json() as Record<string, unknown>;
-    assert.ok(Object.hasOwn(fleet, fixture.app.ids.vessel), 'the fleet read returns the configured vessel');
+    const primaryVessel = fixture.app.ids.vessel;
+    assert.ok(primaryVessel, 'the configured authority provides a primary vessel');
+    assert.ok(Object.hasOwn(fleet, primaryVessel), 'the fleet read returns the configured vessel');
 
     const adoptionResponse = await fetch(`${fixture.origin}/local/registry/adoption`, {
       method: 'POST',

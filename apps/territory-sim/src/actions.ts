@@ -19,7 +19,8 @@ interface SimulationVisit {
   possessor: URI;
   simulationVessel: string;
   port: URI;
-  route: URI;
+  route?: URI;
+  arrivalType?: 'EntryRequest' | 'VesselCreationRequest';
   exited: boolean;
 }
 
@@ -30,6 +31,7 @@ export function discoverSimulationActions(input: {
   vesselId: URI;
   vessel: Vessel;
   origin: string;
+  routes?: Array<{ id: URI; from: string; to: string }>;
   visit?: SimulationVisit;
 }): LocalActionDiscovery {
   const { simulation, actor, player, vesselId, vessel, origin, visit } = input;
@@ -76,9 +78,21 @@ export function discoverSimulationActions(input: {
   const pendingHandling = Boolean(active && simulation.handlingJobs.some((job) => job.vessel === visit.simulationVessel));
   const departed = Boolean(visit?.exited || simVessel?.status === 'departed');
   const awaitingBerth = Boolean(active && simVessel?.status === 'pending');
-  const departureBody = { vessel: vesselId, territory: actor, port: visit?.port ?? `${origin}/objects/ports/main`, route: visit?.route ?? `${origin}/objects/routes/approach` };
   const departureReason = departed ? 'Visit has exited or departed.' : pendingHandling ? 'Cargo handling is pending.' : awaitingBerth ? 'Vessel is waiting for a berth.' : !active ? 'No active local visit.' : undefined;
-  actions.push({ id: 'departure', label: 'Request Registry departure', available: Boolean(active && simVessel?.status === 'berthed' && !pendingHandling), ...(departureReason ? { reason: departureReason } : {}), request: { method: 'POST', href: `${registryBase}/local/registry/departure`, body: departureBody }, effect: 'Asks the Registry to initiate departure from the current local berth.' });
+  if (departureReason) {
+    actions.push({ id: 'departure', label: 'Request Registry departure', available: false, reason: departureReason, effect: 'Asks the Registry to initiate departure from the current local berth.' });
+  } else if (visit && (visit.arrivalType === 'VesselCreationRequest' || visit.route === undefined)) {
+    const outgoing = (input.routes ?? []).filter((route) => route.from === visit.port);
+    if (outgoing.length === 0) actions.push({ id: 'departure', label: 'Request Registry departure', available: false, reason: 'No owned outgoing route from the current port.', effect: 'Asks the Registry to initiate departure from the current local berth.' });
+    for (const route of outgoing) actions.push({
+      id: `departure:${String(route.id).split('/').at(-1)}`, label: `Request Registry departure via ${String(route.id).split('/').at(-1)}`, available: true,
+      request: { method: 'POST', href: `${registryBase}/local/registry/departure`, body: { vessel: vesselId, territory: actor, port: visit.port, route: route.id } },
+      effect: 'Asks the Registry to initiate departure from the current local berth using the selected outgoing route.'
+    });
+  } else if (visit) {
+    const departureBody = { vessel: vesselId, territory: actor, port: visit.port, route: visit.route };
+    actions.push({ id: 'departure', label: 'Request Registry departure', available: true, request: { method: 'POST', href: `${registryBase}/local/registry/departure`, body: departureBody }, effect: 'Asks the Registry to initiate departure from the current local berth.' });
+  }
   const activeHandling = active ? simulation.handlingJobs.filter((job) => job.vessel === visit.simulationVessel) : [];
   return {
     kind: 'simulation', actor, player, vessel: vesselId, observedAt: new Date().toISOString(),

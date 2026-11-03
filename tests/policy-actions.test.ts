@@ -125,6 +125,7 @@ test('policy HTTP action examples execute through an authenticated Player and re
   const nativeToken = tokens.get('player')!.native;
   const otherToken = tokens.get('other')!.diplomatic;
   const vessel = authority.ids.vessel;
+  assert.ok(vessel, 'the configured players have a primary vessel');
   const discoveryUrl = `${territoryOrigin}/local/territory/actions?vessel=${encodeURIComponent(vessel)}`;
   const discover = (token: string) => fetch(discoveryUrl, { headers: { Authorization: `Bearer ${token}` } });
   const execute = (request: { method: 'GET' | 'POST'; href: string; body?: Record<string, unknown> }, token = playerToken) => fetch(request.href, {

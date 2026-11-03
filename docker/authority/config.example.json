@@ -9,9 +9,7 @@
   "playerNames": ["player", "player-2"],
   "administratorNames": ["governor"],
   "administrator": "@governor@authority.example.org",
-  "vesselNames": {
-    "player": "player-vessel",
-    "player-2": "player-2-vessel"
-  },
+  "vesselNames": {},
+  "startingPorts": ["https://west.example.org/objects/ports/east"],
   "accountPasswordsFile": "/run/secrets/account-passwords.json"
 }

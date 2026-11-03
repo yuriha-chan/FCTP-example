@@ -33,6 +33,8 @@ test('actual HTTP circulation keeps Territory decisions, Registry adoption, and 
   const policyOrigin = `http://127.0.0.1:${await freePort()}`;
   const simOrigin = `http://127.0.0.1:${await freePort()}`;
   const authority = await createAuthorityApp({ origin: authorityOrigin, storeFile: join(directory, 'authority.json'), adminSecret: admin });
+  const primaryVessel = authority.ids.vessel;
+  assert.ok(primaryVessel, 'the configured authority provides a primary vessel');
   const policy = await createPolicyApp({ origin: policyOrigin, storeFile: join(directory, 'policy.json'), adminSecret: admin });
   const simulation = await createSimulationApp({ origin: simOrigin, storeFile: join(directory, 'simulation.json'), peerOrigin: policyOrigin, adminSecret: admin });
   await authority.authority.listen(Number(new URL(authorityOrigin).port));
@@ -106,11 +108,11 @@ test('actual HTTP circulation keeps Territory decisions, Registry adoption, and 
     await pump(policy.host.server);
     await pump(authority.authority.server);
     const entryId = String(entry.id);
-    assert.equal((await policyState()).state.vessels[authority.ids.vessel]!.manifest.entries.length, 0, 'initial Registry vessel is locally empty');
-    assert.equal((await operate(policyOrigin, '/local/territory/load', playerHeaders(policy.ids.actor), { vessel: authority.ids.vessel, variety: policy.ids.varieties.metal, count: 1 })).status, 200, 'active possessor loads through actual Player-authenticated endpoint');
+    assert.equal((await policyState()).state.vessels[primaryVessel]!.manifest.entries.length, 0, 'initial Registry vessel is locally empty');
+    assert.equal((await operate(policyOrigin, '/local/territory/load', playerHeaders(policy.ids.actor), { vessel: primaryVessel, variety: policy.ids.varieties.metal, count: 1 })).status, 200, 'active possessor loads through actual Player-authenticated endpoint');
     const loaded = await policyState();
     assert.equal(loaded.state.portInventory[policy.ids.varieties.metal], 0);
-    assert.deepEqual(loaded.state.vessels[authority.ids.vessel]!.manifest.entries, [{ variety: policy.ids.varieties.metal, count: 1, data: {} }]);
+    assert.deepEqual(loaded.state.vessels[primaryVessel]!.manifest.entries, [{ variety: policy.ids.varieties.metal, count: 1, data: {} }]);
     await pump(policy.host.server);
     await pump(authority.authority.server);
     artifacts.activityWrappers.push((await archivedActivities(policy.host.server, 'CargoOperationEvent')).at(-1));
@@ -133,7 +135,7 @@ test('actual HTTP circulation keeps Territory decisions, Registry adoption, and 
     const fetchedExit = await json<Record<string, unknown>>(await fetch(aExitId));
     artifacts.objects.push(fetchedExit);
     assert.equal(fetchedExit.type, 'ExitEvent');
-    const resolved = await resolveExitEvidence(aExitId, { vessel: authority.ids.vessel, registry: authority.ids.actor.registry });
+    const resolved = await resolveExitEvidence(aExitId, { vessel: primaryVessel, registry: authority.ids.actor.registry });
     assert.equal(resolved.verification.cryptographic.verified, true, 'real HTTP proof verification');
     assert.equal(resolved.verification.attribution.attributed, true, 'key belongs to A Territory');
     assert.equal(resolved.verification.expectedIssuer.matches, true, 'A is expected evidence publisher');
@@ -199,7 +201,7 @@ test('actual HTTP circulation keeps Territory decisions, Registry adoption, and 
     const bExit = await json<Record<string, unknown>>(await fetch(bExitId));
     artifacts.objects.push(bExit);
     assert.equal(bExit.type, 'ExitEvent');
-    const independentlyVerified = await resolveExitEvidence(bExitId, { vessel: authority.ids.vessel, registry: authority.ids.actor.registry });
+    const independentlyVerified = await resolveExitEvidence(bExitId, { vessel: primaryVessel, registry: authority.ids.actor.registry });
     assert.equal(independentlyVerified.verification.cryptographic.verified, true, 'B ExitEvent proof independently verifies');
     assert.equal(independentlyVerified.verification.attribution.attributed, true);
     assert.equal(independentlyVerified.verification.expectedIssuer.matches, true);
@@ -241,7 +243,7 @@ test('actual HTTP circulation keeps Territory decisions, Registry adoption, and 
     assert.ok(decision.evidence?.verification && decision.evidence.difference, 'decision retains real evidence verification and descriptive cargo difference');
     artifacts.localDecisions.push(decision);
     assert.deepEqual((mismatch as { cargo: unknown }).cargo, { entries: [] }, 'Registry declaration remains unmodified');
-    assert.ok((await policyState()).state.vessels[authority.ids.vessel] === undefined, 'rejected manifest was not installed as a vessel');
+    assert.ok((await policyState()).state.vessels[primaryVessel] === undefined, 'rejected manifest was not installed as a vessel');
   });
 
   console.log(`CIRCULATION_ARTIFACT ${JSON.stringify({ format: 'sanitized-circulation-observation', evidence: { aExitId, bEntryId }, ...artifacts })}`);

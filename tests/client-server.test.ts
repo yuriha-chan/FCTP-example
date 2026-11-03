@@ -2175,6 +2175,7 @@ interface ProductionWorld {
   origins: { authority: string; policy: string; simulation: string };
   adminSecret: string;
   authority: Awaited<ReturnType<typeof createAuthorityApp>>;
+  vessel: URI;
   policy: Awaited<ReturnType<typeof createPolicyApp>>;
   simulation: Awaited<ReturnType<typeof createSimulationApp>>;
   accounts: Record<'first' | 'second', AccountRecord>;
@@ -2279,6 +2280,8 @@ async function startProductionWorld(directory: string, options: ProductionWorldO
   assert.equal(registryDigest.status, 202);
   assert.equal(await authority.authority.server.processOutbox(), 1);
   assert.equal(await authority.authority.server.processInbox(), 1);
+  const primaryVessel = authority.ids.vessel;
+  assert.ok(primaryVessel, 'the production fixture provides a primary vessel');
   const administratorKey = administratorName === playerNames[0] ? 'first' : 'second';
   for (const authorityId of [policy.ids.actor, simulation.ids.actor, authority.ids.actor.registry, authority.ids.actor.home]) {
     const claimed = await fetch(`${origins.authority}/local/home/administration`, {
@@ -2289,7 +2292,7 @@ async function startProductionWorld(directory: string, options: ProductionWorldO
     assert.equal(claimed.status, 200, `Home stores the administration entry for ${authorityId}`);
   }
   return {
-    origins, adminSecret, authority, policy, simulation, accounts, nativeTokens,
+    origins, adminSecret, authority, vessel: primaryVessel, policy, simulation, accounts, nativeTokens,
     ...(governor === undefined ? {} : { governor }),
     async close() {
       await Promise.allSettled([simulation.host.close(), policy.host.close(), authority.authority.close()]);
@@ -2479,7 +2482,7 @@ const task08AdminHeaders = (world: ProductionWorld) => ({ Authorization: `Bearer
 
 async function submitLogisticsEntry(clientOrigin: string, world: ProductionWorld, territory: 'policy' | 'simulation'): Promise<ActionRecord> {
   const target = world[territory];
-  const response = await fetch(new URL(logisticsPath(world.authority.ids.vessel, '/entry'), clientOrigin), {
+  const response = await fetch(new URL(logisticsPath(world.vessel, '/entry'), clientOrigin), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -2569,7 +2572,7 @@ async function executeOperation(
   const response = await fetch(new URL(`/api/production/operations/${encodeURIComponent(operationId)}/execute`, clientOrigin), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ accountId: world.accounts.first.id, vesselId: world.authority.ids.vessel, inputs, ...extra })
+    body: JSON.stringify({ accountId: world.accounts.first.id, vesselId: world.vessel, inputs, ...extra })
   });
   const body = await readJsonResponse(response);
   return { status: response.status, body, ...(response.status === 200 ? { action: actionFromBody(body) } : {}) };
@@ -2579,7 +2582,7 @@ test('logistics refresh retains scoped Registry and Territory observations, read
   const directory = await mkdtemp(join(tmpdir(), 'fctp-task08-logistics-'));
   const world = await startProductionWorld(directory);
   const opened = await openProductionClient(join(directory, 'client.json'), world);
-  const vessel = world.authority.ids.vessel;
+  const vessel = world.vessel;
   const accountId = world.accounts.first.id;
   try {
     const readCalls = opened.calls.length;
@@ -2649,7 +2652,7 @@ test('logistics entry and departure reconcile real Registry evidence, and adopti
   const directory = await mkdtemp(join(tmpdir(), 'fctp-task08-circulation-'));
   const world = await startProductionWorld(directory);
   const opened = await openProductionClient(join(directory, 'client.json'), world);
-  const vessel = world.authority.ids.vessel;
+  const vessel = world.vessel;
   const accountId = world.accounts.first.id;
   const refresh = async (): Promise<unknown> => {
     const response = await fetch(new URL(logisticsPath(vessel, '/refresh'), opened.client.origin), {
@@ -2730,7 +2733,7 @@ test('production exposes typed Policy operations and executes immediate mine, ma
   const storeFile = join(directory, 'client.json');
   const world = await startProductionWorld(directory);
   const opened = await openProductionClient(storeFile, world);
-  const vessel = world.authority.ids.vessel;
+  const vessel = world.vessel;
   const accountId = world.accounts.first.id;
   const secondVessel = world.authority.ids.vessels.other!;
   try {
@@ -2882,7 +2885,7 @@ test('production never sends credentials to a foreign advertised operation endpo
   try {
     const refreshed = await fetch(new URL('/api/production/refresh', opened.client.origin), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ accountId: world.accounts.first.id, vesselId: world.authority.ids.vessel })
+      body: JSON.stringify({ accountId: world.accounts.first.id, vesselId: world.vessel })
     });
     assert.equal(refreshed.status, 200);
     const mine = requireOperation(await refreshed.json(), 'mine', (operation) => operation.authorityId === world.policy.ids.actor);
@@ -2909,7 +2912,7 @@ test('Policy completion cannot reuse an audit entry from a previous identical op
   try {
     const refreshed = await fetch(new URL('/api/production/refresh', opened.client.origin), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ accountId: world.accounts.first.id, vesselId: world.authority.ids.vessel })
+      body: JSON.stringify({ accountId: world.accounts.first.id, vesselId: world.vessel })
     });
     const mine = requireOperation(await refreshed.json(), 'mine', (operation) => operation.authorityId === world.policy.ids.actor);
     const first = await executeOperation(opened.client.origin, world, operationIdentifier(mine), { count: 1 });
@@ -2972,7 +2975,7 @@ test('equal local job numbers at independent simulation authorities retain disti
   try {
     await discoverOrigins(opened.client.origin, [origin]);
     const refreshed = await fetch(new URL('/api/production/refresh', opened.client.origin), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accountId: world.accounts.first.id, vesselId: world.authority.ids.vessel })
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accountId: world.accounts.first.id, vesselId: world.vessel })
     });
     const body = await refreshed.json();
     const first = await executeOperation(opened.client.origin, world, operationIdentifier(requireOperation(body, 'mine', (operation) => operation.authorityId === world.simulation.ids.actor)), { count: 1, duration: 1 });
@@ -2984,7 +2987,7 @@ test('equal local job numbers at independent simulation authorities retain disti
     for (const [reference, authorityId] of [[firstJob, world.simulation.ids.actor], [secondJob, other.ids.actor]] as const) {
       const url = new URL(`/api/production/jobs/${encodeURIComponent(reference.id)}`, opened.client.origin);
       url.searchParams.set('accountId', world.accounts.first.id);
-      url.searchParams.set('vesselId', world.authority.ids.vessel);
+      url.searchParams.set('vesselId', world.vessel);
       const response = await fetch(url);
       assert.equal(response.status, 200);
       const page = await response.json() as { data: { job: { authorityId: string } } };
@@ -3004,7 +3007,7 @@ test('production tracks Simulation jobs and handling as pending until test-admin
   const storeFile = join(directory, 'client.json');
   const world = await startProductionWorld(directory);
   let opened = await openProductionClient(storeFile, world);
-  const vessel = world.authority.ids.vessel;
+  const vessel = world.vessel;
   const accountId = world.accounts.first.id;
   const adminRequest = async (path: string): Promise<Response> => fetch(`${world.origins.simulation}${path}`, { method: 'POST', headers: task08AdminHeaders(world), body: '{}' });
   const refreshProduction = async (): Promise<unknown> => {
@@ -3705,16 +3708,16 @@ test('administration controls use login-derived tokens, current values, and admi
     const tickRefresh = await refreshActivityAction(opened.client.origin, first.id, tickAction.id);
     assert.match(JSON.stringify(tickRefresh), /completed|evidence/i, 'tick completion is established by observed evidence');
 
-    const adoption = await control(world.authority.ids.actor.registry, 'adoption', { vesselId: world.authority.ids.vessel, adoption: false });
+    const adoption = await control(world.authority.ids.actor.registry, 'adoption', { vesselId: world.vessel, adoption: false });
     assert.equal(adoption.status, 200);
     const adoptionAction = actionFromBody(adoption.body);
     assert.match(JSON.stringify(adoptionAction.intent), /adoption/i);
     assert.match(JSON.stringify(adoptionAction.intent.inputs), /false/);
-    assert.equal((await world.authority.registry.state(world.authority.ids.vessel)).adoption, false);
+    assert.equal((await world.authority.registry.state(world.vessel)).adoption, false);
 
     const fleetPage = await administrationRefresh(opened.client.origin, { accountId: first.id, authorityId: world.authority.ids.actor.registry });
     assert.equal(fleetPage.status, 200);
-    const fleetVessel = findRecord(fleetPage.body, (entry) => isRecord(entry.vessel) && entry.vessel.id === world.authority.ids.vessel && entry.adoption === false);
+    const fleetVessel = findRecord(fleetPage.body, (entry) => isRecord(entry.vessel) && entry.vessel.id === world.vessel && entry.adoption === false);
     assert.ok(fleetVessel, 'Registry administration reads the fleet and its current per-vessel adoption');
     const otherVessel = world.authority.ids.vessels.other!;
     const otherAdoption = await control(world.authority.ids.actor.registry, 'adoption', { vesselId: otherVessel, adoption: false });
@@ -3798,7 +3801,7 @@ test('administration approves and rejects manual entry requests with real Regist
     assert.match(JSON.stringify(rejectedAction.intent.inputs), /harbor-closed/);
     assert.ok(rejectedAction.resultReferences.some((reference) => reference.id === rejectedReference.id), 'the decision action retains the request reference');
     await exchangeWorld(world.policy.host.server, world.authority.authority.server);
-    const rejectedRegistry = await world.authority.registry.state(world.authority.ids.vessel);
+    const rejectedRegistry = await world.authority.registry.state(world.vessel);
     assert.equal(rejectedRegistry.events.some((event) => event.type === 'EntryRejected' && event.request === rejectedReference.id), true, 'rejection produces real Registry EntryRejected evidence');
     const rejectedCompleted = await refreshActivityAction(opened.client.origin, accountId, rejectedAction.id);
     assert.equal(rejectedCompleted.outcome.status, 'failed', 'EntryRejected establishes a failed outcome');
@@ -3815,7 +3818,7 @@ test('administration approves and rejects manual entry requests with real Regist
     const approvedAction = actionFromBody(approved.body);
     assert.equal(approvedAction.submission.status, 'accepted');
     await exchangeWorld(world.policy.host.server, world.authority.authority.server);
-    const approvedRegistry = await world.authority.registry.state(world.authority.ids.vessel);
+    const approvedRegistry = await world.authority.registry.state(world.vessel);
     assert.equal(approvedRegistry.events.some((event) => event.type === 'BerthingEvent' && event.request === approvedReference.id), true, 'policy approval produces real Registry BerthingEvent evidence');
     const approvedCompleted = await refreshActivityAction(opened.client.origin, accountId, approvedAction.id);
     assert.equal(approvedCompleted.outcome.status, 'completed');
@@ -3823,10 +3826,10 @@ test('administration approves and rejects manual entry requests with real Regist
 
     const repeated = await decide(approvedReference.id, 'approve', world.policy.ids.actor);
     assert.equal(repeated.status, 200);
-    assert.equal((await world.authority.registry.state(world.authority.ids.vessel)).events.filter((event) => event.type === 'BerthingEvent' && event.request === approvedReference.id).length, 1, 'repeated approval never creates another visit');
+    assert.equal((await world.authority.registry.state(world.vessel)).events.filter((event) => event.type === 'BerthingEvent' && event.request === approvedReference.id).length, 1, 'repeated approval never creates another visit');
     const ignored = await decide(approvedReference.id, 'reject', world.policy.ids.actor, 'late-rejection');
     assert.equal(ignored.status, 200);
-    assert.equal((await world.authority.registry.state(world.authority.ids.vessel)).events.some((event) => event.type === 'EntryRejected' && event.request === approvedReference.id), false, 'a conflicting later decision never creates compensation');
+    assert.equal((await world.authority.registry.state(world.vessel)).events.some((event) => event.type === 'EntryRejected' && event.request === approvedReference.id), false, 'a conflicting later decision never creates compensation');
 
     const simulationEntry = await submitLogisticsEntry(opened.client.origin, world, 'simulation');
     const simulationReference = simulationEntry.resultReferences.find((reference) => reference.kind === 'request');
@@ -3838,13 +3841,13 @@ test('administration approves and rejects manual entry requests with real Regist
     assert.equal(simulationApproved.status, 200);
     const simulationAction = actionFromBody(simulationApproved.body);
     await exchangeWorld(world.simulation.host.server, world.authority.authority.server);
-    assert.equal((await world.authority.registry.state(world.authority.ids.vessel)).events.some((event) => event.type === 'BerthingEvent' && event.request === simulationReference.id), false, 'simulation approval waits for a tick');
+    assert.equal((await world.authority.registry.state(world.vessel)).events.some((event) => event.type === 'BerthingEvent' && event.request === simulationReference.id), false, 'simulation approval waits for a tick');
     const beforeTick = await readActivityAction(opened.client.origin, accountId, simulationAction.id);
     assert.notEqual(beforeTick.outcome.status, 'completed', 'simulation approval is not berthing completion before the tick');
     const tick = await fetch(`${world.origins.simulation}/local/territory/admin/tick`, { method: 'POST', headers: adminHeaders, body: '{}' });
     assert.equal(tick.status, 200);
     await exchangeWorld(world.simulation.host.server, world.authority.authority.server);
-    assert.equal((await world.authority.registry.state(world.authority.ids.vessel)).events.some((event) => event.type === 'BerthingEvent' && event.request === simulationReference.id), true, 'the delayed simulation BerthingEvent is real Registry evidence');
+    assert.equal((await world.authority.registry.state(world.vessel)).events.some((event) => event.type === 'BerthingEvent' && event.request === simulationReference.id), true, 'the delayed simulation BerthingEvent is real Registry evidence');
     const simulationRefresh = await refreshAdministration(world.simulation.ids.actor);
     assert.match(JSON.stringify(simulationRefresh), /berth|event/i, 'the delayed simulation event becomes discoverable in the retained request data');
     const simulationCompleted = await refreshActivityAction(opened.client.origin, accountId, simulationAction.id);
@@ -3936,7 +3939,7 @@ test('traverse executes a saved connected route through actual local movement, s
   const control: { fail?: (url: URL, method: string) => boolean } = {};
   let opened = await openProductionClient(storeFile, world, { fetch: controllableJourneyFetch(calls, control) });
   const first = world.accounts.first;
-  const vessel = world.authority.ids.vessel;
+  const vessel = world.vessel;
   const adminHeaders = task08AdminHeaders(world);
   const policyEast = world.policy.ids.ports[0]!;
   const policyWest = world.policy.ids.ports[1]!;
@@ -4074,7 +4077,7 @@ test('traverse retains manual destination review, never resubmits on concurrent 
   const world = await startProductionWorld(directory, productionWorldOptionsWithJourney());
   const opened = await openProductionClient(join(directory, 'client.json'), world);
   const first = world.accounts.first;
-  const vessel = world.authority.ids.vessel;
+  const vessel = world.vessel;
   const adminHeaders = task08AdminHeaders(world);
   try {
     const admission = await fetch(`${world.origins.policy}/local/territory/admin/admission`, {
@@ -4153,7 +4156,7 @@ test('a boundary-start journey cannot enter another Territory while the vessel h
   const world = await startProductionWorld(directory, productionWorldOptionsWithJourney());
   const opened = await openProductionClient(join(directory, 'client.json'), world);
   const accountId = world.accounts.first.id;
-  const vessel = world.authority.ids.vessel;
+  const vessel = world.vessel;
   try {
     await refreshExplore(opened.client.origin);
     const plan = await saveJourneyPlan(opened.client.origin, accountId, `${world.origins.simulation}/objects/boundaries/east`, world.simulation.ids.ports[0]!);
@@ -4179,7 +4182,7 @@ test('local journey completion requires observed movement rather than an acknowl
       movementPosts += 1;
       return Response.json({ success: true, event: {
         id: `${world.origins.policy}/objects/policy/voyage/unapplied`, type: 'VoyageEvent', kind: 'local-movement',
-        territory: world.policy.ids.actor, vessel: world.authority.ids.vessel,
+        territory: world.policy.ids.actor, vessel: world.vessel,
         details: { from: world.policy.ids.ports[0], to: world.policy.ids.ports[1], route: world.policy.ids.routes[1] },
         effectiveAt: new Date().toISOString()
       } });
@@ -4188,7 +4191,7 @@ test('local journey completion requires observed movement rather than an acknowl
   };
   const opened = await openProductionClient(join(directory, 'client.json'), world, { fetch: fetcher });
   const accountId = world.accounts.first.id;
-  const vessel = world.authority.ids.vessel;
+  const vessel = world.vessel;
   try {
     await fetch(`${world.origins.policy}/local/territory/admin/admission`, { method: 'POST', headers: task08AdminHeaders(world), body: JSON.stringify({ publicPorts: world.policy.ids.ports }) });
     await refreshExplore(opened.client.origin);
@@ -4226,7 +4229,7 @@ test('a lost Registry submission response remains uncertain across restart witho
   };
   let opened = await openProductionClient(storeFile, world, { fetch: fetcher });
   const accountId = world.accounts.first.id;
-  const vessel = world.authority.ids.vessel;
+  const vessel = world.vessel;
   try {
     await fetch(`${world.origins.policy}/local/territory/admin/admission`, { method: 'POST', headers: task08AdminHeaders(world), body: JSON.stringify({ publicPorts: world.policy.ids.ports }) });
     await refreshExplore(opened.client.origin);

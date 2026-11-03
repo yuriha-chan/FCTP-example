@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { compareCargo, validateModel, type BerthingEvent, type CargoManifest, type CargoOperationEvent, type DepartureEvent, type DepartureRequest, type EntryRejected, type EntryRequest, type ExitEvent, type URI, type VoyageEvent } from '@fctp/protocol';
+import { compareCargo, validateModel, type ArrivalRequest, type BerthingEvent, type CargoManifest, type CargoOperationEvent, type DepartureEvent, type DepartureRequest, type EntryRejected, type ExitEvent, type URI, type VoyageEvent } from '@fctp/protocol';
 import { resolveExitEvidence, type ExitEvidenceResult } from '@fctp/server-base';
-import { DEFAULT_ADMISSION, entryAdmissionAllows, type AdmissionList, type AdmissionPolicy, type Host, type VerificationReport } from '@fctp/server-base';
+import { DEFAULT_ADMISSION, admissionPermits, entryAdmissionAllows, type AdmissionList, type AdmissionPolicy, type HandlerContext, type Host, type VerificationReport } from '@fctp/server-base';
 import {
   changePolicy, exitVessel, loadCargo, manufacture, mineOre, prepareVessel, transferPortToWarehouse, transferWarehouseToPort, unloadCargo,
   type Commodity, type OperationResult, type Policy, type TerritoryState
@@ -29,8 +29,9 @@ export interface VesselVisit {
   possessor: URI;
   registry: URI;
   entryRequest: URI;
+  arrivalType?: 'EntryRequest' | 'VesselCreationRequest';
   port: URI;
-  route: URI;
+  route?: URI;
   departureRequest?: URI;
   departed: boolean;
   cargo: CargoManifest;
@@ -50,7 +51,7 @@ export interface PolicyEntryEvidence {
   exit?: ExitEvent;
 }
 export interface PolicyEntryRequestRecord {
-  request: EntryRequest;
+  request: ArrivalRequest;
   hash: string;
   sender: URI;
   activityId: string;
@@ -76,7 +77,7 @@ export interface PolicyTerritoryLedger {
 export function expectedIssuer(object: unknown, visits: Record<URI, VesselVisit>): URI | undefined {
   if (!object || typeof object !== 'object') return undefined;
   const value = object as Record<string, unknown>;
-  if (value.type === 'EntryRequest' && value.vessel && typeof value.vessel === 'object') {
+  if ((value.type === 'EntryRequest' || value.type === 'VesselCreationRequest') && value.vessel && typeof value.vessel === 'object') {
     const vessel = value.vessel as Record<string, unknown>;
     return typeof vessel.registry === 'string' ? vessel.registry : undefined;
   }
@@ -144,14 +145,19 @@ export function installPolicyTerritory(host: Host, options: PolicyTerritoryOptio
     }, [{ actorId: territory, recipientActorId: visit.registry, inbox, object: event, activityId: `${event.id}/activity` }]);
     return result;
   });
-  const evaluateEntry = (ledger: PolicyTerritoryLedger, request: EntryRequest, verification: VerificationReport, resolved?: PolicyEntryEvidence): { decision: EntryDecision; event: BerthingEvent | EntryRejected } => {
+  const evaluateArrival = (ledger: PolicyTerritoryLedger, request: ArrivalRequest, verification: VerificationReport, resolved?: PolicyEntryEvidence): { decision: EntryDecision; event: BerthingEvent | EntryRejected } => {
     const policy = structuredClone(ledger.state.policy);
     const { admission } = ledger;
     const evidence = resolved?.exit;
     const validEvidence = resolved !== undefined && evidence !== undefined && positive(resolved.verification) && resolved.binding.bound;
     let accepted = policy.decisions.entry !== 'deny';
     let reason: string | undefined = accepted ? undefined : 'entry-policy-rejected';
-    if (resolved || admission.mismatchPolicy === 'evidence') {
+    if (request.type === 'VesselCreationRequest') {
+      if (accepted && !admissionPermits(admission.vesselBuildingRegistry, request.vessel.registry)) {
+        accepted = false;
+        reason = 'vessel-building-registry-not-accepted';
+      }
+    } else if (resolved || admission.mismatchPolicy === 'evidence') {
       if (!validEvidence) {
         accepted = false;
         reason = 'exit-evidence-invalid-or-unbound';
@@ -173,12 +179,12 @@ export function installPolicyTerritory(host: Host, options: PolicyTerritoryOptio
     }
     const decision: EntryDecision = { request: request.id, accepted, verification: structuredClone(verification), ...(reason ? { reason } : {}), policy: { ...policy, admission: structuredClone(admission) }, ...(resolved ? { evidence: { verification: resolved.verification, binding: resolved.binding, difference: resolved.difference } } : {}) };
     if (accepted) {
-      const manifest = admission.mismatchPolicy === 'evidence' ? resolved!.exit!.cargo : request.cargo;
+      const manifest = request.type === 'EntryRequest' && admission.mismatchPolicy === 'evidence' ? resolved!.exit!.cargo : request.cargo;
       const result = prepareVessel(ledger.state, request.vessel.id, request.vessel.capacity, manifest, request.vessel.registry);
       if (!result.success) { decision.accepted = false; decision.reason = result.error; }
       else {
         ledger.state = result.state;
-        ledger.visits[request.vessel.id] = { vessel: request.vessel.id, possessor: request.vessel.possessor, registry: request.vessel.registry, entryRequest: request.id, port: request.destination.port, route: request.destination.route, departed: false, cargo: structuredClone(manifest) };
+        ledger.visits[request.vessel.id] = { vessel: request.vessel.id, possessor: request.vessel.possessor, registry: request.vessel.registry, entryRequest: request.id, arrivalType: request.type, port: request.destination.port, ...(request.type === 'EntryRequest' ? { route: request.destination.route } : {}), departed: false, cargo: structuredClone(manifest) };
       }
     }
     ledger.decisions[request.id] = decision;
@@ -187,21 +193,21 @@ export function installPolicyTerritory(host: Host, options: PolicyTerritoryOptio
       : { id: `${policyObjects}/entry-rejected/${randomUUID()}`, type: 'EntryRejected', request: request.id, territory, ...(decision.reason ? { reason: decision.reason } : {}) };
     return { decision, event };
   };
-  host.server.on(territory, 'EntryRequest', (context, raw) => serial(async () => {
+  const onArrival = (model: ArrivalRequest['type']) => (context: HandlerContext, raw: unknown) => serial(async () => {
     if (!positive(context.verification)) return;
-    const valid = validateModel<EntryRequest>(raw, 'EntryRequest');
-    if (!valid.success) throw new TypeError('Invalid EntryRequest');
+    const valid = validateModel<ArrivalRequest>(raw, model);
+    if (!valid.success) throw new TypeError(`Invalid ${model}`);
     const request = valid.data;
     if (context.senderActor !== request.vessel.registry) return;
-    if (request.destination.territory !== territory || !options.portIds.includes(request.destination.port) || !options.routeIds.includes(request.destination.route)) return;
+    if (request.destination.territory !== territory || !options.portIds.includes(request.destination.port) || (request.type === 'EntryRequest' && !options.routeIds.includes(request.destination.route))) return;
     const inbox = await host.server.resolveRecipientInbox(context.senderActor);
-    const resolved = request.journey.exitEvidence ? await resolveExitEvidence(request.journey.exitEvidence, { vessel: request.vessel.id, registry: request.vessel.registry }, options.fetcher ? { fetcher: options.fetcher } : {}) : undefined;
+    const resolved = request.type === 'EntryRequest' && request.journey.exitEvidence ? await resolveExitEvidence(request.journey.exitEvidence, { vessel: request.vessel.id, registry: request.vessel.registry }, options.fetcher ? { fetcher: options.fetcher } : {}) : undefined;
     const evidence: PolicyEntryEvidence | undefined = resolved ? { verification: resolved.verification, binding: resolved.binding, difference: compareCargo(request.cargo, resolved.exit?.cargo ?? { entries: [] }), ...(resolved.exit ? { exit: structuredClone(resolved.exit) } : {}) } : undefined;
     const ledger = await get();
     const hash = JSON.stringify(request);
     const existing = ledger.requests?.[request.id];
     if (existing) {
-      if (existing.hash !== hash) throw new TypeError('Conflicting reuse of EntryRequest ID');
+      if (existing.hash !== hash) throw new TypeError(`Conflicting reuse of ${model} ID`);
       return;
     }
     if (ledger.processed.includes(context.activityId) || ledger.decisions[request.id]) return;
@@ -216,7 +222,7 @@ export function installPolicyTerritory(host: Host, options: PolicyTerritoryOptio
       await host.server.commit((domain) => { domain.policyTerritory = ledger; });
       return;
     }
-    const { event } = evaluateEntry(ledger, request, context.verification, evidence);
+    const { event } = evaluateArrival(ledger, request, context.verification, evidence);
     ledger.processed.push(context.activityId);
     host.server.registerResource(event.id, event);
     await host.server.commit((domain) => {
@@ -224,7 +230,9 @@ export function installPolicyTerritory(host: Host, options: PolicyTerritoryOptio
       if (current.processed.includes(context.activityId) || current.decisions[request.id]) return;
       domain.policyTerritory = ledger;
     }, [{ actorId: territory, recipientActorId: context.senderActor, inbox, object: event, activityId: `${event.id}/activity` }]);
-  }));
+  });
+  host.server.on(territory, 'EntryRequest', onArrival('EntryRequest'));
+  host.server.on(territory, 'VesselCreationRequest', onArrival('VesselCreationRequest'));
   host.server.on(territory, 'DepartureRequest', (context, raw) => serial(async () => {
     if (!positive(context.verification)) return;
     const valid = validateModel<DepartureRequest>(raw, 'DepartureRequest');
@@ -236,11 +244,13 @@ export function installPolicyTerritory(host: Host, options: PolicyTerritoryOptio
     const visit = ledger.visits[request.vessel];
     if (!visit || visit.departed || visit.port !== request.port) return;
     let departureRoute = visit.route;
-    if (request.route !== undefined && request.route !== visit.route) {
+    if (visit.arrivalType === 'VesselCreationRequest' || (request.route !== undefined && request.route !== visit.route)) {
+      if (request.route === undefined) return;
       const route = routeEndpoints.get(request.route);
       if (!route || !options.routeIds.includes(request.route) || route.from !== visit.port) return;
       departureRoute = request.route;
     }
+    if (departureRoute === undefined) return;
     const now = (options.now ?? (() => new Date().toISOString()))();
     const departure: DepartureEvent = { id: `${policyObjects}/departure/${randomUUID()}`, type: 'DepartureEvent', vessel: visit.vessel, territory, port: visit.port, request: request.id, effectiveAt: now };
     const unsigned: Omit<ExitEvent, 'proof'> = { id: `${policyObjects}/exit/${randomUUID()}`, type: 'ExitEvent', vessel: visit.vessel, territory, route: departureRoute, entryRequest: visit.entryRequest, departureEvent: departure.id, cargo: structuredClone(ledger.state.vessels[visit.vessel]!.manifest), effectiveAt: now };
@@ -341,7 +351,7 @@ export function installPolicyTerritory(host: Host, options: PolicyTerritoryOptio
         ]);
         return { requestId, accepted: false, reason: decision.reason, decision, event: record.event, decidedAt: now };
       }
-      const { decision, event } = evaluateEntry(ledger, record.request, record.verification, record.evidence);
+      const { decision, event } = evaluateArrival(ledger, record.request, record.verification, record.evidence);
       record.status = decision.accepted ? 'accepted' : 'rejected';
       record.decision = decision;
       record.event = { id: event.id, type: event.type };

@@ -387,6 +387,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
   });
   const seedServers = [...(options.seedServers ?? [])];
   const logistics = createLogisticsService(state, fetcher, observations, actions, {
+    rememberAuthority: discovery.remember,
     ...(options.observationTimeoutMs === undefined ? {} : { timeoutMs: options.observationTimeoutMs })
   });
   const administration = createAdministrationService(state, fetcher, observations, actions, {
@@ -570,6 +571,14 @@ export async function createClientApplication(options: CreateClientApplicationOp
           const accountId = accountScope(url, undefined, true)!;
           await requireClient(state, request, accountId);
           await send(200, await logistics.vesselCandidates(accountId));
+          return true;
+        }
+        if (request.method === 'POST' && pathname === '/api/logistics/vessels') {
+          const body = await readJsonBody(request);
+          const accountId = accountScope(url, body, true)!;
+          await requireClient(state, request, accountId);
+          await requireAccount(state, accountId);
+          await send(200, { action: await logistics.initialVessel(accountId, body) });
           return true;
         }
         if (request.method === 'POST' && pathname === '/api/logistics/vessels/refresh') {

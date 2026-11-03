@@ -313,6 +313,134 @@ function candidateResponse(accountId = 'account-a', candidates: LogisticsVesselC
   }, { accountId });
 }
 
+const initialVesselSource = 'https://home.test:4200/local/logistics/initial-vessel';
+
+function initialVesselOffer(options: {
+  state?: string;
+  available?: boolean;
+  error?: string;
+  startingPorts?: string[];
+} = {}): Record<string, unknown> {
+  return {
+    state: options.state ?? 'available',
+    source: initialVesselSource,
+    observedAt,
+    ...(options.error === undefined ? {} : { error: options.error }),
+    value: {
+      available: options.available ?? true,
+      registry: registryId,
+      capacity: 100,
+      startingPorts: options.startingPorts ?? [eastId]
+    }
+  };
+}
+
+function startingPortObservation(
+  portId: string,
+  name: string,
+  options: {
+    portState?: string;
+    actorState?: string;
+    portError?: string;
+    actorError?: string;
+    observed?: string;
+  } = {}
+): Record<string, unknown> {
+  return {
+    portId,
+    port: {
+      state: options.portState ?? 'available',
+      source: portId,
+      observedAt: options.observed ?? observedAt,
+      ...(options.portError === undefined ? {} : { error: options.portError }),
+      value: { id: portId, name, territory: territoryId }
+    },
+    authority: {
+      state: options.actorState ?? 'available',
+      source: territoryId,
+      observedAt: options.observed ?? observedAt,
+      ...(options.actorError === undefined ? {} : { error: options.actorError }),
+      value: { id: territoryId, role: 'territory', name: 'Home Territory' }
+    }
+  };
+}
+
+function initialVesselCandidatesResponse(options: {
+  accountId?: string;
+  candidates?: LogisticsVesselCandidate[];
+  offer?: Record<string, unknown>;
+  ports?: Record<string, unknown>[];
+  blockers?: string[];
+} = {}): unknown {
+  const accountId = options.accountId ?? 'account-a';
+  return pageResponse({
+    accountId,
+    candidates: options.candidates ?? [],
+    blockers: options.blockers ?? [],
+    ...(options.offer === undefined ? {} : { initialVessel: options.offer }),
+    ...(options.ports === undefined ? {} : { startingPorts: options.ports })
+  }, options.offer === undefined ? {} : { [String(options.offer.source)]: options.offer }, { accountId });
+}
+
+function initialVesselAction(
+  localId = 'harbor-skiff-7',
+  name = 'Harbor Skiff',
+  portId = eastId,
+  vesselId = vesselAliceId,
+  accountId = 'account-a',
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return actionRecord({
+    accountId,
+    targetId: registryId,
+    resultReferences: [
+      { kind: 'resource', id: vesselId },
+      { kind: 'request', id: 'https://home.test:4200/local/registry/requests/initial-1' }
+    ],
+    intent: { kind: 'initial-vessel', inputs: { localId, name, portId, registryId } },
+    submission: { status: 'accepted' },
+    outcome: { status: 'pending', evidence: [] },
+    ...overrides
+  });
+}
+
+function vesselPageFor(accountId: string, vesselId: string, name = 'Harbor Skiff'): unknown {
+  return pageResponse({
+    accountId,
+    vesselId,
+    vessel: { id: vesselId, registry: registryId, possessor: accountId === 'account-b' ? actorB : actorA, name },
+    registry: {
+      authorityId: registryId,
+      source: registryStateSource,
+      state: 'available',
+      observedAt,
+      cargo: { entries: [{ variety: 'ore', count: 0 }] },
+      adoption: true,
+      location: { status: 'docked', port: eastId },
+      pendingRequests: []
+    },
+    territories: []
+  }, {
+    [registryStateSource]: { state: 'available', source: registryStateSource, observedAt, value: {} }
+  }, { accountId, vesselId });
+}
+
+async function fillInitialVesselForm(
+  page: Page,
+  localId = 'harbor-skiff-7',
+  name = 'Harbor Skiff',
+  portId = eastId
+): Promise<void> {
+  await page.getByRole('textbox', { name: /Vessel ID/i }).fill(localId);
+  await page.getByRole('textbox', { name: /Vessel name/i }).fill(name);
+  await page.getByRole('combobox', { name: /Starting port/i }).selectOption(portId);
+}
+
+async function expectInitialVesselSubmissionBlocked(page: Page, message: string): Promise<void> {
+  const button = page.getByRole('button', { name: /Receive initial vessel/i });
+  if (await button.count() > 0) assert.equal(await button.first().isEnabled(), false, message);
+}
+
 function routePlanResponse(plan: Record<string, unknown> = routePlan()): unknown {
   return pageResponse({ plan }, {}, { accountId: 'account-a', routeId: plan.id });
 }
@@ -1639,5 +1767,492 @@ test('shows independent typed vessel position evidence and explains conflicting 
   assert.match(text, /stale/i);
   await clickButton(page, 'Choose destination');
   assert.equal(await page.getByRole('region', { name: /Nearby ports for/ }).count(), 0);
+  assert.deepEqual(errors, []);
+});
+
+test('offers an initial vessel only from an explicit refreshed observation and submits the exact local identity', async (t) => {
+  const { page, requests, errors } = await openFixture(t, {
+    screen: 'travel',
+    account: accountA,
+    handle: (request) => {
+      if (request.method === 'GET' && request.pathname === '/api/logistics/vessels') {
+        return { body: initialVesselCandidatesResponse() };
+      }
+      if (request.method === 'POST' && request.pathname === '/api/logistics/vessels/refresh') {
+        return {
+          body: initialVesselCandidatesResponse({
+            offer: initialVesselOffer(),
+            ports: [
+              startingPortObservation(eastId, 'East Haven'),
+              startingPortObservation(westId, 'West Haven', { portState: 'stale', portError: 'West berth observation is stale' })
+            ]
+          })
+        };
+      }
+      if (request.method === 'POST' && request.pathname === '/api/logistics/vessels') {
+        return { body: { action: initialVesselAction() } };
+      }
+      if (request.method === 'GET' && request.pathname === `/api/logistics/vessels/${encodeURIComponent(vesselAliceId)}`) {
+        return { body: vesselPageFor('account-a', vesselAliceId) };
+      }
+      return undefined;
+    }
+  });
+
+  await waitForRegionText(page, 'Vessel travel', /Owned vessels/i, 'expected the owned vessel workspace');
+  assert.equal(await page.getByRole('button', { name: /Receive initial vessel/i }).count(), 0, 'a retained empty listing must not imply an initial-vessel offer');
+  assert.equal(requestsFor(requests, 'POST', '/api/logistics/vessels').length, 0, 'a retained empty listing must not submit');
+
+  await clickButton(page, /Refresh owned vessels/i);
+  await waitForRegionText(page, 'Vessel travel', 'East Haven', 'explicit refresh must display named Home recommendations');
+  await waitForRegionText(page, 'Vessel travel', 'West berth observation is stale', 'recommendation errors must stay independently visible');
+  const offerText = await regionText(page, 'Vessel travel');
+  assert.ok(offerText.includes(observedAt), 'recommendation freshness must remain visible');
+
+  await fillInitialVesselForm(page);
+  await page.getByLabel('Vessel ID', { exact: true }).fill('../invalid');
+  assert.equal(await page.getByRole('button', { name: /Receive initial vessel/i }).isDisabled(), true, 'a malformed local ID must be correctable before any registration send');
+  assert.equal(requestsFor(requests, 'POST', '/api/logistics/vessels').length, 0);
+  await page.getByLabel('Vessel ID', { exact: true }).fill('harbor-skiff-7');
+  await clickButton(page, /Receive initial vessel/i);
+  await waitFor(() => requestsFor(requests, 'POST', '/api/logistics/vessels').length === 1, 'expected one initial vessel submission');
+
+  const submits = requestsFor(requests, 'POST', '/api/logistics/vessels');
+  assert.equal(submits.length, 1);
+  expectBearer(submits[0]!);
+  assert.deepEqual(submits[0]?.body, {
+    accountId: 'account-a',
+    vesselId: 'harbor-skiff-7',
+    name: 'Harbor Skiff',
+    portId: eastId
+  });
+  assert.equal(submits[0]?.pathname.includes(encodeURIComponent(vesselAliceId)), false, 'the typed local ID must not be sent as a world resource URI');
+  assert.equal(requests.some((request) => request.pathname.includes('/local/registry/vessels')), false, 'the browser must not send directly to the world Registry');
+  assert.equal(requests.some((request) => request.pathname.includes('/objects/')), false, 'the browser must not use direct world resource requests');
+  assert.deepEqual(errors, []);
+});
+
+test('keeps independent initial vessel recommendation errors and blocks a stale offer or unresolved Port and Actor', async (t) => {
+  const stale = await openFixture(t, {
+    screen: 'travel',
+    account: accountA,
+    handle: (request) => {
+      if (request.method === 'GET' && request.pathname === '/api/logistics/vessels') {
+        return {
+          body: initialVesselCandidatesResponse({
+            offer: initialVesselOffer({ state: 'stale', error: 'Home offer observation is stale' }),
+            ports: [startingPortObservation(eastId, 'East Haven')]
+          })
+        };
+      }
+      return undefined;
+    }
+  });
+
+  await waitForRegionText(stale.page, 'Vessel travel', 'Home offer observation is stale', 'a stale Home offer must remain visible');
+  await expectInitialVesselSubmissionBlocked(stale.page, 'a stale Home offer must not enable initial vessel submission');
+  await sleep(100);
+  assert.equal(requestsFor(stale.requests, 'POST', '/api/logistics/vessels').length, 0, 'a stale Home offer must not submit');
+  assert.deepEqual(stale.errors, []);
+
+  const unresolved = await openFixture(t, {
+    screen: 'travel',
+    account: accountA,
+    handle: (request) => {
+      if (request.method === 'GET' && request.pathname === '/api/logistics/vessels') {
+        return {
+          body: initialVesselCandidatesResponse({
+            offer: initialVesselOffer(),
+            ports: [
+              startingPortObservation(westId, 'West Haven', { portState: 'stale', portError: 'West berth evidence is stale' }),
+              startingPortObservation(farId, 'Far Isle', { actorState: 'not-retrieved', actorError: 'Territory Actor is unresolved' })
+            ]
+          })
+        };
+      }
+      return undefined;
+    }
+  });
+
+  await waitForRegionText(unresolved.page, 'Vessel travel', 'West berth evidence is stale', 'a stale Port recommendation must keep its own error');
+  await waitForRegionText(unresolved.page, 'Vessel travel', 'Territory Actor is unresolved', 'an unresolved responsible Actor must keep its own error');
+  await expectInitialVesselSubmissionBlocked(unresolved.page, 'unresolved Port or Actor recommendations must not enable initial vessel submission');
+  await sleep(100);
+  assert.equal(requestsFor(unresolved.requests, 'POST', '/api/logistics/vessels').length, 0, 'unresolved Port or Actor recommendations must not submit');
+  assert.deepEqual(unresolved.errors, []);
+});
+
+test('selects the exact returned initial vessel resource and keeps acceptance pending until an explicit check evidences berthing', async (t) => {
+  const pending = initialVesselAction();
+  const berthed = initialVesselAction('harbor-skiff-7', 'Harbor Skiff', eastId, vesselAliceId, 'account-a', {
+    resultReferences: [
+      { kind: 'resource', id: vesselAliceId },
+      { kind: 'request', id: 'https://home.test:4200/local/registry/requests/initial-1' },
+      { kind: 'event', id: 'berthing-event-1' }
+    ],
+    submission: { status: 'accepted' },
+    outcome: {
+      status: 'completed',
+      evidence: [{ source: 'https://home.test:4200/local/registry/events/berthing/1', observedAt, changes: { event: 'BerthingEvent' } }]
+    }
+  });
+  const { page, requests, errors } = await openFixture(t, {
+    screen: 'travel',
+    account: accountA,
+    handle: (request) => {
+      if (request.method === 'GET' && request.pathname === '/api/logistics/vessels') {
+        return {
+          body: initialVesselCandidatesResponse({
+            offer: initialVesselOffer(),
+            ports: [startingPortObservation(eastId, 'East Haven')]
+          })
+        };
+      }
+      if (request.method === 'POST' && request.pathname === '/api/logistics/vessels') return { body: { action: pending } };
+      if (request.method === 'GET' && request.pathname === `/api/logistics/vessels/${encodeURIComponent(vesselAliceId)}`) {
+        return { body: vesselPageFor('account-a', vesselAliceId) };
+      }
+      if (request.method === 'POST' && request.pathname === `/api/activity/${encodeURIComponent(activityId)}/refresh`) {
+        return { body: pageResponse({ action: berthed }, {}, { accountId: 'account-a', actionId: activityId }) };
+      }
+      return undefined;
+    }
+  });
+
+  await waitForRegionText(page, 'Vessel travel', 'East Haven', 'expected the current eligible offer');
+  await fillInitialVesselForm(page);
+  await clickButton(page, /Receive initial vessel/i);
+  await waitFor(async () => (await events(page, 'context')).length === 1, 'accepted initial vessel must emit one exact context');
+
+  const contexts = await events(page, 'context');
+  assert.deepEqual(contexts[0], { accountId: 'account-a', vesselId: vesselAliceId }, 'the returned vessel resource must select the exact vessel');
+  assert.equal(requests.some((request) => request.pathname.includes(encodeURIComponent('harbor-skiff-7'))), false, 'the typed local ID must not become a resource destination');
+
+  await waitForRegionText(page, 'Vessel travel', /Accepted/i, 'initial vessel acceptance must be shown');
+  const accepted = await regionText(page, 'Vessel travel');
+  assert.match(accepted, /Pending/i, 'accepted initial vessel must stay pending');
+  assert.equal(/Completed/i.test(accepted), false, 'acceptance alone must not claim a completed landing');
+  assert.ok(accepted.includes(vesselAliceId), 'the retained resource reference must remain visible');
+
+  await clickButton(page, /Check outcome/i);
+  await waitForRegionText(page, 'Vessel travel', /berthing\/1/i, 'explicit check must show berthing evidence');
+  const checked = await regionText(page, 'Vessel travel');
+  assert.match(checked, /Completed/i, 'matching berthing evidence must complete the initial vessel action');
+  assert.ok(checked.includes('BerthingEvent'), 'the berthing event must be named');
+  assert.equal(requestsFor(requests, 'POST', '/api/logistics/vessels').length, 1, 'checking the outcome must not submit another initial vessel');
+  assert.deepEqual(errors, []);
+});
+
+test('keeps a rejected initial vessel landing rejected after an explicit check and never offers landing retry', async (t) => {
+  const pending = initialVesselAction();
+  const rejected = initialVesselAction('harbor-skiff-7', 'Harbor Skiff', eastId, vesselAliceId, 'account-a', {
+    resultReferences: [
+      { kind: 'resource', id: vesselAliceId },
+      { kind: 'request', id: 'https://home.test:4200/local/registry/requests/initial-1' },
+      { kind: 'event', id: 'entry-rejected-1' }
+    ],
+    submission: { status: 'accepted' },
+    outcome: {
+      status: 'failed',
+      error: 'EntryRejected',
+      evidence: [{ source: 'https://home.test:4200/local/registry/events/entry-rejected/1', observedAt, changes: { event: 'EntryRejected' } }]
+    }
+  });
+  const { page, requests, errors } = await openFixture(t, {
+    screen: 'travel',
+    account: accountA,
+    handle: (request) => {
+      if (request.method === 'GET' && request.pathname === '/api/logistics/vessels') {
+        return {
+          body: initialVesselCandidatesResponse({
+            offer: initialVesselOffer(),
+            ports: [startingPortObservation(eastId, 'East Haven')]
+          })
+        };
+      }
+      if (request.method === 'POST' && request.pathname === '/api/logistics/vessels') return { body: { action: pending } };
+      if (request.method === 'GET' && request.pathname === `/api/logistics/vessels/${encodeURIComponent(vesselAliceId)}`) {
+        return { body: vesselPageFor('account-a', vesselAliceId) };
+      }
+      if (request.method === 'POST' && request.pathname === `/api/activity/${encodeURIComponent(activityId)}/refresh`) {
+        return { body: pageResponse({ action: rejected }, {}, { accountId: 'account-a', actionId: activityId }) };
+      }
+      return undefined;
+    }
+  });
+
+  await waitForRegionText(page, 'Vessel travel', 'East Haven', 'expected the current eligible offer');
+  await fillInitialVesselForm(page);
+  await clickButton(page, /Receive initial vessel/i);
+  await waitForRegionText(page, 'Vessel travel', /Pending/i, 'expected accepted initial vessel to be pending');
+
+  await clickButton(page, /Check outcome/i);
+  await waitForRegionText(page, 'Vessel travel', /EntryRejected/i, 'explicit check must show the rejection evidence');
+  const checked = await regionText(page, 'Vessel travel');
+  assert.equal(/Completed/i.test(checked), false, 'a rejected landing is not completed');
+  assert.match(checked, /Rejected|Failed/i, 'the rejected outcome must remain explicit');
+  assert.equal(await page.getByRole('button', { name: /retry|try again|receive another|reallocate/i }).count(), 0, 'a rejected landing must not offer retry or reallocation');
+  assert.equal(requestsFor(requests, 'POST', '/api/logistics/vessels').length, 1, 'a rejected landing must never be resubmitted');
+  assert.deepEqual(errors, []);
+});
+
+test('keeps an uncertain initial vessel send unverified and never replays or releases a landing retry', async (t) => {
+  const uncertain = initialVesselAction('harbor-skiff-7', 'Harbor Skiff', eastId, vesselAliceId, 'account-a', {
+    resultReferences: [],
+    submission: { status: 'unverified', error: 'Send outcome could not be read' },
+    outcome: { status: 'unverified', evidence: [], error: 'Readback failed' }
+  });
+  const { page, requests, errors } = await openFixture(t, {
+    screen: 'travel',
+    account: accountA,
+    handle: (request) => {
+      if (request.method === 'GET' && request.pathname === '/api/logistics/vessels') {
+        return {
+          body: initialVesselCandidatesResponse({
+            offer: initialVesselOffer(),
+            ports: [startingPortObservation(eastId, 'East Haven')]
+          })
+        };
+      }
+      if (request.method === 'POST' && request.pathname === '/api/logistics/vessels') return { body: { action: uncertain } };
+      if (request.method === 'POST' && request.pathname === `/api/activity/${encodeURIComponent(activityId)}/refresh`) {
+        return { body: pageResponse({ action: uncertain }, {}, { accountId: 'account-a', actionId: activityId }) };
+      }
+      return undefined;
+    }
+  });
+
+  await waitForRegionText(page, 'Vessel travel', 'East Haven', 'expected the current eligible offer');
+  await fillInitialVesselForm(page);
+  await clickButton(page, /Receive initial vessel/i);
+  await waitForRegionText(page, 'Vessel travel', /Unverified/i, 'an uncertain send must stay unverified');
+  const uncertainText = await regionText(page, 'Vessel travel');
+  assert.match(uncertainText, /Readback failed/i, 'the uncertain send must retain its readable error');
+  assert.equal(/Completed/i.test(uncertainText), false, 'an uncertain send must not be completed');
+
+  await sleep(400);
+  assert.equal(requestsFor(requests, 'POST', '/api/logistics/vessels').length, 1, 'an uncertain send must never be replayed automatically');
+  assert.equal(requests.some((request) => request.method === 'POST' && request.pathname.includes('/api/activity/')), false, 'reconciliation must remain explicit');
+
+  const receive = page.getByRole('button', { name: /Receive initial vessel/i });
+  if (await receive.count() > 0 && await receive.isEnabled()) await receive.click();
+  await sleep(200);
+  assert.equal(requestsFor(requests, 'POST', '/api/logistics/vessels').length, 1, 'an uncertain send must not expose a landing retry');
+
+  await clickButton(page, /Check outcome/i);
+  await waitFor(() => requestsFor(requests, 'POST', `/api/activity/${encodeURIComponent(activityId)}/refresh`).length === 1, 'explicit check must reconcile the uncertain action');
+  await waitForRegionText(page, 'Vessel travel', /Unverified/i, 'reconciliation still unverified must remain visible');
+  assert.equal(requestsFor(requests, 'POST', '/api/logistics/vessels').length, 1, 'reconciliation must not resubmit the initial vessel');
+  assert.equal(await page.getByRole('button', { name: /retry|try again|receive another|reallocate/i }).count(), 0, 'an unverified landing must not offer reallocation');
+  assert.deepEqual(errors, []);
+});
+
+test('presents a failed initial vessel submission honestly without implying a landing retry', async (t) => {
+  const { page, requests, errors } = await openFixture(t, {
+    screen: 'travel',
+    account: accountA,
+    handle: (request) => {
+      if (request.method === 'GET' && request.pathname === '/api/logistics/vessels') {
+        return {
+          body: initialVesselCandidatesResponse({
+            offer: initialVesselOffer(),
+            ports: [startingPortObservation(eastId, 'East Haven')]
+          })
+        };
+      }
+      if (request.method === 'POST' && request.pathname === '/api/logistics/vessels') {
+        return { status: 409, body: { error: 'initial-vessel-unavailable' } };
+      }
+      return undefined;
+    }
+  });
+
+  await waitForRegionText(page, 'Vessel travel', 'East Haven', 'expected the current eligible offer');
+  await fillInitialVesselForm(page);
+  await clickButton(page, /Receive initial vessel/i);
+  await waitForRegionText(page, 'Vessel travel', /initial-vessel-unavailable|failed/i, 'a failed initial vessel submission must be shown');
+  const failed = await regionText(page, 'Vessel travel');
+  assert.equal(/Completed/i.test(failed), false, 'a failed submission must not claim completion');
+  assert.equal(await page.getByRole('button', { name: /retry|try again|receive another|reallocate|landing/i }).count(), 0, 'a backend rejection must not imply a landing retry');
+  assert.equal(requestsFor(requests, 'POST', '/api/logistics/vessels').length, 1, 'a failed submission must not be replayed');
+  assert.deepEqual(errors, []);
+});
+
+test('does not leak a pending initial vessel registration across accounts or release a newer pending lock', async (t) => {
+  const firstA = deferred<ServerResponse>();
+  const pendingB = deferred<ServerResponse>();
+  let aSubmits = 0;
+  let bSubmits = 0;
+  const { page, requests, errors } = await openFixture(t, {
+    screen: 'travel',
+    account: accountA,
+    handle: (request) => {
+      if (request.method === 'GET' && request.pathname === '/api/logistics/vessels') {
+        return request.search.accountId === 'account-b'
+          ? {
+            body: initialVesselCandidatesResponse({
+              accountId: 'account-b',
+              offer: initialVesselOffer({ startingPorts: [westId] }),
+              ports: [startingPortObservation(westId, 'West Haven')]
+            })
+          }
+          : {
+            body: initialVesselCandidatesResponse({
+              offer: initialVesselOffer(),
+              ports: [startingPortObservation(eastId, 'East Haven')]
+            })
+          };
+      }
+      if (request.method === 'POST' && request.pathname === '/api/logistics/vessels') {
+        const accountId = (request.body as { accountId?: string } | undefined)?.accountId;
+        if (accountId === 'account-b') {
+          bSubmits += 1;
+          return pendingB.promise;
+        }
+        aSubmits += 1;
+        return firstA.promise;
+      }
+      if (request.method === 'GET' && request.pathname === `/api/logistics/vessels/${encodeURIComponent(vesselAliceId)}`) {
+        return { body: vesselPageFor('account-a', vesselAliceId) };
+      }
+      if (request.method === 'GET' && request.pathname === `/api/logistics/vessels/${encodeURIComponent(vesselBId)}`) {
+        return { body: vesselPageFor('account-b', vesselBId, 'Bob Skiff') };
+      }
+      return undefined;
+    }
+  });
+
+  await waitForRegionText(page, 'Vessel travel', 'East Haven', 'expected the account A offer');
+  await fillInitialVesselForm(page);
+  await clickButton(page, /Receive initial vessel/i);
+  await waitFor(() => aSubmits === 1, 'expected the pending account A submission');
+
+  await controls(page, 'setAccount', accountB);
+  await waitForRegionText(page, 'Vessel travel', 'West Haven', 'expected the account B offer');
+  await fillInitialVesselForm(page, 'bob-skiff-2', 'Bob Skiff', westId);
+  await clickButton(page, /Receive initial vessel/i);
+  await waitFor(() => bSubmits === 1, 'expected the pending account B submission');
+
+  firstA.resolve({ body: { action: initialVesselAction('harbor-skiff-7', 'Harbor Skiff', eastId, vesselAliceId, 'account-a') } });
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  const afterA = await events(page, 'context');
+  assert.equal(afterA.some((context) => (context as { vesselId?: string }).vesselId === vesselAliceId), false, 'a late account A result must not select a vessel while account B is current');
+
+  const bReceive = page.getByRole('button', { name: /Receive initial vessel/i });
+  if (await bReceive.count() > 0 && await bReceive.isEnabled()) await bReceive.click();
+  await sleep(200);
+  assert.equal(bSubmits, 1, 'a late account A result must not release the newer account B pending lock');
+
+  await controls(page, 'setAccount', accountA);
+  await waitForRegionText(page, 'Vessel travel', 'East Haven', 'expected the account A offer after returning');
+  pendingB.resolve({ body: { action: initialVesselAction('bob-skiff-2', 'Bob Skiff', westId, vesselBId, 'account-b') } });
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  const afterB = await events(page, 'context');
+  assert.equal(afterB.some((context) => (context as { vesselId?: string }).vesselId === vesselBId), false, 'a late account B result must not select a vessel after returning to account A');
+  assert.equal(requests.some((request) => request.pathname.includes(encodeURIComponent('bob-skiff-2'))), false, 'a typed local ID must never become a resource destination');
+  assert.equal(aSubmits, 1);
+  assert.equal(bSubmits, 1);
+  assert.deepEqual(errors, []);
+});
+
+test('does not apply a pending initial vessel registration after unmount or replay it on remount', async (t) => {
+  const pending = deferred<ServerResponse>();
+  let submits = 0;
+  const { page, requests, errors } = await openFixture(t, {
+    screen: 'travel',
+    account: accountA,
+    handle: (request) => {
+      if (request.method === 'GET' && request.pathname === '/api/logistics/vessels') {
+        return {
+          body: initialVesselCandidatesResponse({
+            offer: initialVesselOffer(),
+            ports: [startingPortObservation(eastId, 'East Haven')]
+          })
+        };
+      }
+      if (request.method === 'POST' && request.pathname === '/api/logistics/vessels') {
+        submits += 1;
+        return pending.promise;
+      }
+      if (request.method === 'GET' && request.pathname === `/api/logistics/vessels/${encodeURIComponent(vesselAliceId)}`) {
+        return { body: vesselPageFor('account-a', vesselAliceId) };
+      }
+      return undefined;
+    }
+  });
+
+  await waitForRegionText(page, 'Vessel travel', 'East Haven', 'expected the current offer');
+  await fillInitialVesselForm(page);
+  await clickButton(page, /Receive initial vessel/i);
+  await waitFor(() => submits === 1, 'expected the pending submission');
+
+  await controls(page, 'setMounted', false);
+  pending.resolve({ body: { action: initialVesselAction() } });
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await controls(page, 'setMounted', true);
+  await waitFor(() => requestsFor(requests, 'GET', '/api/logistics/vessels').length === 2, 'remount must perform a fresh retained candidate read');
+  await waitForRegionText(page, 'Vessel travel', 'East Haven', 'expected the fresh offer after remount');
+
+  assert.deepEqual(await events(page, 'context'), [], 'an unmounted initial vessel result must not select a vessel');
+  assert.equal(submits, 1, 'remount must not replay the pending initial vessel registration');
+  assert.equal((await regionText(page, 'Vessel travel')).includes('Accepted'), false, 'an unmounted response must not install an accepted action');
+  assert.deepEqual(errors, []);
+});
+
+test('keeps a newer initial vessel refresh or accepted allocation over a late retained listing', async (t) => {
+  const retained = deferred<ServerResponse>();
+  let candidateReads = 0;
+  const accepted = initialVesselAction();
+  const { page, requests, errors } = await openFixture(t, {
+    screen: 'travel',
+    account: accountA,
+    handle: (request) => {
+      if (request.method === 'GET' && request.pathname === '/api/logistics/vessels') {
+        candidateReads += 1;
+        if (candidateReads === 1) return retained.promise;
+        return {
+          body: initialVesselCandidatesResponse({
+            offer: initialVesselOffer(),
+            ports: [startingPortObservation(eastId, 'Fresh Haven')]
+          })
+        };
+      }
+      if (request.method === 'POST' && request.pathname === '/api/logistics/vessels/refresh') {
+        return {
+          body: initialVesselCandidatesResponse({
+            offer: initialVesselOffer(),
+            ports: [startingPortObservation(eastId, 'Fresh Haven')]
+          })
+        };
+      }
+      if (request.method === 'POST' && request.pathname === '/api/logistics/vessels') return { body: { action: accepted } };
+      if (request.method === 'GET' && request.pathname === `/api/logistics/vessels/${encodeURIComponent(vesselAliceId)}`) {
+        return { body: vesselPageFor('account-a', vesselAliceId) };
+      }
+      return undefined;
+    }
+  });
+
+  await waitFor(() => candidateReads === 1, 'expected the retained listing read');
+  await clickButton(page, /Refresh owned vessels/i);
+  await waitForRegionText(page, 'Vessel travel', 'Fresh Haven', 'the explicit refresh must display the current recommendation');
+  await fillInitialVesselForm(page);
+  await clickButton(page, /Receive initial vessel/i);
+  await waitFor(async () => (await events(page, 'context')).length === 1, 'accepted allocation must select the exact vessel');
+
+  retained.resolve({
+    body: initialVesselCandidatesResponse({
+      offer: initialVesselOffer({ startingPorts: [westId] }),
+      ports: [startingPortObservation(westId, 'Late Haven')]
+    })
+  });
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await sleep(100);
+
+  const text = await regionText(page, 'Vessel travel');
+  assert.equal(text.includes('Late Haven'), false, 'a late retained listing must not overwrite the newer refresh or accepted allocation');
+  assert.deepEqual(await events(page, 'context'), [{ accountId: 'account-a', vesselId: vesselAliceId }], 'a late listing must not alter the accepted allocation context');
+  assert.match(text, /Accepted/i, 'the accepted allocation must remain visible');
+  assert.equal(requestsFor(requests, 'POST', '/api/logistics/vessels').length, 1, 'a late listing must not submit another initial vessel');
   assert.deepEqual(errors, []);
 });

@@ -125,6 +125,7 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
   hostRef.current = host;
   const territory = installSimulationTerritory(host, {
     port: mainPort, route: routeId,
+    routes: allRoutes.map((route) => ({ id: route.id as URI, from: route.from, to: route.to })),
     config: {
       commodities: { ore: ids.varieties.ore, nativeMetal: ids.varieties.metal, importedMetal: ids.varieties.importedMetal, refinedProduct: ids.varieties.refined },
       commodityMasses: { [ids.varieties.ore]: 1, [ids.varieties.metal]: 2, [ids.varieties.importedMetal]: 2, [ids.varieties.refined]: 3 },
@@ -209,7 +210,7 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
         if (!entryAdmissionAllows(state.admission, vessel.registry).allowed) { json(response, 403, { error: 'registry-not-accepted' }); return true; }
       }
       const activeVisit = [...ownVisits].reverse().find((visit) => !visit.exited);
-      json(response, 200, discoverSimulationActions({ simulation: state.simulation, actor: actorId, player, vesselId: vesselId as URI, vessel, origin, ...(activeVisit ? { visit: activeVisit } : {}) }));
+      json(response, 200, discoverSimulationActions({ simulation: state.simulation, actor: actorId, player, vesselId: vesselId as URI, vessel, origin, routes: allRoutes.map((route) => ({ id: route.id as URI, from: route.from, to: route.to })), ...(activeVisit ? { visit: activeVisit } : {}) }));
       return true;
     }
     const entryDecision = /^\/local\/territory\/admin\/entry-requests\/([^/]+)\/(approve|reject)$/.exec(url.pathname);

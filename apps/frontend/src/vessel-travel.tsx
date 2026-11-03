@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Button, Input, Label, TextField } from 'react-aria-components';
-import { actionIsComplete } from '@fctp/client-sdk';
+import { actionIsComplete, observationIsCurrent } from '@fctp/client-sdk';
 import type {
   ActionRecord,
   ExploreConnectionRecord,
   JourneyStep,
   LogisticsRegistryObservation,
+  LogisticsStartingPort,
   LogisticsTerritoryObservation,
   PublicAccountRecord,
-  RoutePlanRecord
+  RoutePlanRecord,
+  SourcedObservation
 } from '@fctp/client-sdk';
 import type { VesselWorkflowContext } from './workflow-context';
 import type { ResourceReference } from './resource-reader';
@@ -23,6 +25,7 @@ import {
   refreshAction,
   refreshLogisticsVessel,
   refreshLogisticsVesselCandidates,
+  submitInitialVessel,
   submitLogisticsAdoption,
   submitLogisticsDeparture,
   submitLogisticsEntry,
@@ -97,7 +100,44 @@ interface Draft {
   routeId: string;
 }
 
+interface InitialVesselDraft {
+  vesselId: string;
+  name: string;
+  portId: string;
+}
+
+interface InitialVesselView {
+  locked?: boolean;
+  failure?: string;
+}
+
 const emptyDraft: Draft = { territoryId: '', portId: '', routeId: '' };
+const emptyInitialVesselDraft: InitialVesselDraft = { vesselId: '', name: '', portId: '' };
+
+function observationValue<T>(observation: SourcedObservation<T> | undefined): T | undefined {
+  return observation === undefined || !('value' in observation) ? undefined : observation.value;
+}
+
+function observationErrorText(observation: SourcedObservation<unknown>): string | undefined {
+  return 'error' in observation ? observation.error : undefined;
+}
+
+function observationObservedAt(observation: SourcedObservation<unknown>): string | undefined {
+  return 'observedAt' in observation ? observation.observedAt : undefined;
+}
+
+function startingPortName(entry: LogisticsStartingPort): string {
+  return observationValue(entry.port)?.name ?? 'Unnamed starting port';
+}
+
+function startingPortUsable(entry: LogisticsStartingPort, recommended: readonly string[]): boolean {
+  if (!recommended.includes(entry.portId)) return false;
+  const port = observationValue(entry.port);
+  if (port === undefined || !observationIsCurrent(entry.port) || port.id !== entry.portId) return false;
+  if (entry.authority === undefined || !observationIsCurrent(entry.authority)) return false;
+  const authority = observationValue(entry.authority);
+  return authority !== undefined && authority.role === 'territory' && authority.id === port.territory;
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -200,6 +240,8 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
   const [browseView, setBrowseView] = useState<BrowseView>({});
   const [actionView, setActionView] = useState<ActionView>({});
   const [draft, setDraft] = useState<Draft>(emptyDraft);
+  const [initialDraft, setInitialDraft] = useState<InitialVesselDraft>(emptyInitialVesselDraft);
+  const [initialView, setInitialView] = useState<InitialVesselView>({});
   const [adoption, setAdoption] = useState(false);
   const [sending, setSending] = useState(false);
   const candidateGeneration = useRef(0);
@@ -208,6 +250,7 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
   const browseGeneration = useRef(0);
   const actionGeneration = useRef(0);
   const sendLock = useRef(false);
+  const preserveActionKey = useRef<string | undefined>(undefined);
   const scopeRef = useRef<{ accountId: string | undefined; vesselId: string | undefined }>({ accountId: undefined, vesselId: undefined });
 
   const selectedVesselId = selection !== undefined && selection.accountId === accountId ? selection.vesselId : undefined;
@@ -303,11 +346,23 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
   }, [accountId, vesselId, routePlanId, selectionRevision]);
 
   useEffect(() => {
+    const key = accountId === undefined || vesselId === undefined ? undefined : `${accountId}\u0000${vesselId}`;
+    if (key !== undefined && preserveActionKey.current === key) {
+      preserveActionKey.current = undefined;
+      sendLock.current = false;
+      setSending(false);
+      return;
+    }
     actionGeneration.current += 1;
     sendLock.current = false;
     setSending(false);
     setActionView({});
   }, [accountId, vesselId]);
+
+  useEffect(() => {
+    setInitialDraft(emptyInitialVesselDraft);
+    setInitialView({});
+  }, [accountId]);
 
   useEffect(() => {
     setDraft(emptyDraft);
@@ -322,6 +377,12 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
   }, [vesselData]);
 
   const candidates = candidateView.accountId === accountId ? candidateView : undefined;
+  const candidateData = candidates?.response?.data;
+  const initialOffer = candidateData?.initialVessel;
+  const startingPorts = candidateData?.startingPorts ?? [];
+  const initialOfferCurrent = initialOffer !== undefined && observationIsCurrent(initialOffer) && observationValue(initialOffer)?.available === true;
+  const recommendedPorts = observationValue(initialOffer)?.startingPorts ?? [];
+  const usableStartingPorts = startingPorts.filter((entry) => startingPortUsable(entry, recommendedPorts));
   const ownedCandidates = candidates?.response?.data.candidates.filter((candidate) => candidate.ownership === 'verified-owned') ?? [];
   const currentBrowse = browseView.accountId === accountId && browseView.vesselId === vesselId ? browseView : undefined;
   const browseData = currentBrowse?.response;
@@ -430,6 +491,59 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
     );
   };
 
+  const initialPortSelected = usableStartingPorts.some((entry) => entry.portId === initialDraft.portId);
+  const initialSubmittable = initialOfferCurrent && initialView.locked !== true
+    && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(initialDraft.vesselId.trim()) && initialDraft.name.trim() !== '' && initialPortSelected;
+
+  const receiveInitialVessel = (): void => {
+    if (accountId === undefined || sendLock.current || !initialSubmittable) return;
+    const targetAccount = accountId;
+    const targetVessel = vesselId;
+    const generation = ++actionGeneration.current;
+    sendLock.current = true;
+    setSending(true);
+    setInitialView({ locked: true });
+    submitInitialVessel({
+      accountId,
+      vesselId: initialDraft.vesselId.trim(),
+      name: initialDraft.name.trim(),
+      portId: initialDraft.portId
+    }).then(
+      (response) => {
+        if (actionGeneration.current !== generation) return;
+        if (scopeRef.current.accountId !== targetAccount || scopeRef.current.vesselId !== targetVessel) return;
+        sendLock.current = false;
+        setSending(false);
+        const action = response.action;
+        if (action.accountId !== targetAccount) {
+          setInitialView({ locked: true, failure: 'The action returned another account.' });
+          return;
+        }
+        candidateGeneration.current += 1;
+        setCandidateView((current) => ({ ...current, loading: false, refreshing: false }));
+        const resource = action.resultReferences.find((reference) => reference.kind === 'resource' && reference.id.length > 0);
+        setActionView({ ...(vesselKey === undefined ? {} : { scopeKey: vesselKey }), key: `${action.accountId}\u0000${action.id}`, action });
+        if (resource === undefined) {
+          setInitialView({ locked: true, failure: 'The action did not retain an exact vessel resource reference.' });
+          return;
+        }
+        const nextKey = `${targetAccount}\u0000${resource.id}`;
+        preserveActionKey.current = nextKey;
+        setInitialView({ locked: true });
+        setSelection({ accountId: targetAccount, vesselId: resource.id });
+        setActionView({ scopeKey: nextKey, key: `${action.accountId}\u0000${action.id}`, action });
+        onContextChange?.({ accountId: targetAccount, vesselId: resource.id });
+      },
+      (error: unknown) => {
+        if (actionGeneration.current !== generation) return;
+        if (scopeRef.current.accountId !== targetAccount || scopeRef.current.vesselId !== targetVessel) return;
+        sendLock.current = false;
+        setSending(false);
+        setInitialView({ locked: true, failure: errorText(error) });
+      }
+    );
+  };
+
   const draftComplete = draft.territoryId.trim() !== '' && draft.portId.trim() !== '' && draft.routeId.trim() !== '';
 
   const requestEntry = (): void => {
@@ -465,7 +579,7 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
   };
 
   const refreshStatus = (): void => {
-    if (accountId === undefined || vesselKey === undefined || currentAction === undefined || actionRefresh?.refreshing === true) return;
+    if (accountId === undefined || currentAction === undefined || actionRefresh?.refreshing === true) return;
     const generation = ++actionGeneration.current;
     const key = `${accountId}\u0000${currentAction.id}`;
     setActionView((current) => ({ ...current, key, refreshing: true }));
@@ -473,7 +587,7 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
       (response) => {
         if (actionGeneration.current !== generation) return;
         setActionView(response.data.action.accountId === accountId && response.data.action.id === currentAction.id
-          ? { scopeKey: vesselKey, key, action: response.data.action }
+          ? { ...(vesselKey === undefined ? {} : { scopeKey: vesselKey }), key, action: response.data.action }
           : { ...actionView, refreshing: false, refreshError: 'The action readback returned unexpected ownership or identity.' });
       },
       (error: unknown) => {
@@ -726,7 +840,7 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
                   Open Activity
                 </Button>}
                 <Button className={styles.button} onPress={refreshStatus} isPending={actionRefresh?.refreshing === true}>
-                  Refresh status
+                  {currentAction.intent.kind === 'initial-vessel' ? 'Check outcome' : 'Refresh status'}
                 </Button>
               </div>
               <ul className={styles.list}>
@@ -838,6 +952,120 @@ export function VesselTravel(props: VesselTravelProps): ReactElement {
                 </ul>
               )}
             </>
+          )}
+          {initialOffer === undefined ? null : (
+            <section className={styles.section} aria-label="Initial vessel">
+              <h4 className={styles.subheading}>Initial vessel</h4>
+              <p className={styles.meta}>
+                Availability: {observationValue(initialOffer) === undefined ? 'unknown' : observationValue(initialOffer)?.available === true ? 'available' : 'unavailable'}
+              </p>
+              <p className={styles.meta}>
+                Offer state: {stateLabel(initialOffer.state)}
+                {observationObservedAt(initialOffer) === undefined ? '' : ` · Observed: ${observationObservedAt(initialOffer)}`}
+              </p>
+              {observationErrorText(initialOffer) === undefined ? null : (
+                <p className={styles.failure}>{observationErrorText(initialOffer)}</p>
+              )}
+              <details className={styles.details}>
+                <summary>Offer details</summary>
+                <p className={styles.source}>{initialOffer.source}</p>
+                {observationValue(initialOffer) === undefined ? null : <p className={styles.source}>{observationValue(initialOffer)?.registry}</p>}
+              </details>
+              {observationValue(initialOffer) === undefined ? null : (
+                <p className={styles.meta}>
+                  Capacity: {observationValue(initialOffer)?.capacity}
+                </p>
+              )}
+              {startingPorts.length === 0 ? null : (
+                <ul className={styles.list} aria-label="Starting port recommendations">
+                  {startingPorts.map((entry) => {
+                    const authority = entry.authority === undefined ? undefined : observationValue(entry.authority);
+                    return (
+                      <li key={entry.portId} className={styles.item}>
+                        <p className={styles.name}>{startingPortName(entry)}</p>
+                        <p className={styles.meta}>
+                          Port: {stateLabel(entry.port.state)}
+                          {observationObservedAt(entry.port) === undefined ? '' : ` · Observed: ${observationObservedAt(entry.port)}`}
+                        </p>
+                        {observationErrorText(entry.port) === undefined ? null : (
+                          <p className={styles.failure}>{observationErrorText(entry.port)}</p>
+                        )}
+                        <p className={styles.meta}>
+                          Responsible Actor: {entry.authority === undefined ? 'not observed' : stateLabel(entry.authority.state)}
+                          {authority?.name === undefined ? '' : ` · ${authority.name}`}
+                        </p>
+                        {entry.authority !== undefined && observationErrorText(entry.authority) !== undefined ? (
+                          <p className={styles.failure}>{observationErrorText(entry.authority)}</p>
+                        ) : null}
+                        <details className={styles.details}>
+                          <summary>Starting port details</summary>
+                          <p className={styles.source}>{entry.port.source}</p>
+                          {entry.authority === undefined ? null : <p className={styles.source}>{entry.authority.source}</p>}
+                        </details>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {initialView.locked === true ? (
+                initialView.failure === undefined ? (
+                  <p className={styles.status}>Initial vessel application submitted. No further allocation is offered.</p>
+                ) : (
+                  <p className={styles.failure} role="alert">
+                    Initial vessel submission failed: {initialView.failure}. No retry or reallocation is offered.
+                  </p>
+                )
+              ) : observationValue(initialOffer)?.available !== true ? null : (
+                <>
+                  <div className={styles.group}>
+                    <TextField
+                      className={styles.field}
+                      value={initialDraft.vesselId}
+                      onChange={(value) => setInitialDraft((current) => ({ ...current, vesselId: value }))}
+                    >
+                      <Label className={styles.label}>Vessel ID</Label>
+                      <Input className={styles.input} />
+                      <span className={styles.meta}>Start with a letter or digit; use letters, digits, dots, hyphens or underscores.</span>
+                    </TextField>
+                    <TextField
+                      className={styles.field}
+                      value={initialDraft.name}
+                      onChange={(value) => setInitialDraft((current) => ({ ...current, name: value }))}
+                    >
+                      <Label className={styles.label}>Vessel name</Label>
+                      <Input className={styles.input} />
+                    </TextField>
+                    <label className={styles.field}>
+                      <span className={styles.label}>Starting port</span>
+                      <select
+                        className={styles.select}
+                        aria-label="Starting port"
+                        value={usableStartingPorts.some((entry) => entry.portId === initialDraft.portId) ? initialDraft.portId : ''}
+                        onChange={(event) => {
+                          const portId = event.currentTarget.value;
+                          setInitialDraft((current) => ({ ...current, portId }));
+                        }}
+                      >
+                        <option value="">Select a starting port</option>
+                        {usableStartingPorts.map((entry) => (
+                          <option key={entry.portId} value={entry.portId}>{startingPortName(entry)}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className={styles.controls}>
+                    <Button
+                      className={styles.button}
+                      onPress={receiveInitialVessel}
+                      isDisabled={!initialSubmittable}
+                      isPending={sending}
+                    >
+                      Receive initial vessel
+                    </Button>
+                  </div>
+                </>
+              )}
+            </section>
           )}
         </section>
       )}

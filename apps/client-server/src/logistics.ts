@@ -1,10 +1,13 @@
 import { deriveDiplomaticToken } from '@fctp/auth';
+import { observationIsCurrent } from '@fctp/client-sdk';
 import type {
   AccountRecord,
   ActionRecord,
   JourneyProgress,
   JourneyStep,
+  LogisticsInitialVesselOffer,
   LogisticsRegistryObservation,
+  LogisticsStartingPort,
   LogisticsTerritoryObservation,
   LogisticsVesselCandidate,
   LogisticsVesselCandidatesData,
@@ -16,7 +19,7 @@ import type {
   ProductionOperation,
   SourcedObservation
 } from '@fctp/client-sdk';
-import type { URI } from '@fctp/protocol';
+import { validateModel, type FCTPActor, type Port, type URI, type Vessel, type VesselCreationRequest } from '@fctp/protocol';
 import { withDeadline } from './deadline.js';
 import type { ActionHandler, ActionReconcileInput, ActionReconciliation, ActionReference, ActionService } from './actions.js';
 import type { ObservationService } from './observations.js';
@@ -66,6 +69,7 @@ export class LogisticsRequestError extends Error {
 export interface LogisticsService {
   vesselCandidates(accountId: string): Promise<PageResponse<LogisticsVesselCandidatesData>>;
   refreshVesselCandidates(accountId: string): Promise<PageResponse<LogisticsVesselCandidatesData>>;
+  initialVessel(accountId: string, body: Record<string, unknown>): Promise<ActionRecord>;
   vessel(accountId: string, vesselId: string): Promise<PageResponse<LogisticsVesselData>>;
   refreshVessel(accountId: string, vesselId: string): Promise<PageResponse<LogisticsVesselData>>;
   traverse(input: { accountId: string; vesselId: string; routePlanId: string }): Promise<ActionRecord>;
@@ -82,10 +86,12 @@ export interface LogisticsService {
 
 export interface LogisticsServiceOptions {
   timeoutMs?: number;
+  rememberAuthority?: (actor: FCTPActor, server: string, origin: string) => Promise<void>;
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const NUL = '\u0000';
+const VESSEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -141,10 +147,35 @@ interface OwnedVesselsValue {
     capacity: number;
     name?: string;
   }>;
+  initialVessel?: LogisticsInitialVesselOffer;
+}
+
+interface StartingPortValue {
+  id: string;
+  name?: string;
+  territory: string;
+}
+
+interface StartingAuthorityValue {
+  id: string;
+  role: 'territory';
+  name?: string;
+}
+
+function initialVesselOffer(value: unknown): LogisticsInitialVesselOffer | undefined | false {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || typeof value.available !== 'boolean') return false;
+  if (typeof value.capacity !== 'number' || !Number.isFinite(value.capacity)) return false;
+  if (typeof value.registry !== 'string' || publicHttpUrl(value.registry) === undefined) return false;
+  if (!Array.isArray(value.startingPorts)
+    || !value.startingPorts.every((port): port is string => typeof port === 'string' && publicHttpUrl(port) !== undefined)) return false;
+  return { available: value.available, registry: value.registry, capacity: value.capacity, startingPorts: [...value.startingPorts] };
 }
 
 function ownedVesselsValue(value: unknown): OwnedVesselsValue | undefined {
   if (!isRecord(value) || typeof value.actor !== 'string' || !Array.isArray(value.vessels)) return undefined;
+  const offer = initialVesselOffer(value.initialVessel);
+  if (offer === false) return undefined;
   const vessels: OwnedVesselsValue['vessels'] = [];
   for (const entry of value.vessels) {
     if (!isRecord(entry) || typeof entry.id !== 'string' || typeof entry.registry !== 'string'
@@ -152,7 +183,52 @@ function ownedVesselsValue(value: unknown): OwnedVesselsValue | undefined {
       || (entry.name !== undefined && typeof entry.name !== 'string')) return undefined;
     vessels.push({ ...entry, id: entry.id, registry: entry.registry, possessor: entry.possessor, capacity: entry.capacity, ...(entry.name === undefined ? {} : { name: entry.name }) });
   }
-  return { actor: value.actor, vessels };
+  return { actor: value.actor, vessels, ...(offer === undefined ? {} : { initialVessel: offer }) };
+}
+
+function candidatesKey(accountId: string): string {
+  return `logistics-vessel-candidates:${accountId}`;
+}
+
+function initialOfferObservation(observation: SourcedObservation<unknown>, actorId: string | undefined): SourcedObservation<LogisticsInitialVesselOffer> | undefined {
+  if (!('value' in observation)) return observation;
+  const listing = ownedVesselsValue(observation.value);
+  if (listing?.actor !== actorId || listing?.initialVessel === undefined) return undefined;
+  return { ...observation, value: listing.initialVessel };
+}
+
+async function readStartingResource(fetcher: typeof fetch, id: string, label: string, signal: AbortSignal): Promise<unknown> {
+  const url = publicHttpUrl(id);
+  if (!url) throw new Error(`${label} is not a public HTTP(S) resource`);
+  const response = await fetcher(url.href, {
+    method: 'GET',
+    headers: { Accept: 'application/activity+json, application/ld+json, application/json' },
+    cache: 'no-store',
+    credentials: 'omit',
+    redirect: 'error',
+    signal
+  });
+  if (!response.ok) throw new Error(`${label} unavailable: HTTP ${response.status}`);
+  return response.json();
+}
+
+function ownHomeRegistry(account: AccountRecord, registryId: string): boolean {
+  const url = publicHttpUrl(registryId);
+  return url !== undefined && account.login.status === 'signed-in'
+    && url.host === account.homeServer && url.host === account.login.homeServer;
+}
+
+async function readHomeListing(fetcher: typeof fetch, source: string, nativeToken: string, signal: AbortSignal): Promise<OwnedVesselsValue> {
+  const response = await fetcher(source, {
+    method: 'GET',
+    headers: { Accept: 'application/json', Authorization: `Bearer ${nativeToken}` },
+    cache: 'no-store',
+    signal
+  });
+  if (!response.ok) throw new Error(`Home vessel listing unavailable: HTTP ${response.status}`);
+  const value = ownedVesselsValue(await response.json());
+  if (value === undefined) throw new Error('Home vessel listing is invalid');
+  return value;
 }
 
 function logisticsKey(accountId: string, vesselId: string): string {
@@ -227,6 +303,25 @@ export function createLogisticsService(
     return found[0];
   };
 
+  const startingPortsFor = async (accountId: string, offer: LogisticsInitialVesselOffer): Promise<LogisticsStartingPort[]> => {
+    const key = candidatesKey(accountId);
+    const startingPorts: LogisticsStartingPort[] = [];
+    for (const portId of offer.startingPorts) {
+      const port = await observations.readOne(key, portId);
+      const portValue = observationValue<StartingPortValue>(port);
+      const territory = portValue?.territory;
+      const authority = territory === undefined ? undefined : await observations.readOne(key, territory);
+      startingPorts.push({
+        portId,
+        port: port as SourcedObservation<StartingPortValue>,
+        ...(authority === undefined
+          ? {}
+          : { authority: authority as SourcedObservation<StartingAuthorityValue> })
+      });
+    }
+    return startingPorts;
+  };
+
   const candidatesPage = async (account: AccountRecord): Promise<PageResponse<LogisticsVesselCandidatesData>> => {
     const source = ownedVesselsSource(account);
     const blockers: string[] = [];
@@ -264,7 +359,53 @@ export function createLogisticsService(
         }
       }
     }
-    return { context: { accountId: account.id }, data: { accountId: account.id, candidates, blockers }, observations: sourced, actions: [] };
+    for (const observation of await observations.read(candidatesKey(account.id))) sourced[observation.source] = observation;
+    const listingObservation = source === undefined ? undefined : await observations.readOne(ownedVesselsKey(account.id), source);
+    const offerObservation = listingObservation === undefined ? undefined : initialOfferObservation(listingObservation, account.actorId);
+    const offer = observationValue<LogisticsInitialVesselOffer>(offerObservation);
+    const startingPorts = offer === undefined ? undefined : await startingPortsFor(account.id, offer);
+    return {
+      context: { accountId: account.id },
+      data: {
+        accountId: account.id,
+        candidates,
+        blockers,
+        ...(offerObservation === undefined ? {} : { initialVessel: offerObservation }),
+        ...(startingPorts === undefined ? {} : { startingPorts })
+      },
+      observations: sourced,
+      actions: []
+    };
+  };
+
+  const refreshStartingPort = async (accountId: string, portId: string): Promise<void> => {
+    const key = candidatesKey(accountId);
+    const port = await observations.refresh<StartingPortValue>({
+      key,
+      source: portId,
+      load: (signal) => call(async () => {
+        const checked = validateModel<Port>(await readStartingResource(fetcher, portId, 'Starting Port', signal), 'Port');
+        if (!checked.success || checked.data.id !== portId) throw new Error('Starting Port is invalid');
+        return { id: checked.data.id, name: checked.data.name, territory: checked.data.territory };
+      })
+    });
+    const territory = observationValue<StartingPortValue>(port)?.territory;
+    if (territory === undefined) return;
+    await observations.refresh<StartingAuthorityValue>({
+      key,
+      source: territory,
+      load: (signal) => call(async () => {
+        const checked = validateModel<FCTPActor>(await readStartingResource(fetcher, territory, 'Territory Actor', signal), 'Actor');
+        if (!checked.success || checked.data.id !== territory || checked.data.role !== 'territory') throw new Error('Territory Actor is invalid');
+        const url = new URL(territory);
+        await options.rememberAuthority?.(checked.data, url.host, url.origin);
+        return {
+          id: checked.data.id,
+          role: 'territory',
+          ...(typeof checked.data.name === 'string' && checked.data.name.length > 0 ? { name: checked.data.name } : {})
+        };
+      })
+    });
   };
 
   const ensureVessel = async (account: AccountRecord, vesselId: string, load: boolean): Promise<VesselContext | undefined> => {
@@ -474,7 +615,7 @@ export function createLogisticsService(
     const pending = (await actions.list(accountId)).filter((action) =>
       action.submission.status === 'accepted'
       && action.outcome.status === 'pending'
-      && ['entry', 'departure', 'adoption'].includes(action.intent.kind)
+      && ['entry', 'departure', 'adoption', 'initial-vessel'].includes(action.intent.kind)
     );
     for (const action of pending) await actions.reconcile(action.id, accountId);
   };
@@ -494,21 +635,10 @@ export function createLogisticsService(
       const source = ownedVesselsSource(account);
       if (source !== undefined && account.actorId !== undefined && account.login.status === 'signed-in') {
         const nativeToken = account.login.nativeToken;
-        const observation = await observations.refresh({
+        const observation = await observations.refresh<OwnedVesselsValue>({
           key: ownedVesselsKey(account.id),
           source,
-          load: (signal) => call(async () => {
-            const response = await fetcher(source, {
-              method: 'GET',
-              headers: { Accept: 'application/json', Authorization: `Bearer ${nativeToken}` },
-              cache: 'no-store',
-              signal
-            });
-            if (!response.ok) throw new Error(`Home vessel listing unavailable: HTTP ${response.status}`);
-            const value = ownedVesselsValue(await response.json());
-            if (value === undefined) throw new Error('Home vessel listing is invalid');
-            return value;
-          })
+          load: (signal) => call(() => readHomeListing(fetcher, source, nativeToken, signal))
         });
         const value = observationValue<OwnedVesselsValue>(observation);
         const observedAt = 'observedAt' in observation && typeof observation.observedAt === 'string' ? observation.observedAt : undefined;
@@ -516,9 +646,44 @@ export function createLogisticsService(
           for (const vessel of value.vessels.filter((entry) => entry.possessor === account.actorId)) {
             await observations.retain({ key: vesselMetadataKey(vessel.id), source: vessel.id, value: vessel, observedAt });
           }
+          if (value.initialVessel !== undefined) {
+            for (const portId of value.initialVessel.startingPorts) await refreshStartingPort(account.id, portId);
+          }
         }
       }
       return candidatesPage(account);
+    },
+    async initialVessel(accountId, body) {
+      const account = await signedInAccount(accountId);
+      const allowed = new Set(['accountId', 'vesselId', 'name', 'portId']);
+      if (Object.keys(body).some((key) => !allowed.has(key))) throw new LogisticsRequestError(400, 'unsupported-initial-vessel-field');
+      const localId = typeof body.vesselId === 'string' ? body.vesselId : '';
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      const portId = typeof body.portId === 'string' ? body.portId.trim() : '';
+      if (!VESSEL_ID_PATTERN.test(localId)) throw new LogisticsRequestError(400, 'invalid-vessel-id');
+      if (!name) throw new LogisticsRequestError(400, 'invalid-vessel-name');
+      if (!portId) throw new LogisticsRequestError(400, 'port-id-required');
+      if (account.actorId === undefined) throw new LogisticsRequestError(403, 'account-actor-unavailable');
+      const source = ownedVesselsSource(account);
+      if (source === undefined || account.login.status !== 'signed-in') throw new LogisticsRequestError(403, 'home-vessel-listing-unavailable');
+      const nativeToken = account.login.nativeToken;
+      const observation = await observations.refresh<OwnedVesselsValue>({
+        key: ownedVesselsKey(account.id),
+        source,
+        load: (signal) => call(() => readHomeListing(fetcher, source, nativeToken, signal))
+      });
+      const value = observationValue<OwnedVesselsValue>(observation);
+      const offer = value !== undefined && value.actor === account.actorId ? value.initialVessel : undefined;
+      if (!observationIsCurrent(observation) || offer === undefined || offer.available !== true) throw new LogisticsRequestError(409, 'initial-vessel-unavailable');
+      if (!ownHomeRegistry(account, offer.registry)) throw new LogisticsRequestError(409, 'initial-vessel-registry-not-owned');
+      if (!offer.startingPorts.includes(portId)) throw new LogisticsRequestError(400, 'port-not-recommended');
+      await refreshStartingPort(account.id, portId);
+      const record = await actions.submit({
+        accountId: account.id,
+        targetId: offer.registry,
+        intent: { kind: 'initial-vessel', inputs: { localId, name, portId, registryId: offer.registry } }
+      });
+      return record;
     },
     async vessel(accountId, vesselId) {
       const account = await signedInAccount(accountId);
@@ -826,6 +991,122 @@ export function createWorkflowActionHandlers(
       const view = await registryStateFor(input.accountId, registryId, vesselId, input.signal);
       const actual = view.payload.adoption === true;
       if (actual === adoption) return { status: 'completed', evidence: [{ source: view.source, observedAt: new Date().toISOString(), changes: { adoption: actual } }] };
+      return { status: 'pending', evidence: [] };
+    }
+  };
+
+  const initialVessel: ActionHandler = {
+    async prepare(input) {
+      const localId = inputString(input.intent.inputs, 'localId');
+      const name = inputString(input.intent.inputs, 'name')?.trim();
+      const portId = inputString(input.intent.inputs, 'portId');
+      const registryId = inputString(input.intent.inputs, 'registryId');
+      if (!localId || !VESSEL_ID_PATTERN.test(localId) || !name || !portId || !registryId) {
+        return { accepted: false, reason: 'A valid local vessel ID, name, starting Port and Registry are required' };
+      }
+      if (input.targetId !== registryId) return { accepted: false, reason: 'The initial-vessel target does not match the selected Registry' };
+      const account = await accountFor(input.accountId);
+      if (!ownHomeRegistry(account, registryId)) return { accepted: false, reason: 'Initial-vessel registration requires the account Home Registry' };
+      const source = ownedVesselsSource(account);
+      if (source === undefined) return { accepted: false, reason: 'A verified Home server vessel listing source is unavailable' };
+      const listing = await call((signal) => readHomeListing(fetcher, source, account.login.nativeToken, signal));
+      const offer = listing.initialVessel;
+      if (listing.actor !== account.actorId) return { accepted: false, reason: 'The Home server vessel listing returned another account' };
+      if (!offer || offer.available !== true) return { accepted: false, reason: 'The Home server does not currently offer an initial vessel' };
+      if (offer.registry !== registryId) return { accepted: false, reason: 'The current initial-vessel offer names another Registry' };
+      if (!offer.startingPorts.includes(portId)) return { accepted: false, reason: 'The selected Port is not a current starting Port recommendation' };
+      return { accepted: true };
+    },
+    async submit(input) {
+      const localId = requiredString(input.intent.inputs, 'localId');
+      const name = requiredString(input.intent.inputs, 'name').trim();
+      const portId = requiredString(input.intent.inputs, 'portId');
+      const registryId = requiredString(input.intent.inputs, 'registryId');
+      if (!VESSEL_ID_PATTERN.test(localId) || !name) throw new Error('Initial-vessel fields are invalid');
+      const account = await accountFor(input.accountId);
+      if (!ownHomeRegistry(account, registryId)) throw new Error('Initial-vessel registration requires the account Home Registry');
+      const response = await fetcher(new URL('/local/registry/vessels', registryId).href, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${account.login.nativeToken}` },
+        body: JSON.stringify({ id: localId, name, port: portId }),
+        cache: 'no-store',
+        signal: input.signal
+      });
+      if (!response.ok) throw new Error(`Initial vessel registration failed: HTTP ${response.status}`);
+      const payload: unknown = await response.json();
+      if (!isRecord(payload)) throw new Error('Initial vessel registration response is malformed');
+      const vessel = validateModel<Vessel>(payload.vessel, 'Vessel');
+      if (!vessel.success) throw new Error('Initial vessel registration returned an invalid Vessel');
+      const creation = validateModel<VesselCreationRequest>(payload.request, 'VesselCreationRequest');
+      if (!creation.success) throw new Error('Initial vessel registration returned an invalid creation request');
+      if (vessel.data.registry !== registryId || vessel.data.possessor !== account.actorId) throw new Error('Initial vessel registration returned another Registry or possessor');
+      if (creation.data.vessel.id !== vessel.data.id || creation.data.vessel.registry !== registryId || creation.data.vessel.possessor !== account.actorId) {
+        throw new Error('Initial vessel creation request does not reference the returned Vessel');
+      }
+      if (creation.data.destination.port !== portId) throw new Error('Initial vessel creation request does not reference the selected Port');
+      const port = observationValue<StartingPortValue>(await observations.readOne(candidatesKey(account.id), portId));
+      if (port === undefined || creation.data.destination.territory !== port.territory) throw new Error('Initial vessel creation request does not reference the recommended Port territory');
+      const observedAt = new Date().toISOString();
+      await observations.retain({ key: vesselMetadataKey(vessel.data.id), source: vessel.data.id, value: vessel.data, observedAt });
+      const source = ownedVesselsSource(account);
+      if (source !== undefined) {
+        const listing = observationValue<OwnedVesselsValue>(await observations.readOne(ownedVesselsKey(account.id), source));
+        if (listing?.actor === account.actorId) {
+          await observations.retain({
+            key: ownedVesselsKey(account.id), source, observedAt,
+            value: {
+              ...listing,
+              vessels: [...listing.vessels.filter((entry) => entry.id !== vessel.data.id), vessel.data],
+              ...(listing.initialVessel === undefined ? {} : { initialVessel: { ...listing.initialVessel, available: false } })
+            }
+          });
+        }
+      }
+      return {
+        result: `initial vessel ${vessel.data.id}`,
+        references: [{ kind: 'resource', id: vessel.data.id }, { kind: 'request', id: creation.data.id }]
+      };
+    },
+    async reconcile(input) {
+      const registryId = inputString(input.intent.inputs, 'registryId');
+      const portId = inputString(input.intent.inputs, 'portId');
+      const resource = input.references.find((reference) => reference.kind === 'resource');
+      const request = input.references.find((reference) => reference.kind === 'request');
+      if (!registryId || !portId || !resource || !request) {
+        return { status: 'unverified', error: 'Initial-vessel Registry or resource references are unavailable' };
+      }
+      const account = await accountFor(input.accountId);
+      if (!ownHomeRegistry(account, registryId)) return { status: 'unverified', error: 'Initial-vessel Registry is not the account Home Registry' };
+      const view = await registryStateFor(input.accountId, registryId, resource.id, input.signal);
+      const creation = validateModel<VesselCreationRequest>(record(view.payload.requests)[request.id], 'VesselCreationRequest');
+      if (!creation.success || creation.data.id !== request.id || creation.data.vessel.id !== resource.id || creation.data.vessel.registry !== registryId
+        || creation.data.vessel.possessor !== account.actorId || creation.data.destination.port !== portId) {
+        return { status: 'unverified', error: 'The retained initial-vessel creation request is unavailable' };
+      }
+      const vessel = validateModel<Vessel>(view.payload.vessel, 'Vessel');
+      if (!vessel.success || vessel.data.id !== resource.id || vessel.data.registry !== registryId || vessel.data.possessor !== account.actorId) {
+        return { status: 'unverified', error: 'The retained initial Vessel is unavailable' };
+      }
+      const events = Array.isArray(view.payload.events) ? view.payload.events.filter(isRecord) : [];
+      const berthing = events.find((event) => event.type === 'BerthingEvent' && event.request === request.id);
+      if (berthing) {
+        if (berthing.vessel !== resource.id || berthing.port !== portId || berthing.territory !== creation.data.destination.territory) {
+          return { status: 'unverified', error: 'A BerthingEvent does not match the retained initial vessel' };
+        }
+        return { status: 'completed', evidence: [{ source: view.source, observedAt: new Date().toISOString(), changes: { event: berthing } }] };
+      }
+      const rejected = events.find((event) => event.type === 'EntryRejected' && event.request === request.id);
+      if (rejected) {
+        if (rejected.territory !== creation.data.destination.territory) {
+          return { status: 'unverified', error: 'An EntryRejected does not match the retained initial vessel' };
+        }
+        return {
+          status: 'failed',
+          evidence: [{ source: view.source, observedAt: new Date().toISOString(), changes: { event: rejected } }],
+          error: typeof rejected.reason === 'string' ? rejected.reason : 'entry-rejected'
+        };
+      }
+      if (!Object.hasOwn(record(view.payload.requests), request.id)) return { status: 'unverified', error: 'The Registry no longer retains the creation request' };
       return { status: 'pending', evidence: [] };
     }
   };
@@ -1212,6 +1493,7 @@ export function createWorkflowActionHandlers(
     entry: entryOrDeparture('entry'),
     departure: entryOrDeparture('departure'),
     adoption,
+    'initial-vessel': initialVessel,
     traverse,
     mine: production('mine'),
     manufacture: production('manufacture'),

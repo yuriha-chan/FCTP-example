@@ -29,6 +29,8 @@ test('authority app discovers Actors, issues native credentials, and publishes a
   const app = await createAuthorityApp({ origin, storeFile: join(directory, 'authority.json'), adminSecret: 'local-admin-secret', fetcher });
   try {
     await app.authority.listen(port);
+    const primaryVessel = app.ids.vessel;
+    assert.ok(primaryVessel, 'the default fixture provides a primary vessel');
     const actorResponse = await fetch(app.ids.actor.registry);
     assert.equal(actorResponse.status, 200);
     assert.equal((await actorResponse.json() as { id: string }).id, app.ids.actor.registry);
@@ -39,9 +41,9 @@ test('authority app discovers Actors, issues native credentials, and publishes a
     assert.equal(info.kind, 'authority');
     assert.equal(JSON.stringify(info).includes('local-admin-secret'), false);
 
-    const vesselResponse = await fetch(app.ids.vessel);
+    const vesselResponse = await fetch(primaryVessel);
     assert.equal(vesselResponse.status, 200);
-    assert.equal((await vesselResponse.json() as { id: string }).id, app.ids.vessel);
+    assert.equal((await vesselResponse.json() as { id: string }).id, primaryVessel);
 
     const issueDenied = await fetch(`${origin}/local/home/issue`, { method: 'POST' });
     assert.equal(issueDenied.status, 401);
@@ -63,7 +65,7 @@ test('authority app discovers Actors, issues native credentials, and publishes a
     assert.equal(verification.verified, true);
     const envelope = published as { object?: { type?: string; vessel?: { id?: string } } };
     assert.equal(envelope.object?.type, 'EntryRequest');
-    assert.equal(envelope.object?.vessel?.id, app.ids.vessel);
+    assert.equal(envelope.object?.vessel?.id, primaryVessel);
   } finally {
     await app.authority.close();
     await rm(directory, { recursive: true, force: true });

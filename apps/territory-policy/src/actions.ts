@@ -53,8 +53,19 @@ export async function discoverPolicyActions(input: {
   for (const [port, route] of [[input.ids.ports[0]!, input.ids.routes[0]!], [input.ids.ports[1]!, input.ids.routes[1]!]]) {
     actions.push({ id: `request-entry-${port === input.ids.ports[0] ? 'east' : 'west'}`, label: `Request local entry at ${port === input.ids.ports[0] ? 'East Haven' : 'West Haven'}`, available: !activeVisit, ...(!activeVisit ? {} : { reason: 'vessel-already-has-active-local-visit' }), request: { method: 'POST', href: new URL('/local/registry/entry', vessel.registry).href, body: { vessel: input.vessel, territory: input.actor, port, route } }, effect: 'Asks the Registry to create an entry request using its declared cargo and journey; local acceptance is separately decided at execution.' });
   }
-  if (visit && !visit.departed) actions.push({ id: 'depart-current-visit', label: 'Request departure from current berth', available: true, request: { method: 'POST', href: new URL('/local/registry/departure', visit.registry).href, body: { vessel: input.vessel, territory: input.actor, port: visit.port, route: visit.route } }, effect: 'Requests Registry processing for this persisted current berth and route; Registry native authentication is required.' });
-  else actions.push({ id: 'depart-current-visit', label: 'Request departure from current berth', available: false, reason: 'no-active-local-berth', effect: 'A current local berth is required.' });
+  if (visit && !visit.departed) {
+    if (visit.arrivalType === 'VesselCreationRequest' || visit.route === undefined) {
+      const outgoing = (input.routes ?? []).filter((route) => route.from === visit.port && input.ids.routes.includes(route.id as URI));
+      if (outgoing.length === 0) actions.push({ id: 'depart-current-visit', label: 'Request departure from current berth', available: false, reason: 'no-owned-outgoing-route', effect: 'A real owned outgoing route from the current port is required.' });
+      for (const route of outgoing) actions.push({
+        id: `depart-current-visit-${String(route.id).split('/').at(-1)}`, label: `Request departure via ${String(route.id).split('/').at(-1)}`, available: true,
+        request: { method: 'POST', href: new URL('/local/registry/departure', visit.registry).href, body: { vessel: input.vessel, territory: input.actor, port: visit.port, route: route.id } },
+        effect: 'Requests Registry processing for this persisted current berth and selected outgoing route; Registry native authentication is required.'
+      });
+    } else {
+      actions.push({ id: 'depart-current-visit', label: 'Request departure from current berth', available: true, request: { method: 'POST', href: new URL('/local/registry/departure', visit.registry).href, body: { vessel: input.vessel, territory: input.actor, port: visit.port, route: visit.route } }, effect: 'Requests Registry processing for this persisted current berth and route; Registry native authentication is required.' });
+    }
+  } else actions.push({ id: 'depart-current-visit', label: 'Request departure from current berth', available: false, reason: 'no-active-local-berth', effect: 'A current local berth is required.' });
   if (visit && !visit.departed && visit.possessor === input.player) {
     for (const route of input.routes ?? []) {
       if (route.from !== visit.port || !input.ids.ports.includes(route.to as URI) || route.to === visit.port) continue;
