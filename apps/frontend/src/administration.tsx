@@ -1069,8 +1069,15 @@ export function Administration(props: AdministrationProps): ReactElement {
           setClaimError('The claim response was malformed.');
           return;
         }
+        const selected = typeof response.authorityId === 'string'
+          ? data.targets.find((target) => target.authorityId === response.authorityId)?.authorityId
+          : undefined;
+        if (selected === undefined) {
+          setClaiming(false);
+          setClaimError('The claim response was malformed.');
+          return;
+        }
         setClaiming(false);
-        const selected = data.targets.find((target) => target.authorityId === authority)?.authorityId ?? data.targets[0]?.authorityId;
         authorityRef.current = selected;
         setSelectedAuthority(selected);
         setViewState({ accountId: account, data });
@@ -1133,14 +1140,14 @@ export function Administration(props: AdministrationProps): ReactElement {
 
           <div className={styles.section}>
             <h3 className={styles.subheading}>Claim administration role</h3>
-            <p className={styles.meta}>Enter a target Authority Actor ID. Home verifies the claim against that target.</p>
+            <p className={styles.meta}>Enter a Home server domain to claim its Home, or an authority handle for a Home, Registry, or Territory. Home verifies the claim against the resolved target.</p>
             <label className={styles.field}>
-              Authority Actor ID
+              Home server or authority handle
               <input
-                aria-label="Authority Actor ID"
+                aria-label="Home server or authority handle"
                 value={claimAuthority}
                 onChange={(event) => setClaimAuthority(event.target.value)}
-                placeholder="https://authority.example.org/actors/registry"
+                placeholder="example.org or @system.registry@example.org"
               />
             </label>
             <div className={styles.controls}>

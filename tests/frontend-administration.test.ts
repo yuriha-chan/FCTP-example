@@ -138,6 +138,7 @@ interface AdministrationRequest {
   pathname: string;
   accountId?: string;
   authorityId?: string;
+  authority?: string;
   control?: string;
   requestId?: string;
   decision?: string;
@@ -442,12 +443,14 @@ async function openFixture(t: TestContext, config: FixtureConfig): Promise<Opene
     } else if (url.pathname === '/api/administration/claim' && request.method() === 'POST') {
       const accountId = typeof body?.accountId === 'string' ? body.accountId : undefined;
       const authorityId = typeof body?.authorityId === 'string' ? body.authorityId : undefined;
+      const authority = typeof body?.authority === 'string' ? body.authority : undefined;
       recorded = {
         kind: 'claim',
         method: request.method(),
         pathname: url.pathname,
         ...(accountId === undefined ? {} : { accountId }),
         ...(authorityId === undefined ? {} : { authorityId }),
+        ...(authority === undefined ? {} : { authority }),
         ...(parsedBody === undefined ? {} : { body: parsedBody }),
         headers: request.headers()
       };
@@ -671,29 +674,90 @@ test('performs one retained read on open and renders target-owned scope without 
   assert.deepEqual(errors, []);
 });
 
-test('claims a target through Home and renders the returned entry', async (t) => {
-  const claimed = makeData(accountA, [
+test('claims a domain or authority handle through Home and selects the returned target', async (t) => {
+  const initialData = makeData(accountA, [
+    makeTarget(authorityPolicy, { name: 'Alpha Territory', kind: 'policy', observedAt }),
+    makeTarget(authorityHome, { name: 'Home', kind: 'home', roles: ['home'], state: 'not-retrieved' })
+  ], []);
+  const domainClaim = makeData(accountA, [
+    makeTarget(authorityPolicy, { name: 'Alpha Territory', kind: 'policy', observedAt }),
+    makeTarget(authorityHome, { name: 'Home', kind: 'home', roles: ['home'], state: 'not-retrieved' })
+  ], []);
+  const handleClaim = makeData(accountA, [
+    makeTarget(authorityPolicy, { name: 'Alpha Territory', kind: 'policy', observedAt }),
+    makeTarget(authorityHome, { name: 'Home', kind: 'home', roles: ['home'], state: 'not-retrieved' }),
     makeTarget(authorityRegistry, { name: 'Registry', kind: 'registry', roles: ['registry'], state: 'not-retrieved' })
   ], []);
   const { page, requests, errors } = await openFixture(t, {
     accountId: accountA,
     handler: (request) => {
-      if (request.kind === 'read') return { body: pageOf(makeData(accountA, [], [])) };
-      if (request.kind === 'claim') return { body: pageOf(claimed) };
+      if (request.kind === 'read') return { body: pageOf(initialData) };
+      if (request.kind === 'claim' && request.authority === 'alpha.test:4200') {
+        return { body: { ...pageOf(domainClaim), authorityId: authorityHome } };
+      }
+      if (request.kind === 'claim' && request.authority === '@harbor.registry@harbor.test:4200') {
+        return { body: { ...pageOf(handleClaim), authorityId: authorityRegistry } };
+      }
       return { status: 500, body: { error: 'unexpected request' } };
     }
   });
 
   const region = administration(page);
-  await region.getByLabel('Authority Actor ID').fill(authorityRegistry);
-  await region.getByRole('button', { name: 'Claim' }).click();
-  await waitForText(region, 'Registry', 'expected the claimed target');
+  await waitForText(region, 'Alpha Territory', 'expected the initial target');
+  const input = region.getByLabel('Home server or authority handle');
+  await input.waitFor({ state: 'visible', timeout: settleTimeout });
+  const targetSelect = region.getByLabel('Administration target');
+  assert.equal(await targetSelect.inputValue(), authorityPolicy);
 
-  const claim = requests.find((request) => request.kind === 'claim');
-  assert.ok(claim, 'expected an explicit Home claim request');
-  assert.equal(claim.method, 'POST');
-  assert.equal(claim.pathname, '/api/administration/claim');
-  assert.deepEqual(claim.body, { accountId: accountA, authorityId: authorityRegistry });
+  await input.fill('alpha.test:4200');
+  await region.getByRole('button', { name: 'Claim' }).click();
+  await waitFor(() => requests.some((request) => request.kind === 'claim' && request.authority === 'alpha.test:4200'), 'expected a domain claim request');
+  await waitFor(async () => await targetSelect.inputValue() === authorityHome, 'the returned target must be selected when it is already listed and not first');
+  await region.getByRole('heading', { name: 'Home', exact: true }).waitFor({ state: 'visible', timeout: settleTimeout });
+  const domainRequest = requests.find((request) => request.kind === 'claim' && request.authority === 'alpha.test:4200')!;
+  assert.equal(domainRequest.method, 'POST');
+  assert.equal(domainRequest.pathname, '/api/administration/claim');
+  assert.deepEqual(domainRequest.body, { accountId: accountA, authority: 'alpha.test:4200' });
+  assert.equal(requests.filter((request) => request.kind !== 'read').length, 1, 'claiming must not submit a separate refresh or control');
+
+  await input.fill('@harbor.registry@harbor.test:4200');
+  await region.getByRole('button', { name: 'Claim' }).click();
+  await waitFor(() => requests.some((request) => request.kind === 'claim' && request.authority === '@harbor.registry@harbor.test:4200'), 'expected an authority handle claim request');
+  await waitFor(async () => await targetSelect.inputValue() === authorityRegistry, 'the returned target must be selected when another target is first');
+  await region.getByRole('heading', { name: 'Registry', exact: true }).waitFor({ state: 'visible', timeout: settleTimeout });
+  const handleRequest = requests.find((request) => request.kind === 'claim' && request.authority === '@harbor.registry@harbor.test:4200')!;
+  assert.deepEqual(handleRequest.body, { accountId: accountA, authority: '@harbor.registry@harbor.test:4200' });
+  assert.equal(requests.filter((request) => request.kind !== 'read').length, 2, 'claims must not submit separate refreshes or controls');
+  assert.deepEqual(errors, []);
+});
+
+test('retains the selected target and its observed state when a claim fails', async (t) => {
+  const data = makeData(accountA, [
+    makeTarget(authorityPolicy, { name: 'Alpha Territory', kind: 'policy', observedAt })
+  ], [policyControl], [], { [authorityPolicy]: policyState() });
+  const { page, requests, errors } = await openFixture(t, {
+    accountId: accountA,
+    handler: (request) => {
+      if (request.kind === 'read') return { body: pageOf(data) };
+      if (request.kind === 'claim') return { status: 503, body: { error: 'claim-rejected' } };
+      return { status: 500, body: { error: 'unexpected request' } };
+    }
+  });
+
+  const region = administration(page);
+  await waitForText(region, 'Alpha Territory', 'expected the retained target');
+  const targetSelect = region.getByLabel('Administration target');
+  assert.equal(await targetSelect.inputValue(), authorityPolicy);
+  assert.equal(await region.getByLabel('Mining quota').inputValue(), '20');
+
+  await region.getByLabel('Home server or authority handle').fill('unreachable.test:4200');
+  await region.getByRole('button', { name: 'Claim' }).click();
+  await waitFor(() => requests.some((request) => request.kind === 'claim' && request.authority === 'unreachable.test:4200'), 'expected the failed claim request');
+  await waitForText(region, /claim failed/i, 'expected the claim failure to be reported');
+
+  assert.equal(await targetSelect.inputValue(), authorityPolicy, 'a failed claim must retain the selected target');
+  await waitForText(region, 'Alpha Territory', 'the previous target must remain rendered');
+  assert.equal(await region.getByLabel('Mining quota').inputValue(), '20', 'a failed claim must retain the observed state');
   assert.deepEqual(errors, []);
 });
 

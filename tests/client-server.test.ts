@@ -323,10 +323,21 @@ interface FixtureHomeAccount {
   unavailable?: boolean;
 }
 
+interface FixtureHomeAdministrationEntry {
+  roles: FixtureAuthorityRole[];
+  name?: string;
+}
+
+interface FixtureHomeAdministration {
+  entries: Record<string, FixtureHomeAdministrationEntry>;
+}
+
 interface FixtureHome {
   origin: string;
   homeActorId: string;
   accounts: FixtureHomeAccount[];
+  homeAccountName?: string;
+  administration?: FixtureHomeAdministration;
 }
 
 type FixtureAuthorityRole = 'home' | 'registry' | 'territory' | 'asset-server' | 'player';
@@ -348,6 +359,11 @@ interface UpstreamCall {
   url: string;
   method: string;
   body?: unknown;
+  headers: Headers;
+  authorization: string;
+  cache?: RequestCache;
+  credentials?: RequestCredentials;
+  redirect?: RequestRedirect;
 }
 
 const firstLoginAccount: FixtureHomeAccount = {
@@ -390,7 +406,17 @@ function createFixtureFetch(homes: readonly FixtureHome[], authorities: readonly
     const url = input instanceof Request ? input.url : String(input);
     const method = init?.method ?? 'GET';
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) as unknown : undefined;
-    calls.push({ url, method, ...(body === undefined ? {} : { body }) });
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    calls.push({
+      url,
+      method,
+      ...(body === undefined ? {} : { body }),
+      headers,
+      authorization: headers.get('authorization') ?? '',
+      ...(init?.cache === undefined ? {} : { cache: init.cache }),
+      ...(init?.credentials === undefined ? {} : { credentials: init.credentials }),
+      ...(init?.redirect === undefined ? {} : { redirect: init.redirect })
+    });
     const parsed = new URL(url);
     const home = homes.find((candidate) => new URL(candidate.origin).host === parsed.host);
     if (home) return homeResponse(home, parsed, method, body);
@@ -401,13 +427,42 @@ function createFixtureFetch(homes: readonly FixtureHome[], authorities: readonly
   return { fetch: fetcher, calls };
 }
 
+function fixtureJson(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
 function homeResponse(home: FixtureHome, url: URL, method: string, body: unknown): Response {
+  if (url.pathname === '/.well-known/nodeinfo') {
+    return fixtureJson({ links: [{ rel: 'http://nodeinfo.diaspora.software/ns/schema/2.1', href: `${home.origin}/nodeinfo/2.1` }] });
+  }
+  if (url.href === `${home.origin}/nodeinfo/2.1`) {
+    return fixtureJson({ version: '2.1', metadata: { homeAccountName: home.homeAccountName ?? 'system.home' } });
+  }
   if (url.pathname === '/.well-known/webfinger') {
     const resource = url.searchParams.get('resource') ?? '';
+    if (resource === `acct:${home.homeAccountName ?? 'system.home'}@${new URL(home.origin).host}`) {
+      return new Response(JSON.stringify({ subject: resource, links: [{ rel: 'self', href: home.homeActorId }] }), { status: 200, headers: { 'Content-Type': 'application/jrd+json' } });
+    }
     const handle = resource.startsWith('acct:') ? resource.slice(5) : resource;
     const account = home.accounts.find((candidate) => candidate.handle === handle);
     if (!account) return new Response(JSON.stringify({ error: 'unknown-account' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
     return new Response(JSON.stringify({ subject: `acct:${account.handle}`, links: [{ rel: 'self', href: account.actorId }] }), { status: 200, headers: { 'Content-Type': 'application/jrd+json' } });
+  }
+  if (url.pathname === '/local/home/administration' && (method === 'GET' || method === 'POST')) {
+    if (method === 'POST') {
+      const request = bodyRecord(body);
+      const authorityId = typeof request.authorityId === 'string' ? request.authorityId : '';
+      const entry = home.administration?.entries[authorityId];
+      if (!entry) return fixtureJson({ error: 'invalid-authority' }, 400);
+      return fixtureJson({ entry: { authorityId, roles: entry.roles, permissions: ['admin'], ...(entry.name === undefined ? {} : { name: entry.name }) } });
+    }
+    const entries = Object.entries(home.administration?.entries ?? {}).map(([authorityId, entry]) => ({
+      authorityId,
+      roles: entry.roles,
+      permissions: ['admin'],
+      ...(entry.name === undefined ? {} : { name: entry.name })
+    }));
+    return fixtureJson({ actor: home.homeActorId, entries });
   }
   const actor = home.accounts.find((candidate) => candidate.actorId === url.href);
   if (actor) return new Response(JSON.stringify({ id: actor.actorId, role: 'player' }), { status: 200, headers: { 'Content-Type': 'application/activity+json' } });
@@ -941,6 +996,269 @@ test('resolves administrator tokens for any signed-in account and target', async
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+const claimAccount: AccountRecord = {
+  id: 'account:claim',
+  handle: '@claim@home.test:4200',
+  homeServer: 'home.test:4200',
+  actorId: 'https://home.test:4200/actors/claim',
+  homeAuthority: 'https://home.test:4200/delegated/keepers/home',
+  login: { status: 'signed-in', homeServer: 'home.test:4200', nativeToken: 'claim-native-token' }
+};
+const claimHomeActorId = 'https://home.test:4200/delegated/keepers/home';
+const claimLoopbackHomeActorId = 'http://127.0.0.1:4599/actors/home';
+const claimHarborHomeActorId = 'https://harbor.test:4200/actors/home';
+const claimHarborRegistryActorId = 'https://harbor.test:4200/actors/registry';
+const claimHarborTerritoryActorId = 'https://harbor.test:4200/actors/territory';
+const claimDirectAuthorityId = 'https://direct.test:4200/actors/registry';
+
+function claimHomeFixture(): FixtureHome {
+  return {
+    origin: 'https://home.test:4200',
+    homeActorId: claimHomeActorId,
+    homeAccountName: 'keepers.home',
+    accounts: [{ handle: claimAccount.handle, actorId: claimAccount.actorId!, password: 'claim-password', nativeToken: 'claim-native-token' }],
+    administration: {
+      entries: {
+        [claimHarborRegistryActorId]: { roles: ['registry'], name: 'Harbor Registry' },
+        [claimHomeActorId]: { roles: ['home'], name: 'Delegated Home' },
+        [claimHarborHomeActorId]: { roles: ['home'], name: 'Harbor Home' },
+        [claimHarborTerritoryActorId]: { roles: ['territory'], name: 'Harbor Territory' },
+        [claimLoopbackHomeActorId]: { roles: ['home'], name: 'Loopback Home' },
+        [claimDirectAuthorityId]: { roles: ['registry'], name: 'Direct Registry' }
+      }
+    }
+  };
+}
+
+function claimLoopbackHomeFixture(): FixtureHome {
+  return {
+    origin: 'http://127.0.0.1:4599',
+    homeActorId: claimLoopbackHomeActorId,
+    homeAccountName: 'local.home',
+    accounts: []
+  };
+}
+
+function claimAuthoritiesFixture(): FixtureAuthority[] {
+  return [{
+    origin: 'https://harbor.test:4200',
+    server: 'harbor.test:4200',
+    actors: [
+      { handle: '@harbor.home@harbor.test:4200', actorId: claimHarborHomeActorId, role: 'home' },
+      { handle: '@harbor.registry@harbor.test:4200', actorId: claimHarborRegistryActorId, role: 'registry' },
+      { handle: '@harbor.territory@harbor.test:4200', actorId: claimHarborTerritoryActorId, role: 'territory' },
+      { handle: '@harbor.player@harbor.test:4200', actorId: 'https://harbor.test:4200/actors/player', role: 'player' },
+      { handle: '@harbor.asset-server@harbor.test:4200', actorId: 'https://harbor.test:4200/actors/assets', role: 'asset-server' },
+      { handle: '@mismatch.registry@harbor.test:4200', actorId: 'https://harbor.test:4200/actors/mismatch', role: 'territory' }
+    ]
+  }];
+}
+
+function assertCredentialFreeResolution(calls: readonly UpstreamCall[]): void {
+  assert.ok(calls.length > 0, 'expected public resolution requests');
+  for (const call of calls) {
+    assert.equal(call.method, 'GET');
+    assert.equal(call.authorization, '');
+    assert.equal(call.cache, 'no-store');
+    assert.equal(call.credentials, 'omit');
+    assert.equal(call.redirect, 'error', 'resolution must not follow redirects');
+  }
+}
+
+function homeAdministrationClaims(calls: readonly UpstreamCall[]): UpstreamCall[] {
+  return calls.filter((call) => call.method === 'POST' && new URL(call.url).pathname === '/local/home/administration');
+}
+
+function publicResolutionCalls(calls: readonly UpstreamCall[]): UpstreamCall[] {
+  const claimIndex = calls.findIndex((call) => call.method === 'POST' && new URL(call.url).pathname === '/local/home/administration');
+  return claimIndex < 0 ? [...calls] : calls.slice(0, claimIndex);
+}
+
+test('administration claim resolves a server domain to its published Home authority', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-admin-claim-domain-'));
+  const storeFile = join(directory, 'client.store.json');
+  const fixture = createFixtureFetch([claimHomeFixture(), claimLoopbackHomeFixture()], claimAuthoritiesFixture());
+  const opened = await openFixtureApplication(storeFile, fixture.fetch);
+  const claim = (body: Record<string, unknown>) => fetch(new URL('/api/administration/claim', opened.client.origin), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  try {
+    await opened.application.state.transaction((state) => { state.accounts[claimAccount.id] = claimAccount; });
+
+    const before = fixture.calls.length;
+    const response = await claim({ accountId: claimAccount.id, authority: 'home.test:4200' });
+    assert.equal(response.status, 200);
+    const body = await response.json() as PageResponse<{ targets: Array<{ authorityId: string }> }> & { authorityId?: string };
+    assert.equal(body.authorityId, claimHomeActorId, 'the response names the resolved target');
+    assert.equal(body.context.accountId, claimAccount.id);
+    assert.ok(body.data.targets.some((target) => target.authorityId === claimHomeActorId));
+    assert.ok(body.identities?.some((identity) => identity.actorId === claimHomeActorId), 'claim responses retain normal relevant-identity enrichment');
+    const knownResponse = await fetch(new URL('/api/servers', opened.client.origin));
+    assert.equal(knownResponse.status, 200);
+    const known = await knownResponse.json() as { servers: ServerRecord[]; authorities: AuthorityRecord[] };
+    assert.ok(known.authorities.some((authority) => authority.actorId === claimHomeActorId && authority.roles.includes('home')), 'resolved Home joins the shared known-authority directory');
+    assert.ok(known.servers.some((server) => server.server === 'home.test:4200' && server.authorities.includes(claimHomeActorId)));
+
+    const calls = fixture.calls.slice(before);
+    const posts = homeAdministrationClaims(calls);
+    assert.equal(posts.length, 1);
+    assert.equal(new URL(posts[0]!.url).origin, 'https://home.test:4200');
+    assert.deepEqual(posts[0]!.body, { authorityId: claimHomeActorId }, 'Home receives only the resolved authority ID');
+    assert.equal(posts[0]!.authorization, `Bearer ${claimAccount.login.status === 'signed-in' ? claimAccount.login.nativeToken : ''}`);
+    const discovery = publicResolutionCalls(calls);
+    assert.ok(discovery.some((call) => new URL(call.url).pathname === '/.well-known/nodeinfo'));
+    assert.ok(discovery.some((call) => new URL(call.url).pathname === '/.well-known/webfinger'));
+    assert.equal(discovery.some((call) => new URL(call.url).pathname === '/local/info'), false, 'domain resolution must not enumerate server authority documents');
+    assertCredentialFreeResolution(discovery);
+    for (const call of calls) assert.equal(JSON.stringify(call.body ?? null).includes('claim-native-token'), false);
+
+    const loopbackBefore = fixture.calls.length;
+    const loopback = await claim({ accountId: claimAccount.id, authority: '127.0.0.1:4599' });
+    assert.equal(loopback.status, 200);
+    const loopbackBody = await loopback.json() as PageResponse<unknown> & { authorityId?: string };
+    assert.equal(loopbackBody.authorityId, claimLoopbackHomeActorId, 'an explicit loopback port resolves over HTTP without losing the port');
+    const loopbackCalls = fixture.calls.slice(loopbackBefore);
+    const loopbackPosts = homeAdministrationClaims(loopbackCalls);
+    assert.equal(loopbackPosts.length, 1);
+    assert.deepEqual(loopbackPosts[0]!.body, { authorityId: claimLoopbackHomeActorId });
+    const loopbackDiscovery = publicResolutionCalls(loopbackCalls);
+    assert.ok(loopbackDiscovery.length > 0);
+    for (const call of loopbackDiscovery) {
+      assert.equal(new URL(call.url).protocol, 'http:');
+      assert.equal(new URL(call.url).host, '127.0.0.1:4599');
+    }
+  } finally {
+    await opened.client.close();
+    await opened.application.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('administration claim resolves Home, Registry and Territory handles to their exact authorities', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-admin-claim-handles-'));
+  const storeFile = join(directory, 'client.store.json');
+  const fixture = createFixtureFetch([claimHomeFixture()], claimAuthoritiesFixture());
+  const opened = await openFixtureApplication(storeFile, fixture.fetch);
+  const claim = (body: Record<string, unknown>) => fetch(new URL('/api/administration/claim', opened.client.origin), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  try {
+    await opened.application.state.transaction((state) => { state.accounts[claimAccount.id] = claimAccount; });
+    const handles: Array<[string, string]> = [
+      ['@harbor.home@harbor.test:4200', claimHarborHomeActorId],
+      ['@harbor.registry@harbor.test:4200', claimHarborRegistryActorId],
+      ['@harbor.territory@harbor.test:4200', claimHarborTerritoryActorId]
+    ];
+    for (const [handle, expected] of handles) {
+      const before = fixture.calls.length;
+      const response = await claim({ accountId: claimAccount.id, authority: handle });
+      assert.equal(response.status, 200, handle);
+      const body = await response.json() as PageResponse<unknown> & { authorityId?: string };
+      assert.equal(body.authorityId, expected, handle);
+      const knownResponse = await fetch(new URL('/api/servers', opened.client.origin));
+      assert.equal(knownResponse.status, 200);
+      const known = await knownResponse.json() as { authorities: AuthorityRecord[] };
+      assert.ok(known.authorities.some((authority) => authority.actorId === expected), 'resolved role authority joins the shared directory used by control reconciliation');
+      const calls = fixture.calls.slice(before);
+      const posts = homeAdministrationClaims(calls);
+      assert.equal(posts.length, 1, handle);
+      assert.deepEqual(posts[0]!.body, { authorityId: expected }, 'Home receives the resolved actor ID rather than the handle');
+      assert.equal(posts[0]!.authorization, `Bearer ${claimAccount.login.status === 'signed-in' ? claimAccount.login.nativeToken : ''}`);
+      assertCredentialFreeResolution(publicResolutionCalls(calls));
+    }
+
+    for (const authority of [
+      '@someone@home.test:4200',
+      '@harbor.player@harbor.test:4200',
+      '@harbor.asset-server@harbor.test:4200',
+      '@mismatch.registry@harbor.test:4200'
+    ]) {
+      const before = fixture.calls.length;
+      const response = await claim({ accountId: claimAccount.id, authority });
+      assert.ok(response.status >= 400 && response.status < 500, `${authority} must be rejected`);
+      assert.ok((await response.text()).length > 0);
+      assert.equal(homeAdministrationClaims(fixture.calls.slice(before)).length, 0, `${authority} must never reach a Home claim`);
+    }
+  } finally {
+    await opened.client.close();
+    await opened.application.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('administration claim validates exclusive input, authorization and resolution before Home mutation while preserving authorityId callers', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-admin-claim-input-'));
+  const storeFile = join(directory, 'client.store.json');
+  const fixture = createFixtureFetch([claimHomeFixture()], claimAuthoritiesFixture());
+  const opened = await openFixtureApplication(storeFile, fixture.fetch);
+  const claim = (body: Record<string, unknown>) => fetch(new URL('/api/administration/claim', opened.client.origin), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  try {
+    await opened.application.state.transaction((state) => { state.accounts[claimAccount.id] = claimAccount; });
+
+    const unauthorizedStart = fixture.calls.length;
+    const unauthorized = await fetch(new URL('/api/administration/claim', opened.client.origin), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer not-a-client-session' },
+      body: JSON.stringify({ accountId: claimAccount.id, authority: 'home.test:4200' })
+    });
+    assert.ok([401, 403].includes(unauthorized.status));
+    assert.equal(fixture.calls.length, unauthorizedStart, 'authorization must precede resolution and Home IO');
+
+    const bothStart = fixture.calls.length;
+    const both = await claim({ accountId: claimAccount.id, authority: 'home.test:4200', authorityId: claimHomeActorId });
+    assert.equal(both.status, 400);
+    assert.equal(fixture.calls.length, bothStart, 'ambiguous input must not dispatch a Home claim');
+
+    const noneStart = fixture.calls.length;
+    const none = await claim({ accountId: claimAccount.id });
+    assert.equal(none.status, 400);
+    assert.equal(fixture.calls.length, noneStart);
+
+    for (const authority of [
+      'https://home.test:4200',
+      'home.test:4200/path',
+      'user:secret@home.test:4200',
+      'home.test:4200?query=1',
+      'home.test:4200#fragment',
+      'home.test:99999'
+    ]) {
+      const before = fixture.calls.length;
+      const response = await claim({ accountId: claimAccount.id, authority });
+      assert.equal(response.status, 400, `${authority} must be rejected as a strict server host`);
+      assert.equal(fixture.calls.length, before, `${authority} must be rejected before resolution`);
+    }
+
+    const unresolvedStart = fixture.calls.length;
+    const unresolved = await claim({ accountId: claimAccount.id, authority: 'unresolved.test:4300' });
+    assert.ok(unresolved.status >= 400, 'an unresolvable domain must fail');
+    assert.ok((await unresolved.text()).length > 0);
+    assert.equal(homeAdministrationClaims(fixture.calls.slice(unresolvedStart)).length, 0, 'a failed resolution must never mutate Home');
+
+    const directStart = fixture.calls.length;
+    const direct = await claim({ accountId: claimAccount.id, authorityId: claimDirectAuthorityId });
+    assert.equal(direct.status, 200);
+    const directBody = await direct.json() as PageResponse<unknown> & { authorityId?: string };
+    assert.equal(directBody.authorityId, claimDirectAuthorityId);
+    const directCalls = fixture.calls.slice(directStart);
+    const directPosts = homeAdministrationClaims(directCalls);
+    assert.equal(directPosts.length, 1);
+    assert.deepEqual(directPosts[0]!.body, { authorityId: claimDirectAuthorityId });
+    assert.equal(publicResolutionCalls(directCalls).length, 0, 'the exact authorityId caller seam does not perform discovery');
+  } finally {
+    await opened.client.close();
+    await opened.application.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 const observationSourceA = 'https://harbor.test:4200/local/registry/state';
 const observationSourceB = 'https://peer.test:4200/local/registry/state';

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { deriveDiplomaticToken } from '@fctp/auth';
+import { parseWebFingerAddress } from '@fctp/identity';
 import type { ClientApplication } from '../apps/client-server/src/app.js';
 import { startDemo } from '../apps/demo/src/launcher.js';
 
@@ -192,8 +193,14 @@ test('demo restart preserves admission changes and disabled accounts without rep
     assert.equal(login.status, 200);
     const { account, clientToken } = await login.json() as { account: { id: string }; clientToken: string };
     assert.equal((await post('/api/servers', { origin: fixture.origins.authority }, clientToken)).status, 200);
-    assert.equal((await post('/api/administration/claim', { accountId: account.id, authorityId: fixture.policy.ids.actor }, clientToken)).status, 200);
-    assert.equal((await post('/api/administration/claim', { accountId: account.id, authorityId: fixture.authority.ids.actor.home }, clientToken)).status, 200);
+    const territoryHandle = fixture.policy.host.actor('territory').webfinger;
+    assert.equal(typeof territoryHandle, 'string');
+    const territoryClaim = await post('/api/administration/claim', { accountId: account.id, authority: parseWebFingerAddress(territoryHandle!).handle }, clientToken);
+    assert.equal(territoryClaim.status, 200);
+    assert.equal((await territoryClaim.json() as { authorityId: string }).authorityId, fixture.policy.ids.actor);
+    const homeClaim = await post('/api/administration/claim', { accountId: account.id, authority: host }, clientToken);
+    assert.equal(homeClaim.status, 200);
+    assert.equal((await homeClaim.json() as { authorityId: string }).authorityId, fixture.authority.ids.actor.home);
     const admission = await post('/api/administration/controls', {
       accountId: account.id, authorityId: fixture.policy.ids.actor, control: 'admission', inputs: { publicPorts: [fixture.policy.ids.ports[0]] }
     }, clientToken);

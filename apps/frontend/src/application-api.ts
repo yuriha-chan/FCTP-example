@@ -440,6 +440,7 @@ export function refreshProductionJob(jobId: string, accountId: string, vesselId:
 
 
 export type AdministrationResponse = PageResponse<AdministrationData>;
+export type AdministrationClaimResponse = AdministrationResponse & { authorityId: string };
 
 export function readAdministration(accountId: string): Promise<AdministrationResponse> {
   return request(`/api/administration?accountId=${encodeURIComponent(accountId)}`);
@@ -449,8 +450,8 @@ export function refreshAdministration(accountId: string, authorityId: string): P
   return request('/api/administration/refresh', { method: 'POST', body: JSON.stringify({ accountId, authorityId }) });
 }
 
-export function claimAdministrationTarget(accountId: string, authorityId: string): Promise<AdministrationResponse> {
-  return request('/api/administration/claim', { method: 'POST', body: JSON.stringify({ accountId, authorityId }) });
+export function claimAdministrationTarget(accountId: string, authority: string): Promise<AdministrationClaimResponse> {
+  return request('/api/administration/claim', { method: 'POST', body: JSON.stringify({ accountId, authority }) });
 }
 
 export function applyAdministrationControl(accountId: string, authorityId: string, control: string, inputs: Record<string, unknown>): Promise<ActionResponse> {

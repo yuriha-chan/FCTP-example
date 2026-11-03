@@ -1,18 +1,22 @@
-import type {
-  AccountRecord,
-  ActionRecord,
-  AdministrationControlRecord,
-  AdministrationData,
-  AdministrationRequestRecord,
-  AdministrationTargetRecord,
-  AuthorityRole,
-  PageResponse,
-  SourcedObservation
+import {
+  createFctpClient,
+  type AccountRecord,
+  type ActionRecord,
+  type AdministrationControlRecord,
+  type AdministrationData,
+  type AdministrationRequestRecord,
+  type AdministrationTargetRecord,
+  type AuthorityRole,
+  type PageResponse,
+  type SourcedObservation
 } from '@fctp/client-sdk';
+import { originForServer, parseHandle, resolveHomeAuthority, type ParsedHandle } from '@fctp/identity';
+import type { FCTPActor } from '@fctp/protocol';
 import { withDeadline } from './deadline.js';
 import type { ActionHandler, ActionService } from './actions.js';
 import type { ObservationService } from './observations.js';
 import type { ClientApplicationState } from './store.js';
+import type { DiscoveryService } from './discovery.js';
 import {
   administrationControlPath,
   administrationTargetKind,
@@ -58,15 +62,16 @@ export interface AdministrationDecisionInput {
   reason?: string;
 }
 
-export interface AdministrationClaimInput {
-  accountId: string;
-  authorityId: string;
-}
+export type AdministrationClaimInput =
+  | { accountId: string; authority: string }
+  | { accountId: string; authorityId: string };
+
+export type AdministrationClaimResponse = PageResponse<AdministrationData> & { authorityId: string };
 
 export interface AdministrationService {
   page(accountId: string): Promise<PageResponse<AdministrationData>>;
   refresh(input: AdministrationRefreshInput): Promise<PageResponse<AdministrationData>>;
-  claim(input: AdministrationClaimInput): Promise<PageResponse<AdministrationData>>;
+  claim(input: AdministrationClaimInput): Promise<AdministrationClaimResponse>;
   control(input: AdministrationControlInput): Promise<{ action: ActionRecord }>;
   decide(input: AdministrationDecisionInput): Promise<{ action: ActionRecord }>;
 }
@@ -107,6 +112,23 @@ interface HomeAdministrationEntry {
 }
 
 const authorityRoles = new Set<AuthorityRole>(['home', 'territory', 'registry', 'asset-server']);
+const claimAuthorityRoles = new Set(['home', 'registry', 'territory']);
+
+type ParsedClaimAuthority = { kind: 'domain'; server: string } | ParsedHandle;
+
+function parseClaimAuthority(value: string): ParsedClaimAuthority {
+  if (value.startsWith('@')) return parseHandle(value);
+  const parsed = parseHandle(`@home@${value}`);
+  return { kind: 'domain', server: parsed.server };
+}
+
+function credentialFreeFetcher(fetcher: typeof fetch, signal: AbortSignal): typeof fetch {
+  return async (input, init) => {
+    const headers = new Headers(init?.headers);
+    headers.delete('authorization');
+    return await fetcher(input, { ...init, headers, cache: 'no-store', credentials: 'omit', redirect: 'error', signal });
+  };
+}
 
 function homeAdministrationSource(account: AccountRecord & { login: { status: 'signed-in'; homeServer: string; nativeToken: string } }): string | undefined {
   const base = account.homeAuthority ?? account.actorId;
@@ -269,7 +291,7 @@ export function createAdministrationService(
   fetcher: typeof fetch,
   observations: ObservationService,
   actions: ActionService,
-  options: AdministrationServiceOptions
+  options: AdministrationServiceOptions & { rememberAuthority: DiscoveryService['remember'] }
 ): AdministrationService {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const call = <T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> => withDeadline(timeoutMs, operation);
@@ -279,6 +301,27 @@ export function createAdministrationService(
     if (!account) throw new AdministrationRequestError(404, 'account-not-found');
     if (account.login.status !== 'signed-in') throw new AdministrationRequestError(403, 'account-not-signed-in');
     return account as AccountRecord & { login: { status: 'signed-in'; nativeToken: string } };
+  };
+
+  const resolveClaimTarget = async (authority: string, signal: AbortSignal): Promise<string> => {
+    const parsed = parseClaimAuthority(authority);
+    if (parsed.kind === 'account' || (parsed.kind === 'authority' && !claimAuthorityRoles.has(parsed.role))) {
+      throw new AdministrationRequestError(400, 'unsupported-authority');
+    }
+    const publicFetch = credentialFreeFetcher(fetcher, signal);
+    let actor: FCTPActor;
+    try {
+      const origin = originForServer(parsed.server);
+      const resolution = parsed.kind === 'domain'
+        ? await resolveHomeAuthority(origin, publicFetch)
+        : await createFctpClient({ fetcher: publicFetch }).resolveAuthority(parsed.handle, { origin });
+      actor = resolution.actor;
+    } catch {
+      throw new AdministrationRequestError(502, 'authority-unresolved');
+    }
+    if (parsed.kind === 'authority' && actor.role !== parsed.role) throw new AdministrationRequestError(400, 'authority-role-mismatch');
+    await options.rememberAuthority(actor, parsed.server, originForServer(parsed.server));
+    return actor.id;
   };
 
   const retainedHomeAdministration = async (accountId: string, source: string): Promise<HomeAdministrationEntry[] | undefined> => {
@@ -472,10 +515,13 @@ export function createAdministrationService(
       const account = await signedInAccount(input.accountId);
       const source = homeAdministrationSource(account);
       if (source === undefined) throw new AdministrationRequestError(403, 'home-source-unavailable');
+      const authorityId = 'authorityId' in input
+        ? input.authorityId
+        : await call((signal) => resolveClaimTarget(input.authority, signal));
       const response = await call((signal) => fetcher(source, {
         method: 'POST',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${account.login.nativeToken}` },
-        body: JSON.stringify({ authorityId: input.authorityId }),
+        body: JSON.stringify({ authorityId }),
         cache: 'no-store',
         signal
       }));
@@ -484,7 +530,8 @@ export function createAdministrationService(
       if (response.status === 400) throw new AdministrationRequestError(400, 'invalid-authority');
       if (!response.ok) throw new AdministrationRequestError(502, 'home-administration-unavailable');
       await refreshHomeAdministration(account);
-      return buildPage(account.id);
+      const page = await buildPage(account.id);
+      return { ...page, authorityId };
     },
     async control(input) {
       const account = await signedInAccount(input.accountId);

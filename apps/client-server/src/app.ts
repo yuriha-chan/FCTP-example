@@ -391,6 +391,7 @@ export async function createClientApplication(options: CreateClientApplicationOp
   });
   const administration = createAdministrationService(state, fetcher, observations, actions, {
     resolveToken: resolveAdministratorToken,
+    rememberAuthority: discovery.remember,
     ...(options.observationTimeoutMs === undefined ? {} : { timeoutMs: options.observationTimeoutMs })
   });
 
@@ -702,8 +703,17 @@ export async function createClientApplication(options: CreateClientApplicationOp
           const body = await readJsonBody(request);
           const accountId = accountScope(url, body, true)!;
           await requireClient(state, request, accountId);
-          const authorityId = optionalBody(body, 'authorityId');
-          if (authorityId === undefined) throw new ApiError(400, 'authority-id-required');
+          const hasAuthority = Object.hasOwn(body, 'authority');
+          const hasAuthorityId = Object.hasOwn(body, 'authorityId');
+          if (hasAuthority === hasAuthorityId) throw new ApiError(400, 'authority-or-authority-id-required');
+          if (hasAuthority) {
+            const authority = typeof body.authority === 'string' ? body.authority.trim() : '';
+            if (!authority) throw new ApiError(400, 'authority-required');
+            await send(200, await administration.claim({ accountId, authority }));
+            return true;
+          }
+          const authorityId = typeof body.authorityId === 'string' ? body.authorityId.trim() : '';
+          if (!authorityId) throw new ApiError(400, 'authority-id-required');
           await send(200, await administration.claim({ accountId, authorityId }));
           return true;
         }
