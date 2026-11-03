@@ -39,7 +39,7 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
-async function createAdminFixture(prefix: string): Promise<AdminFixture> {
+async function createAdminFixture(prefix: string, fetcher?: typeof fetch): Promise<AdminFixture> {
   const directory = await mkdtemp(join(tmpdir(), prefix));
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
@@ -50,7 +50,8 @@ async function createAdminFixture(prefix: string): Promise<AdminFixture> {
     adminSecret,
     playerNames: ['player'],
     administratorNames: ['governor'],
-    administrator: `@governor@${host}`
+    administrator: `@governor@${host}`,
+    ...(fetcher ? { fetcher } : {})
   });
   try {
     await app.authority.listen(port);
@@ -242,6 +243,34 @@ test('Home distinguishes a missing target credential from verified non-administr
     });
     assert.equal(response.status, 403);
     assert.deepEqual(await response.json(), { error: 'target-unauthorized' });
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+test('Home forwards the acting account when checking target permissions', async () => {
+  const accounts: Array<string | null> = [];
+  let registryHandle = '';
+  const fetcher: typeof fetch = async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    if (new URL(request.url).pathname === '/local/registry/permissions') {
+      const account = request.headers.get('x-fctp-account');
+      accounts.push(account);
+      if (account === null) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 });
+      return new Response(JSON.stringify({ [registryHandle]: ['admin'] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return fetch(request);
+  };
+  const fixture = await createAdminFixture('fctp-authority-admin-account-hint-', fetcher);
+  registryHandle = fixture.app.authority.actor('registry').webfinger as string;
+  try {
+    const response = await fetch(`${fixture.origin}/local/home/administration`, {
+      method: 'POST',
+      headers: bearer(fixture.governorNative),
+      body: JSON.stringify({ authorityId: fixture.registryActorId })
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(accounts, [fixture.governorId]);
   } finally {
     await closeFixture(fixture);
   }

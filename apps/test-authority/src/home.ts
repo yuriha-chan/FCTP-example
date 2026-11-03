@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { createTokenDigest, createTokenRevoke, deriveDiplomaticToken, encodeNativeToken, type HomeLoginResult } from '@fctp/auth';
 import { parseHandle } from '@fctp/identity';
 import { ResourceClient, ResourceError } from '@fctp/resources';
-import { SIGNED_REQUEST_HEADER, accountIdFromRequest, verifySignedRequest } from '@fctp/server-base';
+import { ACCOUNT_HEADER, SIGNED_REQUEST_HEADER, accountIdFromRequest, verifySignedRequest } from '@fctp/server-base';
 import type { FCTPActor, TokenDeclaration, URI, Vessel } from '@fctp/protocol';
 import type { Authority } from './bootstrap.js';
 
@@ -398,7 +398,7 @@ export function installHome(authority: Authority, options: HomeOptions = {}): Ho
       let permissions: unknown;
       try {
         const response = await fetcher(`${target.origin}/local/${role}/permissions`, {
-          headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+          headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, [ACCOUNT_HEADER]: callerId },
           cache: 'no-store'
         });
         if (response.status === 401) { sendJson(403, { error: 'target-unauthorized' }); return true; }
