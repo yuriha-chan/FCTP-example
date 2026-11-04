@@ -15,6 +15,7 @@ import { VarietyCard } from './apps/frontend/src/variety-card.tsx';
 import { PlayerCard } from './apps/frontend/src/player-card.tsx';
 import { VesselCard } from './apps/frontend/src/vessel-card.tsx';
 import { TerritoryCard } from './apps/frontend/src/territory-card.tsx';
+import { HomeCard } from './apps/frontend/src/home-card.tsx';
 import { PortCard } from './apps/frontend/src/port-card.tsx';
 import { AssetCard } from './apps/frontend/src/asset-card.tsx';
 import { identityDisplay } from './apps/frontend/src/identity-display.ts';
@@ -37,6 +38,8 @@ function renderEntry(entry, index) {
       return React.createElement(VesselCard, { key: index, ...props });
     case 'territory':
       return React.createElement(TerritoryCard, { key: index, ...props });
+    case 'home':
+      return React.createElement(HomeCard, { key: index, ...props });
     case 'port':
       return React.createElement(PortCard, { key: index, ...props });
     case 'asset':
@@ -71,7 +74,7 @@ function App() {
 createRoot(document.getElementById('root')).render(React.createElement(App));
 `;
 
-type CardComponent = 'variety' | 'player' | 'vessel' | 'territory' | 'port' | 'asset';
+type CardComponent = 'variety' | 'player' | 'vessel' | 'territory' | 'home' | 'port' | 'asset';
 
 interface CardEntry {
   component: CardComponent;
@@ -186,13 +189,14 @@ async function recordedPresses(page: Page): Promise<string[]> {
   });
 }
 
-test('renders the supplied distinct published name on each of the five cards', async (t) => {
+test('renders the supplied distinct published name on each card', async (t) => {
   const { page, errors } = await openFixture(t);
   const entries: CardEntry[] = [
     { component: 'variety', props: { name: 'Amber Tide' } },
     { component: 'player', props: { handle: '@mariner@alpha.test:4200' } },
     { component: 'vessel', props: { name: 'Sea Lark' } },
     { component: 'territory', props: { name: 'North Reach' } },
+    { component: 'home', props: { name: 'Wayfarer Home' } },
     { component: 'port', props: { name: 'Harbor Gate' } }
   ];
 
@@ -220,6 +224,18 @@ test('renders TerritoryCard name and handle as separate published fields', async
   assert.deepEqual(errors, []);
 });
 
+test('renders HomeCard name and handle as separate published fields', async (t) => {
+  const { page, errors } = await openFixture(t);
+  const name = 'Wayfarer Home';
+  const handle = '@wayfarer.home@alpha.test:4200';
+
+  await render(page, { kind: 'one', component: 'home', props: { name, handle } });
+  const text = await visibleText(page);
+  assert.ok(text.includes(name), `expected the Home name ${JSON.stringify(name)} in ${JSON.stringify(text)}`);
+  assert.ok(text.includes(handle), `expected the Home handle ${JSON.stringify(handle)} in ${JSON.stringify(text)}`);
+  assert.deepEqual(errors, []);
+});
+
 test('renders the complete published player handle without shortening or resolving it', async (t) => {
   const { page, errors } = await openFixture(t);
   const handle = '@harbor.registry@alpha.test:4200';
@@ -233,7 +249,7 @@ test('renders the complete published player handle without shortening or resolvi
 
 test('renders honest non-empty placeholders when optional names are missing', async (t) => {
   const { page, errors } = await openFixture(t);
-  const components = ['variety', 'vessel', 'territory', 'port'] as const;
+  const components = ['variety', 'vessel', 'territory', 'home', 'port'] as const;
 
   for (const component of components) {
     await render(page, { kind: 'one', component, props: {} });

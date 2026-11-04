@@ -5,6 +5,7 @@ import type { AuthorityRecord, ServerRecord } from '@fctp/client-sdk';
 import { discoverServer, readServers } from './application-api';
 import type { ServerListResponse } from './application-api';
 import { HandleLabel } from './handle-label';
+import { HomeCard } from './home-card';
 import { RegistryCard } from './registry-card';
 import { TerritoryCard } from './territory-card';
 import styles from './connections.module.css';
@@ -39,6 +40,12 @@ function AuthorityEntry({ authority, onReadResource }: { authority: AuthorityRec
         />
       ) : role === 'registry' ? (
         <RegistryCard
+          {...(authority.name === undefined ? {} : { name: authority.name })}
+          {...(authority.handle === undefined ? {} : { handle: authority.handle })}
+          {...(read === undefined ? {} : { onPress: read })}
+        />
+      ) : role === 'home' ? (
+        <HomeCard
           {...(authority.name === undefined ? {} : { name: authority.name })}
           {...(authority.handle === undefined ? {} : { handle: authority.handle })}
           {...(read === undefined ? {} : { onPress: read })}

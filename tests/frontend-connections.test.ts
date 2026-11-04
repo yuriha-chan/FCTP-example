@@ -333,6 +333,33 @@ test('shows canonical server addresses and distinct published authorities withou
   assert.deepEqual(errors, []);
 });
 
+test('shows a Home authority as a card with its published name and handle', async (t) => {
+  const home = {
+    actorId: 'http://delta.test:4200/actors/home',
+    server: 'delta.test:4200',
+    roles: ['home'],
+    name: 'Wayfarer Home',
+    handle: '@wayfarer.home@delta.test:4200'
+  };
+  const { page, errors } = await openFixture(t, {
+    get: () => ({
+      status: 200,
+      body: {
+        servers: [{ server: home.server, origin: 'http://delta.test:4200', authorities: [home.actorId], name: 'Delta' }],
+        authorities: [home]
+      }
+    })
+  });
+
+  await waitForRegionText(page, 'Wayfarer Home', 'expected the Home authority card');
+  const text = await regionText(page);
+  assert.ok(text.includes(home.name), 'expected the published Home name');
+  assert.ok(text.includes(home.handle), 'expected the published Home handle separately');
+  assert.ok(text.includes('home'), 'expected the Home role');
+  assert.equal(text.includes(home.actorId), false, 'the Home actor ID belongs in the disclosure');
+  assert.deepEqual(errors, []);
+});
+
 test('submits an @ handle or an origin exactly, trims browser input, and sends no credentials', async (t) => {
   const { page, requests, errors } = await openFixture(t, {
     get: () => ({ status: 200, body: { servers: [], authorities: [] } }),
