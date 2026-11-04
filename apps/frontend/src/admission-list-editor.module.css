@@ -1,0 +1,108 @@
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.title {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.mode {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.radio {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+}
+
+.summary,
+.empty,
+.unknown,
+.error {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.summary,
+.empty,
+.unknown {
+  color: var(--text-muted);
+}
+
+.error {
+  color: var(--danger);
+}
+
+.selectedList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.selectedItem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.card {
+  flex: 1 1 16rem;
+}
+
+.details {
+  flex-basis: 100%;
+}
+
+.details summary {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.details code {
+  overflow-wrap: anywhere;
+  font-size: 0.75rem;
+}
+
+.addRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.button {
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.button[data-disabled] {
+  opacity: 0.6;
+  cursor: default;
+}

@@ -19,7 +19,9 @@ const authorityHome = 'https://alpha.test/actors/home';
 const observedAt = '2026-05-01T01:02:03.000Z';
 const refreshedAt = '2026-05-02T02:03:04.000Z';
 const registryA = 'https://registry.test/actors/registry';
+const registryB = 'https://registry.two/actors/registry';
 const territoryA = 'https://territory.test/actors/territory';
+const territoryB = 'https://territory.two/actors/territory';
 const portA = 'https://places.invalid/ports/alpha';
 const routeA = 'https://places.invalid/routes/alpha-beta';
 const vesselA = 'https://vessels.invalid/alpha';
@@ -118,6 +120,19 @@ interface AdministrationPage {
   actions: unknown[];
 }
 
+interface DirectoryAuthority {
+  actorId: string;
+  server: string;
+  roles: string[];
+  name?: string;
+  handle?: string;
+}
+
+interface DirectoryResponse {
+  servers: Array<{ server: string; origin: string; authorities: string[]; name?: string }>;
+  authorities: DirectoryAuthority[];
+}
+
 interface ActionRecord {
   id: string;
   statusUrl: string;
@@ -172,6 +187,7 @@ interface FixtureConfig {
   accountId?: string | null;
   accountHandle?: string | null;
   authorityId?: string;
+  directory?: DirectoryResponse;
   seedSessions?: boolean;
 }
 
@@ -417,6 +433,15 @@ async function openFixture(t: TestContext, config: FixtureConfig): Promise<Opene
     const parsedBody: unknown = bodyText ? JSON.parse(bodyText) as unknown : undefined;
     const body = objectBody(parsedBody);
     let recorded: AdministrationRequest | undefined;
+
+    if (url.pathname === '/api/servers' && request.method() === 'GET') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(config.directory ?? { servers: [], authorities: [] })
+      });
+      return;
+    }
 
     if (url.pathname === '/api/administration' && request.method() === 'GET') {
       const accountId = url.searchParams.get('accountId') ?? undefined;
@@ -934,7 +959,7 @@ test('submits flattened policy fields with advanced extensions and rejects inval
   assert.deepEqual(errors, []);
 });
 
-test('submits admission lists as structured JSON objects', async (t) => {
+test('edits admission lists with allow/deny toggles, authority cards, and pickers', async (t) => {
   const target = makeTarget(authoritySimulation, { name: 'Beta Territory', kind: 'simulation', observedAt });
   const data = makeData(
     accountA,
@@ -944,8 +969,31 @@ test('submits admission lists as structured JSON objects', async (t) => {
     { [authorityPolicy]: policyState(), [authoritySimulation]: simulationState() }
   );
   const action = makeAction('https://activity.invalid/actions/admission-1');
+  const directory: DirectoryResponse = {
+    servers: [
+      {
+        server: 'registry.test',
+        origin: 'https://registry.test',
+        authorities: [registryA, registryB],
+        name: 'Registry server'
+      },
+      {
+        server: 'territory.test',
+        origin: 'https://territory.test',
+        authorities: [territoryA, territoryB],
+        name: 'Territory server'
+      }
+    ],
+    authorities: [
+      { actorId: registryA, server: 'registry.test', roles: ['registry'], name: 'Registry Alpha', handle: '@system.registry@registry.test:4200' },
+      { actorId: registryB, server: 'registry.two', roles: ['registry'], name: 'Registry Beta', handle: '@system.registry@registry.two:4200' },
+      { actorId: territoryA, server: 'territory.test', roles: ['territory'], name: 'Territory Alpha', handle: '@system.territory@territory.test:4200' },
+      { actorId: territoryB, server: 'territory.two', roles: ['territory'], name: 'Territory Beta', handle: '@system.territory@territory.two:4200' }
+    ]
+  };
   const { page, requests, errors } = await openFixture(t, {
     accountId: accountA,
+    directory,
     handler: (request) => request.kind === 'read'
       ? { body: pageOf(data) }
       : request.kind === 'control'
@@ -957,8 +1005,26 @@ test('submits admission lists as structured JSON objects', async (t) => {
   await waitForText(region, 'Alpha Territory', 'expected the initial administration target');
   await region.getByLabel('Administration target').selectOption(authoritySimulation);
   await waitForText(region, 'Beta Territory', 'expected the simulation target');
-  await region.getByLabel('Trusted registry').fill(JSON.stringify({ mode: 'allowlist', allowlist: ['https://reg.one', 'https://reg.two'], denylist: [] }));
-  await region.getByLabel('Accepted territory').fill(JSON.stringify({ mode: 'allowlist', allowlist: ['https://territory.one'], denylist: [] }));
+
+  const trusted = region.getByRole('group', { name: 'Trusted registry', exact: true });
+  await waitForText(trusted, 'Registry Alpha', 'expected the retained Registry allowlist as a card');
+  assert.equal(await trusted.getByRole('textbox').count(), 0, 'the Registry list must not be edited through a textbox');
+  await trusted.getByText('Deny', { exact: true }).click();
+  await trusted.getByRole('button', { name: 'Add registry', exact: true }).click();
+  const registryPicker = page.getByRole('dialog', { name: 'Add registry', exact: true });
+  await registryPicker.getByRole('button', { name: /Registry Beta/ }).click();
+  await registryPicker.waitFor({ state: 'hidden', timeout: settleTimeout });
+  await waitForText(trusted, 'Registry Beta', 'expected the selected Registry to appear as a card');
+
+  const territories = region.getByRole('group', { name: 'Accepted territory', exact: true });
+  await waitForText(territories, 'Territory Alpha', 'expected the retained Territory allowlist as a card');
+  assert.equal(await territories.getByRole('textbox').count(), 0, 'the Territory list must not be edited through a textbox');
+  await territories.getByRole('button', { name: 'Add territory', exact: true }).click();
+  const territoryPicker = page.getByRole('dialog', { name: 'Add territory', exact: true });
+  await territoryPicker.getByRole('button', { name: /Territory Beta/ }).click();
+  await territoryPicker.waitFor({ state: 'hidden', timeout: settleTimeout });
+  await waitForText(territories, 'Territory Beta', 'expected the selected Territory to appear as a card');
+
   await region.getByRole('button', { name: 'Apply admission' }).click();
 
   await waitFor(() => requests.some((request) => request.kind === 'control'), 'expected an admission submission');
@@ -966,9 +1032,9 @@ test('submits admission lists as structured JSON objects', async (t) => {
   assert.equal(submitted.control, 'admission');
   assert.deepEqual(submitted.inputs, {
     reviewMode: 'manual',
-    trustedRegistry: { mode: 'allowlist', allowlist: ['https://reg.one', 'https://reg.two'], denylist: [] },
+    trustedRegistry: { mode: 'denylist', allowlist: [registryA], denylist: [registryB] },
     acceptedRegistry: { mode: 'denylist', allowlist: [], denylist: [] },
-    acceptedTerritory: { mode: 'allowlist', allowlist: ['https://territory.one'], denylist: [] },
+    acceptedTerritory: { mode: 'allowlist', allowlist: [territoryA, territoryB], denylist: [] },
     vesselBuildingRegistry: { mode: 'allowlist', allowlist: [registryA], denylist: [] },
     manifestPolicy: 'request',
     requireExitEvidence: true

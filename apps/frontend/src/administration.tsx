@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Button } from 'react-aria-components';
 import type {
@@ -7,8 +7,11 @@ import type {
   AdministrationControlRecord,
   AdministrationData,
   AdministrationRequestRecord,
-  AdministrationTargetRecord
+  AdministrationTargetRecord,
+  AuthorityRecord
 } from '@fctp/client-sdk';
+import { AdmissionListEditor, readAdmissionList } from './admission-list-editor';
+import type { AdmissionListValue, AdmissionMode } from './admission-list-editor';
 import { HandleLabel } from './handle-label';
 import type { ResourceReference } from './resource-reader';
 import {
@@ -16,6 +19,7 @@ import {
   claimAdministrationTarget,
   decideAdministrationEntry,
   readAdministration,
+  readServers,
   refreshAdministration
 } from './application-api';
 import { TechnicalDetails } from './ui';
@@ -117,14 +121,34 @@ function accountsOf(rawState: Record<string, unknown>): Array<Record<string, unk
   return rawState.accounts.filter(isRecord);
 }
 
+const ADMISSION_LIST_ROLES: Record<string, 'territory' | 'registry'> = {
+  trustedRegistry: 'registry',
+  acceptedRegistry: 'registry',
+  acceptedTerritory: 'territory',
+  vesselBuildingRegistry: 'registry'
+};
+
+type AdmissionValue = string | boolean | AdmissionListValue;
+
+function admissionListMode(name: string): AdmissionMode {
+  return name === 'acceptedRegistry' ? 'denylist' : 'allowlist';
+}
+
+function asAdmissionList(value: AdmissionValue | undefined): AdmissionListValue {
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) return value;
+  return { mode: 'allowlist', allowlist: [], denylist: [] };
+}
+
 function initialAdmissionValues(
   control: AdministrationControlRecord,
   observed: Record<string, unknown>
-): Record<string, string | boolean> {
-  const values: Record<string, string | boolean> = {};
+): Record<string, AdmissionValue> {
+  const values: Record<string, AdmissionValue> = {};
   for (const input of control.inputs) {
     const raw = observed[input.name];
-    if (input.type === 'boolean') values[input.name] = raw === true;
+    if (ADMISSION_LIST_ROLES[input.name] !== undefined) {
+      values[input.name] = readAdmissionList(raw, admissionListMode(input.name));
+    } else if (input.type === 'boolean') values[input.name] = raw === true;
     else if (input.type === 'json') values[input.name] = raw === undefined ? '' : JSON.stringify(raw, null, 2);
     else if (input.type === 'choice') values[input.name] = typeof raw === 'string' ? raw : (input.choices?.[0] ?? '');
     else if (input.type === 'number') values[input.name] = numberText(raw);
@@ -145,12 +169,41 @@ interface AdmissionFormProps {
 }
 
 function AdmissionForm({ control, observed, onSend }: AdmissionFormProps): ReactElement {
-  const [values, setValues] = useState<Record<string, string | boolean>>(() => initialAdmissionValues(control, observed));
+  const [values, setValues] = useState<Record<string, AdmissionValue>>(() => initialAdmissionValues(control, observed));
   const [failure, setFailure] = useState<string | undefined>(undefined);
   const [pending, setPending] = useState(false);
+  const [authorities, setAuthorities] = useState<AuthorityRecord[]>([]);
+  const [directoryLoading, setDirectoryLoading] = useState(false);
+  const [directoryError, setDirectoryError] = useState<string | undefined>(undefined);
+  const directoryGeneration = useRef(0);
   const lock = useRef(false);
 
-  const update = (name: string, value: string | boolean): void => {
+  const loadDirectory = useCallback((): void => {
+    const generation = ++directoryGeneration.current;
+    setDirectoryLoading(true);
+    setDirectoryError(undefined);
+    readServers().then(
+      (response) => {
+        if (directoryGeneration.current !== generation) return;
+        setAuthorities(response.authorities);
+        setDirectoryLoading(false);
+      },
+      (error: unknown) => {
+        if (directoryGeneration.current !== generation) return;
+        setDirectoryError(errorText(error));
+        setDirectoryLoading(false);
+      }
+    );
+  }, []);
+
+  useEffect(() => {
+    loadDirectory();
+    return () => {
+      directoryGeneration.current += 1;
+    };
+  }, [loadDirectory]);
+
+  const update = (name: string, value: AdmissionValue): void => {
     setValues((current) => ({ ...current, [name]: value }));
   };
 
@@ -158,11 +211,13 @@ function AdmissionForm({ control, observed, onSend }: AdmissionFormProps): React
     if (lock.current) return;
     const inputs: Record<string, unknown> = {};
     for (const input of control.inputs) {
-      const value = values[input.name] ?? '';
-      if (input.type === 'boolean') {
+      const value = values[input.name];
+      if (ADMISSION_LIST_ROLES[input.name] !== undefined) {
+        inputs[input.name] = asAdmissionList(value);
+      } else if (input.type === 'boolean') {
         inputs[input.name] = value === true;
       } else if (input.type === 'number') {
-        const parsed = finiteNumber(String(value));
+        const parsed = finiteNumber(String(value ?? ''));
         if (parsed === undefined) {
           setFailure(`${input.label} must be a finite number.`);
           return;
@@ -170,18 +225,18 @@ function AdmissionForm({ control, observed, onSend }: AdmissionFormProps): React
         inputs[input.name] = parsed;
       } else if (input.type === 'json') {
         try {
-          inputs[input.name] = JSON.parse(String(value)) as unknown;
+          inputs[input.name] = JSON.parse(String(value ?? '')) as unknown;
         } catch (error) {
           if (!(error instanceof SyntaxError)) throw error;
           setFailure(`${input.label} must be valid JSON.`);
           return;
         }
       } else if (input.type === 'choice') {
-        inputs[input.name] = String(value);
+        inputs[input.name] = String(value ?? '');
       } else if (/comma separated/i.test(input.label) || Array.isArray(observed[input.name])) {
-        inputs[input.name] = splitList(String(value));
+        inputs[input.name] = splitList(String(value ?? ''));
       } else {
-        inputs[input.name] = String(value);
+        inputs[input.name] = String(value ?? '');
       }
     }
     setFailure(undefined);
@@ -198,14 +253,32 @@ function AdmissionForm({ control, observed, onSend }: AdmissionFormProps): React
   return (
     <div className={styles.controlForm} role="group" aria-label={control.label}>
       <h4 className={styles.subheading}>{control.label}</h4>
-      {control.inputs.map((input) => (
-        <Field
-          key={input.name}
-          input={input}
-          value={values[input.name] ?? ''}
-          onChange={(value) => update(input.name, value)}
-        />
-      ))}
+      {control.inputs.map((input) => {
+        const role = ADMISSION_LIST_ROLES[input.name];
+        if (role !== undefined) {
+          return (
+            <AdmissionListEditor
+              key={input.name}
+              label={input.label}
+              role={role}
+              value={asAdmissionList(values[input.name])}
+              authorities={authorities}
+              directoryLoading={directoryLoading}
+              {...(directoryError === undefined ? {} : { directoryError })}
+              onRetryDirectory={loadDirectory}
+              onChange={(value) => update(input.name, value)}
+            />
+          );
+        }
+        return (
+          <Field
+            key={input.name}
+            input={input}
+            value={(values[input.name] ?? '') as string | boolean}
+            onChange={(value) => update(input.name, value)}
+          />
+        );
+      })}
       {failure === undefined ? null : <p className={styles.failure} role="alert">{failure}</p>}
       <Button className={styles.button} onPress={() => { void submit(); }} isPending={pending}>
         {`Apply ${control.name}`}
