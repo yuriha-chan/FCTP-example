@@ -2,6 +2,16 @@ import { readFile } from 'node:fs/promises';
 import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
 
 const OPERATION_TIMEOUT_MS = 10_000;
+const DIAGNOSTIC_CODES = new Set([
+  'AccessDenied', 'InvalidAccessKeyId', 'SignatureDoesNotMatch', 'InvalidToken',
+  'ExpiredToken', 'InvalidBucketName', 'BucketAlreadyExists',
+  'AuthorizationHeaderMalformed', 'InvalidLocationConstraint',
+  'IllegalLocationConstraintException', 'InvalidRequest', 'NotImplemented',
+  'InternalError', 'ServiceUnavailable', 'SlowDown', 'RequestTimeTooSkewed',
+  'RequestTimeout', 'PermanentRedirect', 'TemporaryRedirect',
+  'TimeoutError', 'AbortError', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT',
+  'ENOTFOUND', 'EAI_AGAIN'
+]);
 
 function required(name) {
   const value = globalThis.process.env[name];
@@ -49,7 +59,13 @@ async function main() {
     }), { abortSignal: globalThis.AbortSignal.timeout(OPERATION_TIMEOUT_MS) });
   } catch (error) {
     const name = error && typeof error === 'object' ? error.name : undefined;
-    if (name !== 'BucketAlreadyOwnedByYou') throw new Error('Unable to initialize image bucket');
+    if (name !== 'BucketAlreadyOwnedByYou') {
+      const code = DIAGNOSTIC_CODES.has(name) ? name
+        : DIAGNOSTIC_CODES.has(error?.code) ? error.code : 'UnknownError';
+      const status = error?.$metadata?.httpStatusCode;
+      const http = Number.isInteger(status) && status >= 400 && status <= 599 ? `; HTTP ${status}` : '';
+      throw new Error(`Unable to initialize image bucket (${code}${http})`);
+    }
   } finally {
     client.destroy();
   }
