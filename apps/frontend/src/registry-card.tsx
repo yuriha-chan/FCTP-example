@@ -10,11 +10,10 @@ export interface RegistryCardProps {
 export function RegistryCard(props: RegistryCardProps): ReactElement {
   const name = props.name?.trim();
   const handle = props.handle?.trim();
-  const label = name || handle || 'Unnamed registry';
   const content = (
     <>
-      <span className={styles.name}>{label}</span>
-      {name !== undefined && handle !== undefined ? <span className={styles.handle}>{handle}</span> : null}
+      <span className={styles.name}>{name || 'Unnamed registry'}</span>
+      <span className={styles.handle}>{handle || 'handle unavailable'}</span>
     </>
   );
   return props.onPress === undefined

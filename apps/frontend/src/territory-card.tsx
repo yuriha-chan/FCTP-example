@@ -10,11 +10,10 @@ export interface TerritoryCardProps {
 export function TerritoryCard(props: TerritoryCardProps): ReactElement {
   const name = props.name?.trim();
   const handle = props.handle?.trim();
-  const label = name || handle || 'Unnamed territory';
   const content = (
     <>
-      <span className={styles.name}>{label}</span>
-      {name !== undefined && handle !== undefined ? <span className={styles.handle}>{handle}</span> : null}
+      <span className={styles.name}>{name || 'Unnamed territory'}</span>
+      <span className={styles.handle}>{handle || 'handle unavailable'}</span>
     </>
   );
   return props.onPress === undefined

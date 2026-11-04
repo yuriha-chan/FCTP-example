@@ -208,6 +208,18 @@ test('renders the supplied distinct published name on each of the five cards', a
   assert.deepEqual(errors, []);
 });
 
+test('renders TerritoryCard name and handle as separate published fields', async (t) => {
+  const { page, errors } = await openFixture(t);
+  const name = 'North Reach';
+  const handle = '@north.territory@alpha.test:4200';
+
+  await render(page, { kind: 'one', component: 'territory', props: { name, handle } });
+  const text = await visibleText(page);
+  assert.ok(text.includes(name), `expected the Territory name ${JSON.stringify(name)} in ${JSON.stringify(text)}`);
+  assert.ok(text.includes(handle), `expected the Territory handle ${JSON.stringify(handle)} in ${JSON.stringify(text)}`);
+  assert.deepEqual(errors, []);
+});
+
 test('renders the complete published player handle without shortening or resolving it', async (t) => {
   const { page, errors } = await openFixture(t);
   const handle = '@harbor.registry@alpha.test:4200';
