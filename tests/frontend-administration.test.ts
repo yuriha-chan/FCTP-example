@@ -1008,8 +1008,14 @@ test('edits admission lists with allow/deny toggles, authority cards, and picker
 
   const trusted = region.getByRole('group', { name: 'Trusted registry', exact: true });
   await waitForText(trusted, 'Registry Alpha', 'expected the retained Registry allowlist as a card');
+  await waitForText(trusted, '@system.registry@registry.test:4200', 'expected the Registry handle inside the card');
+  assert.equal(await trusted.getByText('Technical details').count(), 0, 'admission cards must not show technical details');
+  assert.equal(await trusted.getByRole('button', { name: 'Remove Registry Alpha', exact: true }).count(), 1, 'expected a labelled trash action');
   assert.equal(await trusted.getByRole('textbox').count(), 0, 'the Registry list must not be edited through a textbox');
-  await trusted.getByText('Deny', { exact: true }).click();
+  const deny = trusted.getByRole('radio', { name: 'Deny', exact: true });
+  await deny.click();
+  assert.equal(await deny.getAttribute('aria-checked'), 'true', 'the Deny toggle should be selected');
+  await waitForText(trusted, 'All registries are permitted except those listed.', 'expected deny mode');
   await trusted.getByRole('button', { name: 'Add registry', exact: true }).click();
   const registryPicker = page.getByRole('dialog', { name: 'Add registry', exact: true });
   await registryPicker.getByRole('button', { name: /Registry Beta/ }).click();
@@ -1018,6 +1024,8 @@ test('edits admission lists with allow/deny toggles, authority cards, and picker
 
   const territories = region.getByRole('group', { name: 'Accepted territory', exact: true });
   await waitForText(territories, 'Territory Alpha', 'expected the retained Territory allowlist as a card');
+  await waitForText(territories, '@system.territory@territory.test:4200', 'expected the Territory handle inside the card');
+  assert.equal(await territories.getByText('Technical details').count(), 0, 'admission cards must not show technical details');
   assert.equal(await territories.getByRole('textbox').count(), 0, 'the Territory list must not be edited through a textbox');
   await territories.getByRole('button', { name: 'Add territory', exact: true }).click();
   const territoryPicker = page.getByRole('dialog', { name: 'Add territory', exact: true });

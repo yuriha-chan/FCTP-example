@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { ReactElement } from 'react';
-import { Button, Radio, RadioGroup } from 'react-aria-components';
+import { Button, ToggleButton, ToggleButtonGroup } from 'react-aria-components';
+import { Trash } from '@phosphor-icons/react';
 import type { AuthorityRecord } from '@fctp/client-sdk';
 import { AuthorityPicker } from './authority-picker';
 import type { AuthorityPickerRole } from './authority-picker';
@@ -10,8 +11,8 @@ import { UiButton } from './ui';
 import cssStyles from './admission-list-editor.module.css';
 
 const styles = cssStyles as Record<
-  'editor' | 'header' | 'title' | 'mode' | 'radio' | 'summary' | 'empty' | 'error' | 'unknown'
-  | 'selectedList' | 'selectedItem' | 'card' | 'details' | 'addRow' | 'button',
+  'editor' | 'header' | 'title' | 'mode' | 'toggle' | 'summary' | 'empty' | 'error' | 'unknown'
+  | 'selectedList' | 'selectedItem' | 'card' | 'removeButton' | 'addRow' | 'button',
   string
 >;
 
@@ -91,16 +92,20 @@ export function AdmissionListEditor(props: AdmissionListEditorProps): ReactEleme
     <section className={styles.editor} role="group" aria-label={props.label}>
       <div className={styles.header}>
         <h5 className={styles.title}>{props.label}</h5>
-        <RadioGroup
+        <ToggleButtonGroup
           className={styles.mode}
           aria-label={`${props.label} mode`}
-          value={props.value.mode}
-          onChange={(mode) => updateMode(mode as AdmissionMode)}
-          orientation="horizontal"
+          selectionMode="single"
+          disallowEmptySelection
+          selectedKeys={[props.value.mode]}
+          onSelectionChange={(keys) => {
+            const mode = [...keys][0];
+            if (mode === 'allowlist' || mode === 'denylist') updateMode(mode);
+          }}
         >
-          <Radio value="allowlist" className={styles.radio}>Allow</Radio>
-          <Radio value="denylist" className={styles.radio}>Deny</Radio>
-        </RadioGroup>
+          <ToggleButton id="allowlist" className={styles.toggle}>Allow</ToggleButton>
+          <ToggleButton id="denylist" className={styles.toggle}>Deny</ToggleButton>
+        </ToggleButtonGroup>
       </div>
       <p className={styles.summary}>
         {props.value.mode === 'allowlist'
@@ -130,13 +135,14 @@ export function AdmissionListEditor(props: AdmissionListEditorProps): ReactEleme
                   )}
                 </div>
                 {authority === undefined ? <p className={styles.unknown}>Not in the known directory.</p> : null}
-                <UiButton variant="quiet" aria-label={`Remove ${name}`} onPress={() => remove(actorId)}>
-                  Remove
+                <UiButton
+                  variant="quiet"
+                  className={styles.removeButton}
+                  aria-label={`Remove ${name}`}
+                  onPress={() => remove(actorId)}
+                >
+                  <Trash size={18} aria-hidden="true" focusable="false" />
                 </UiButton>
-                <details className={styles.details}>
-                  <summary>Technical details</summary>
-                  <code>{actorId}</code>
-                </details>
               </li>
             );
           })}

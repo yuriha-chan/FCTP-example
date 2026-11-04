@@ -34,6 +34,7 @@
     "vite": "8.3.5"
   },
   "dependencies": {
+    "@phosphor-icons/react": "2.1.10",
     "binduct": "github:yuriha-chan/binduct#7260123d45ff0b4afd8a1929897f8e5ad2c1b0e0",
     "react": "19.3.1",
     "react-aria-components": "1.22.1",

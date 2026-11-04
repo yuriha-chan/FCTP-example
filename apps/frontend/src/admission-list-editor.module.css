@@ -25,11 +25,30 @@
   gap: 0.75rem;
 }
 
-.radio {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
+.toggle {
+  padding: 0.3rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
   font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.toggle[data-hovered] {
+  background: var(--surface-raised);
+}
+
+.toggle[data-selected] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.toggle[data-focus-visible] {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .summary,
@@ -70,19 +89,10 @@
   flex: 1 1 16rem;
 }
 
-.details {
-  flex-basis: 100%;
-}
-
-.details summary {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-  cursor: pointer;
-}
-
-.details code {
-  overflow-wrap: anywhere;
-  font-size: 0.75rem;
+.removeButton {
+  flex: 0 0 auto;
+  min-width: 2.25rem;
+  padding: 0.4rem;
 }
 
 .addRow {
