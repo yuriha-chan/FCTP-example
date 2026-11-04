@@ -1,5 +1,5 @@
 import { createFctpClient, type AuthorityRecord, type AuthorityRole, type ServerRecord } from '@fctp/client-sdk';
-import { parseHandle } from '@fctp/identity';
+import { parseHandle, verifyActorWebFinger } from '@fctp/identity';
 import type { FCTPActor } from '@fctp/protocol';
 import { boundedFetcher } from './errors.js';
 import type { ClientApplicationState } from './store.js';
@@ -14,10 +14,16 @@ export interface DiscoveryResult {
   authorities: AuthorityRecord[];
 }
 
+export type DiscoveryHandleVerifier = (actor: FCTPActor) => Promise<string | undefined>;
+
+export interface DiscoveryOptions {
+  verifyHandle?: DiscoveryHandleVerifier;
+}
+
 export interface DiscoveryService {
   list(): Promise<DiscoveryResult>;
   discover(input: DiscoveryInput): Promise<DiscoveryResult>;
-  remember(actor: FCTPActor, server: string, origin: string, serverName?: string, handle?: string): Promise<void>;
+  remember(actor: FCTPActor, server: string, origin: string, serverName?: string, verifiedHandle?: string): Promise<void>;
 }
 
 const authorityRoles = new Set<AuthorityRole>(['home', 'territory', 'registry', 'asset-server']);
@@ -49,16 +55,6 @@ function advertisedActors(info: unknown): string[] {
   return [...new Set([...actorIds(info.actor), ...actorIds(ids.actor)])];
 }
 
-function actorHandle(actor: Record<string, unknown>): string | undefined {
-  if (typeof actor.handle !== 'string') return undefined;
-  try {
-    const parsed = parseHandle(actor.handle);
-    return parsed.kind === 'authority' ? parsed.handle : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function roleOf(actor: Record<string, unknown>): AuthorityRole | undefined {
   const role = actor.role;
   return typeof role === 'string' && authorityRoles.has(role as AuthorityRole) ? role as AuthorityRole : undefined;
@@ -66,7 +62,7 @@ function roleOf(actor: Record<string, unknown>): AuthorityRole | undefined {
 
 function authorityRecord(actor: Record<string, unknown>, server: string, roles: AuthorityRole[], handle?: string): AuthorityRecord | undefined {
   if (typeof actor.id !== 'string') return undefined;
-  const publishedHandle = handle ?? actorHandle(actor);
+  const publishedHandle = handle;
   const name = typeof actor.name === 'string' && actor.name.length > 0 ? actor.name : undefined;
   return {
     ...(publishedHandle ? { handle: publishedHandle } : {}),
@@ -77,9 +73,25 @@ function authorityRecord(actor: Record<string, unknown>, server: string, roles: 
   };
 }
 
-export function createDiscoveryService(state: ClientApplicationState, fetcher: typeof fetch): DiscoveryService {
+export function createDiscoveryService(state: ClientApplicationState, fetcher: typeof fetch, options: DiscoveryOptions = {}): DiscoveryService {
   const upstream = boundedFetcher(fetcher);
   const sdk = createFctpClient({ fetcher: upstream });
+
+  const verifyHandle = async (actor: FCTPActor): Promise<string | undefined> => {
+    try {
+      const candidate = options.verifyHandle === undefined
+        ? await (async () => {
+          const result = await verifyActorWebFinger(actor, upstream);
+          return result.verified ? result.handle : undefined;
+        })()
+        : await options.verifyHandle(actor);
+      if (typeof candidate !== 'string') return undefined;
+      const parsed = parseHandle(candidate);
+      return parsed.kind === 'authority' ? parsed.handle : undefined;
+    } catch {
+      return undefined;
+    }
+  };
 
   const list = async (): Promise<DiscoveryResult> => state.read((current) => ({
     servers: Object.values(current.servers),
@@ -128,7 +140,7 @@ export function createDiscoveryService(state: ClientApplicationState, fetcher: t
     for (const actor of discovered) {
       const role = roleOf(actor);
       if (!role || typeof actor.id !== 'string') continue;
-      const authority = authorityRecord(actor, new URL(actor.id).host, [role]);
+      const authority = authorityRecord(actor, new URL(actor.id).host, [role], await verifyHandle(actor as FCTPActor));
       if (authority !== undefined) authorities.push(authority);
     }
     const serverName = isRecord(info) && typeof info.name === 'string' && info.name.trim() ? info.name.trim() : undefined;
@@ -166,7 +178,7 @@ export function createDiscoveryService(state: ClientApplicationState, fetcher: t
         };
         return retain(server, []);
       }
-      await remember(resolution.homeActor, resolution.homeServer, resolution.homeOrigin, resolution.serverName, actorHandle(resolution.homeActor));
+      await remember(resolution.homeActor, resolution.homeServer, resolution.homeOrigin, resolution.serverName);
       return list();
     }
     const origin = await retainedOrigin(parsed.server);
@@ -178,11 +190,11 @@ export function createDiscoveryService(state: ClientApplicationState, fetcher: t
     return list();
   };
 
-  const remember = async (actor: FCTPActor, server: string, origin: string, serverName?: string, handle?: string): Promise<void> => {
+  const remember = async (actor: FCTPActor, server: string, origin: string, serverName?: string, verifiedHandle?: string): Promise<void> => {
     const role = roleOf(actor);
     if (role === undefined) return;
     const normalized = normalizeOrigin(origin);
-    const authority = authorityRecord(actor, server, [role], handle);
+    const authority = authorityRecord(actor, server, [role], verifiedHandle ?? await verifyHandle(actor));
     if (authority === undefined) return;
     const trimmedServerName = serverName?.trim();
     const record: ServerRecord = {

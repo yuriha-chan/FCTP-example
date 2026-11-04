@@ -207,8 +207,8 @@ export type ReverseDiscoveryResult =
   | { verified: true; actor: FCTPActor; address: string; handle: string }
   | { verified: false; actor: FCTPActor; error: ReverseDiscoveryError; detail?: string };
 
-export async function reverseDiscoverWebFinger(actorId: URI, fetcher: typeof fetch = fetch): Promise<ReverseDiscoveryResult> {
-  const { actor } = await resolveActor(actorId, fetcher);
+export async function verifyActorWebFinger(actor: FCTPActor, fetcher: typeof fetch = fetch): Promise<ReverseDiscoveryResult> {
+  const actorId = actor.id;
   const published = actor.webfinger;
   if (typeof published !== 'string' || published.length === 0) return { verified: false, actor, error: 'webfinger-not-published' };
   let address: ParsedWebFingerAddress;
@@ -222,7 +222,12 @@ export async function reverseDiscoverWebFinger(actorId: URI, fetcher: typeof fet
   const protocol = isLoopbackServer(server) ? 'http:' : 'https:';
   const endpoint = new URL('/.well-known/webfinger', `${protocol}//${server}`);
   endpoint.searchParams.set('resource', address.subject);
-  const response = await fetcher(endpoint, { headers: { Accept: 'application/jrd+json' } });
+  const response = await fetcher(endpoint, {
+    headers: { Accept: 'application/jrd+json' },
+    cache: 'no-store',
+    credentials: 'omit',
+    redirect: 'error'
+  });
   if (response.status !== 200) return { verified: false, actor, error: 'webfinger-unverified', detail: `WebFinger HTTP ${response.status}` };
   let jrd: unknown;
   try {
@@ -239,6 +244,11 @@ export async function reverseDiscoverWebFinger(actorId: URI, fetcher: typeof fet
     return { verified: false, actor, error: 'webfinger-unverified', detail: 'self link does not match Actor' };
   }
   return { verified: true, actor, address: address.address, handle: address.handle };
+}
+
+export async function reverseDiscoverWebFinger(actorId: URI, fetcher: typeof fetch = fetch): Promise<ReverseDiscoveryResult> {
+  const { actor } = await resolveActor(actorId, fetcher);
+  return verifyActorWebFinger(actor, fetcher);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

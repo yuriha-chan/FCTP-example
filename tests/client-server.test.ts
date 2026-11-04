@@ -338,13 +338,14 @@ interface FixtureHome {
   homeActorId: string;
   accounts: FixtureHomeAccount[];
   homeAccountName?: string;
+  homeHandle?: string;
   administration?: FixtureHomeAdministration;
 }
 
 type FixtureAuthorityRole = 'home' | 'registry' | 'territory' | 'asset-server' | 'player';
 
 interface FixtureAuthorityActor {
-  handle: string;
+  webfinger?: string;
   actorId: string;
   role: FixtureAuthorityRole;
   name?: string;
@@ -385,12 +386,14 @@ const secondLoginAccount: FixtureHomeAccount = {
 const firstHome: FixtureHome = {
   origin: 'https://first.test:4200',
   homeActorId: firstAccount.homeAuthority!,
+  homeHandle: '@system.home@first.test:4200',
   accounts: [firstLoginAccount]
 };
 
 const secondHome: FixtureHome = {
   origin: 'https://second.test:4200',
   homeActorId: secondAccount.homeAuthority!,
+  homeHandle: '@system.home@second.test:4200',
   accounts: [secondLoginAccount]
 };
 
@@ -470,7 +473,7 @@ function homeResponse(home: FixtureHome, url: URL, method: string, body: unknown
   }
   const actor = home.accounts.find((candidate) => candidate.actorId === url.href);
   if (actor) return new Response(JSON.stringify({ id: actor.actorId, role: 'player' }), { status: 200, headers: { 'Content-Type': 'application/activity+json' } });
-  if (url.href === home.homeActorId) return new Response(JSON.stringify({ id: home.homeActorId, role: 'home' }), { status: 200, headers: { 'Content-Type': 'application/activity+json' } });
+  if (url.href === home.homeActorId) return new Response(JSON.stringify({ id: home.homeActorId, role: 'home', ...(home.homeHandle === undefined ? {} : { webfinger: home.homeHandle }) }), { status: 200, headers: { 'Content-Type': 'application/activity+json' } });
   if (url.pathname === '/local/info') return new Response(JSON.stringify({ kind: 'authority', actor: { home: home.homeActorId } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   if (url.pathname === '/local/home/login' && method === 'POST') {
     const request = bodyRecord(body);
@@ -491,12 +494,12 @@ function authorityResponse(authority: FixtureAuthority, url: string, parsed: URL
   if (parsed.pathname === '/.well-known/webfinger') {
     const resource = parsed.searchParams.get('resource') ?? '';
     const handle = resource.startsWith('acct:') ? resource.slice(5) : resource;
-    const actor = authority.actors.find((candidate) => candidate.handle === handle);
+    const actor = authority.actors.find((candidate) => candidate.webfinger === handle);
     if (!actor) return new Response(JSON.stringify({ error: 'unknown-handle' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
-    return new Response(JSON.stringify({ subject: `acct:${actor.handle}`, links: [{ rel: 'self', href: actor.actorId }] }), { status: 200, headers: { 'Content-Type': 'application/jrd+json' } });
+    return new Response(JSON.stringify({ subject: `acct:${actor.webfinger}`, links: [{ rel: 'self', href: actor.actorId }] }), { status: 200, headers: { 'Content-Type': 'application/jrd+json' } });
   }
   const actor = authority.actors.find((candidate) => candidate.actorId === url);
-  if (actor) return new Response(JSON.stringify({ id: actor.actorId, role: actor.role, ...(actor.name === undefined ? {} : { name: actor.name }) }), { status: 200, headers: { 'Content-Type': 'application/activity+json' } });
+  if (actor) return new Response(JSON.stringify({ id: actor.actorId, role: actor.role, ...(actor.webfinger === undefined ? {} : { webfinger: actor.webfinger }), ...(actor.name === undefined ? {} : { name: actor.name }) }), { status: 200, headers: { 'Content-Type': 'application/activity+json' } });
   if (parsed.pathname === '/local/info') {
     const actors = Object.fromEntries(authority.actors.map((candidate) => [candidate.role, candidate.actorId]));
     return new Response(JSON.stringify({ kind: 'authority', actor: actors, ids: { actor: actors } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -722,6 +725,7 @@ test('successful login retains the Home server and authority across accounts, re
     const firstAuthority = firstKnown.authorities.find((candidate) => candidate.actorId === firstAccount.homeAuthority);
     assert.ok(firstAuthority);
     assert.equal(firstAuthority.server, firstAccount.homeServer);
+    assert.equal(firstAuthority.handle, firstHome.homeHandle, 'login must retain the published Home authority handle');
     assert.ok(firstAuthority.roles.includes('home'));
 
     await loginClient(opened.client.origin, secondLoginAccount);
@@ -861,10 +865,10 @@ test('discovers public server authorities before login and retains them after re
     origin: 'http://harbor.test:4200',
     server: 'harbor.test:4200',
     actors: [
-      { handle: '@harbor.registry@harbor.test:4200', actorId: 'http://harbor.test:4200/actors/registry', role: 'registry' },
-      { handle: '@harbor.home@harbor.test:4200', actorId: 'http://harbor.test:4200/actors/home', role: 'home' },
-      { handle: '@harbor.player@harbor.test:4200', actorId: 'http://harbor.test:4200/actors/player', role: 'player' },
-      { handle: '@harbor.territory@harbor.test:4200', actorId: 'http://harbor.test:4200/actors/territory', role: 'territory' }
+      { actorId: 'http://harbor.test:4200/actors/registry', role: 'registry' },
+      { actorId: 'http://harbor.test:4200/actors/home', role: 'home' },
+      { actorId: 'http://harbor.test:4200/actors/player', role: 'player' },
+      { actorId: 'http://harbor.test:4200/actors/territory', role: 'territory' }
     ]
   };
   const fixture = createFixtureFetch([], [authority]);
@@ -914,19 +918,59 @@ test('discovers public server authorities before login and retains them after re
   }
 });
 
+test('retains an authority handle only after the verifier confirms it', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-client-verified-handle-'));
+  const storeFile = join(directory, 'client.store.json');
+  const registryId = 'https://verified.test:4200/actors/registry';
+  const registryHandle = '@system.registry@verified.test:4200';
+  const homeId = 'https://verified.test:4200/actors/home';
+  const authority: FixtureAuthority = {
+    origin: 'https://verified.test:4200',
+    server: 'verified.test:4200',
+    actors: [
+      { webfinger: registryHandle, actorId: registryId, role: 'registry' },
+      { webfinger: '@system.home@verified.test:4200', actorId: homeId, role: 'home' }
+    ]
+  };
+  const fixture = createFixtureFetch([], [authority]);
+  const verified: string[] = [];
+  const opened = await openFixtureApplication(storeFile, fixture.fetch, {
+    discoveryVerifier: async (actor) => {
+      verified.push(actor.id);
+      return actor.id === registryId ? registryHandle : undefined;
+    }
+  });
+  try {
+    const response = await fetch(new URL('/api/servers', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ origin: authority.origin }) });
+    assert.equal(response.status, 200);
+    const body = await response.json() as { servers: ServerRecord[]; authorities: AuthorityRecord[] };
+    const registry = body.authorities.find((candidate) => candidate.actorId === registryId);
+    const home = body.authorities.find((candidate) => candidate.actorId === homeId);
+    assert.ok(registry);
+    assert.ok(home);
+    assert.equal(registry.handle, registryHandle);
+    assert.equal(home.handle, undefined, 'an unverified handle must not be retained');
+    assert.deepEqual(verified.sort(), [homeId, registryId].sort());
+  } finally {
+    await opened.client.close();
+    await opened.application.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('requires exactly one valid server discovery input and resolves a matching authority handle', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-client-server-input-'));
   const storeFile = join(directory, 'client.store.json');
   const authority: FixtureAuthority = {
     origin: 'http://harbor.test:4200',
     server: 'harbor.test:4200',
-    actors: [{ handle: '@harbor.registry@harbor.test:4200', actorId: 'http://harbor.test:4200/actors/registry', role: 'registry', name: 'Harbor Registry' }]
+    actors: [{ webfinger: '@harbor.registry@harbor.test:4200', actorId: 'http://harbor.test:4200/actors/registry', role: 'registry', name: 'Harbor Registry' }]
   };
   const fixture = createFixtureFetch([], [authority]);
   const opened = await openFixtureApplication(storeFile, fixture.fetch);
   try {
     const post = (body: unknown) => fetch(new URL('/api/servers', opened.client.origin), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    for (const invalid of [{}, { origin: authority.origin, handle: authority.actors[0]!.handle }, { origin: 'ftp://harbor.test:4200' }, { handle: 'not-a-handle' }]) {
+    for (const invalid of [{}, { origin: authority.origin, handle: authority.actors[0]!.webfinger }, { origin: 'ftp://harbor.test:4200' }, { handle: 'not-a-handle' }]) {
       const response = await post(invalid);
       assert.ok(response.status >= 400 && response.status < 500, JSON.stringify(invalid));
       assert.ok((await response.text()).length > 0);
@@ -937,7 +981,7 @@ test('requires exactly one valid server discovery input and resolves a matching 
 
     const originResponse = await post({ origin: authority.origin });
     assert.equal(originResponse.status, 200);
-    const handleResponse = await post({ handle: authority.actors[0]!.handle });
+    const handleResponse = await post({ handle: authority.actors[0]!.webfinger });
     assert.equal(handleResponse.status, 200);
     const body = await handleResponse.json() as { servers: ServerRecord[]; authorities: AuthorityRecord[] };
     assert.equal(body.servers.some((candidate) => candidate.origin === authority.origin), true);
@@ -945,7 +989,7 @@ test('requires exactly one valid server discovery input and resolves a matching 
     assert.ok(resolved);
     assert.ok(resolved.roles.includes('registry'));
     assert.equal(resolved.name, 'Harbor Registry', 'handle discovery must retain the fetched published name');
-    assert.equal(resolved.handle, authority.actors[0]!.handle, 'handle discovery must retain the published handle');
+    assert.equal(resolved.handle, authority.actors[0]!.webfinger, 'handle discovery must retain the published webfinger handle');
     assert.ok(fixture.calls.some((call) => new URL(call.url).pathname === '/.well-known/webfinger'));
     assert.ok(fixture.calls.some((call) => call.url === authority.actors[0]!.actorId), 'authority discovery must fetch the Actor document');
   } finally {
@@ -1052,12 +1096,12 @@ function claimAuthoritiesFixture(): FixtureAuthority[] {
     origin: 'https://harbor.test:4200',
     server: 'harbor.test:4200',
     actors: [
-      { handle: '@harbor.home@harbor.test:4200', actorId: claimHarborHomeActorId, role: 'home' },
-      { handle: '@harbor.registry@harbor.test:4200', actorId: claimHarborRegistryActorId, role: 'registry' },
-      { handle: '@harbor.territory@harbor.test:4200', actorId: claimHarborTerritoryActorId, role: 'territory' },
-      { handle: '@harbor.player@harbor.test:4200', actorId: 'https://harbor.test:4200/actors/player', role: 'player' },
-      { handle: '@harbor.asset-server@harbor.test:4200', actorId: 'https://harbor.test:4200/actors/assets', role: 'asset-server' },
-      { handle: '@mismatch.registry@harbor.test:4200', actorId: 'https://harbor.test:4200/actors/mismatch', role: 'territory' }
+      { webfinger: '@harbor.home@harbor.test:4200', actorId: claimHarborHomeActorId, role: 'home' },
+      { webfinger: '@harbor.registry@harbor.test:4200', actorId: claimHarborRegistryActorId, role: 'registry' },
+      { webfinger: '@harbor.territory@harbor.test:4200', actorId: claimHarborTerritoryActorId, role: 'territory' },
+      { webfinger: '@harbor.player@harbor.test:4200', actorId: 'https://harbor.test:4200/actors/player', role: 'player' },
+      { webfinger: '@harbor.asset-server@harbor.test:4200', actorId: 'https://harbor.test:4200/actors/assets', role: 'asset-server' },
+      { webfinger: '@mismatch.registry@harbor.test:4200', actorId: 'https://harbor.test:4200/actors/mismatch', role: 'territory' }
     ]
   }];
 }

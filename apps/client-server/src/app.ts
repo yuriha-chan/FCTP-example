@@ -5,7 +5,7 @@ import { createAccountService, type LoginInput } from './accounts.js';
 import { createActionService, type ActionHandler, type ActionService } from './actions.js';
 import { createAdministrationActionHandlers, createAdministrationService, AdministrationRequestError, type AdministrationService } from './administration.js';
 import { createAuthoringPublicationHandler, createAuthoringService, AuthoringRequestError } from './authoring.js';
-import { createDiscoveryService, type DiscoveryInput } from './discovery.js';
+import { createDiscoveryService, type DiscoveryHandleVerifier, type DiscoveryInput } from './discovery.js';
 import { UpstreamError } from './errors.js';
 import { createExploreService, ExploreRequestError } from './explore.js';
 import { embedIdentities } from './identity-embedding.js';
@@ -36,6 +36,7 @@ export interface CreateClientApplicationOptions {
   observationTimeoutMs?: number;
   actionTimeoutMs?: number;
   actionHandlers?: Readonly<Record<string, ActionHandler>>;
+  discoveryVerifier?: DiscoveryHandleVerifier;
 }
 
 class ApiError extends Error {
@@ -352,7 +353,7 @@ async function activityPage<T extends { actions: ActionRecord[] } | { action: Ac
 export async function createClientApplication(options: CreateClientApplicationOptions): Promise<ClientApplication> {
   const state = await openClientState(options.storeFile);
   const fetcher = options.fetch ?? fetch;
-  const discovery = createDiscoveryService(state, fetcher);
+  const discovery = createDiscoveryService(state, fetcher, options.discoveryVerifier === undefined ? {} : { verifyHandle: options.discoveryVerifier });
   const accounts = createAccountService(state, fetcher, discovery);
   const observations = createObservationService(state, {
     ...(options.observationTimeoutMs === undefined ? {} : { timeoutMs: options.observationTimeoutMs })
