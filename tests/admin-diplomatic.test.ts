@@ -172,7 +172,7 @@ test('a configured administrator diplomatic token authorizes Simulation admin op
 });
 
 const invalidAdministrators: Array<{ label: string; handle: (authorityHost: string) => string }> = [
-  { label: 'an authority-role handle', handle: (authorityHost) => `@home.home@${authorityHost}` }
+  { label: 'an authority-role handle', handle: (authorityHost) => `@system.home@${authorityHost}` }
 ];
 
 async function expectPolicyConstructionRejects(label: string, administrator: string): Promise<void> {

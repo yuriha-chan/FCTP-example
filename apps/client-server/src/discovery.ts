@@ -17,7 +17,7 @@ export interface DiscoveryResult {
 export interface DiscoveryService {
   list(): Promise<DiscoveryResult>;
   discover(input: DiscoveryInput): Promise<DiscoveryResult>;
-  remember(actor: FCTPActor, server: string, origin: string): Promise<void>;
+  remember(actor: FCTPActor, server: string, origin: string, serverName?: string): Promise<void>;
 }
 
 const authorityRoles = new Set<AuthorityRole>(['home', 'territory', 'registry', 'asset-server']);
@@ -119,10 +119,12 @@ export function createDiscoveryService(state: ClientApplicationState, fetcher: t
       const handle = actorHandle(actor);
       authorities.push({ ...(handle ? { handle } : {}), ...(typeof actor.name === 'string' ? { name: actor.name } : {}), actorId, server: new URL(actorId).host, roles: [role] });
     }
+    const serverName = isRecord(info) && typeof info.name === 'string' && info.name.trim() ? info.name.trim() : undefined;
     const server: ServerRecord = {
       server: origin.host,
       origin: origin.origin,
-      authorities: authorities.map((authority) => authority.actorId)
+      authorities: authorities.map((authority) => authority.actorId),
+      ...(serverName === undefined ? {} : { name: serverName })
     };
     return retain(server, authorities);
   };
@@ -153,7 +155,8 @@ export function createDiscoveryService(state: ClientApplicationState, fetcher: t
       const server: ServerRecord = {
         server: resolution.homeServer,
         origin: resolution.homeOrigin,
-        authorities: authorities.map((authority) => authority.actorId)
+        authorities: authorities.map((authority) => authority.actorId),
+        ...(resolution.serverName === undefined ? {} : { name: resolution.serverName })
       };
       return retain(server, authorities);
     }
@@ -176,12 +179,13 @@ export function createDiscoveryService(state: ClientApplicationState, fetcher: t
     return retain(server, authorities);
   };
 
-  const remember = async (actor: FCTPActor, server: string, origin: string): Promise<void> => {
+  const remember = async (actor: FCTPActor, server: string, origin: string, serverName?: string): Promise<void> => {
     const role = roleOf(actor);
     if (role === undefined) return;
     const normalized = normalizeOrigin(origin);
     const handle = actorHandle(actor);
     const name = typeof actor.name === 'string' && actor.name.length > 0 ? actor.name : undefined;
+    const trimmedServerName = serverName?.trim();
     const authority: AuthorityRecord = {
       ...(handle ? { handle } : {}),
       ...(name ? { name } : {}),
@@ -189,7 +193,12 @@ export function createDiscoveryService(state: ClientApplicationState, fetcher: t
       server,
       roles: [role]
     };
-    const record: ServerRecord = { server, origin: normalized.origin, authorities: [actor.id] };
+    const record: ServerRecord = {
+      server,
+      origin: normalized.origin,
+      authorities: [actor.id],
+      ...(trimmedServerName ? { name: trimmedServerName } : {})
+    };
     await retain(record, [authority]);
   };
 

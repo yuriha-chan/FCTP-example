@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { validateModel, type Area, type Asset, type CargoManifest, type Listing, type Production, type Route, type URI, type Variety, type Vessel } from '@fctp/protocol';
+import { validateAuthorityAccountName } from '@fctp/identity';
 import { ADMISSION_FIELDS, accountIdFromRequest, configuredAdministrator, createHost, entryAdmissionAllows, isAdmissionList, type FctpServerOptions } from '@fctp/server-base';
 import { discoverSimulationActions } from './actions.js';
 import { installSimulationTerritory, simulationExpectedIssuer, type SimulationTerritory } from './territory.js';
@@ -14,6 +15,9 @@ export interface CreateSimulationAppOptions {
   adminSecret: string;
   additionalRoutes?: Route[];
   fetcher?: typeof fetch;
+  territoryAccountName?: string;
+  serverDisplayName?: string;
+  territoryDisplayName?: string;
 }
 
 export interface SimulationAppIds {
@@ -64,6 +68,7 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
   const peer = new URL(options.peerOrigin).origin;
   const actorId = `${origin}/actors/territory` as URI;
   const administrator = options.administrator === undefined ? undefined : configuredAdministrator(options.administrator);
+  const territoryAccountName = validateAuthorityAccountName(options.territoryAccountName ?? 'system.territory', 'territory');
   const areas: Area[] = [
     { id: `${origin}/objects/areas/harbor`, name: 'Harbor District', territory: actorId },
     { id: `${origin}/objects/areas/highlands`, name: 'Ore Highlands', territory: actorId },
@@ -96,8 +101,14 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
   const hostRef: { current?: Awaited<ReturnType<typeof createHost>> } = {};
   const host = await createHost({
     origin, storeFile: options.storeFile, ...(options.keyFile ? { keyFile: options.keyFile } : {}),
-    actors: [{ name: 'territory', role: 'territory' }],
+    actors: [{
+      name: 'territory',
+      role: 'territory',
+      accountName: territoryAccountName,
+      ...(options.territoryDisplayName === undefined ? {} : { displayName: options.territoryDisplayName })
+    }],
     nodeInfo: { name: 'fctp-simulation' },
+    ...(options.serverDisplayName === undefined ? {} : { serverDisplayName: options.serverDisplayName }),
     ...(options.fetcher ? { fetcher: options.fetcher } : {}),
     authorizeAdmin: async (request) => {
       if (safeSecret(request, options.adminSecret)) return true;
@@ -119,7 +130,7 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
       return simulationExpectedIssuer(sender, object, knownRegistry);
     },
     configure: (_server, actors) => {
-      Object.assign(actors.territory!, { name: 'Simulation Territory', resources: { ports, routes, areas, map }, varieties: [ids.varieties.ore, ids.varieties.metal, ids.varieties.refined], assets: ids.assets, capabilities: ['Territory Topology', 'Territory Resources', 'Vessel Federation', 'Remote Client Access'] });
+      Object.assign(actors.territory!, { resources: { ports, routes, areas, map }, varieties: [ids.varieties.ore, ids.varieties.metal, ids.varieties.refined], assets: ids.assets, capabilities: ['Territory Topology', 'Territory Resources', 'Vessel Federation', 'Remote Client Access'] });
     },
   });
   hostRef.current = host;
@@ -166,7 +177,7 @@ export async function createSimulationApp(options: CreateSimulationAppOptions): 
     }
     if (!url.pathname.startsWith('/local/')) return false;
     if (url.pathname === '/local/territory/info' && request.method === 'GET') {
-      json(response, 200, { kind: 'simulation', actor: actorId, ids, endpoints: ['/local/territory/state', '/local/territory/actions', '/local/territory/mine', '/local/territory/manufacture', '/local/territory/load', '/local/territory/unload', '/local/territory/permissions', '/local/territory/admin/facilities', '/local/territory/admin/tick'], production: { ore: ids.varieties.ore, metal: ids.varieties.metal, refined: ids.varieties.refined, importedMetal: ids.varieties.importedMetal } });
+      json(response, 200, { kind: 'simulation', name: host.serverDisplayName, actor: actorId, ids, endpoints: ['/local/territory/state', '/local/territory/actions', '/local/territory/mine', '/local/territory/manufacture', '/local/territory/load', '/local/territory/unload', '/local/territory/permissions', '/local/territory/admin/facilities', '/local/territory/admin/tick'], production: { ore: ids.varieties.ore, metal: ids.varieties.metal, refined: ids.varieties.refined, importedMetal: ids.varieties.importedMetal } });
       return true;
     }
     if (url.pathname === '/local/territory/permissions' && request.method === 'GET') {

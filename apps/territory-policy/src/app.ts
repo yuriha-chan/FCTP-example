@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Route, URI, Variety } from '@fctp/protocol';
+import { validateAuthorityAccountName } from '@fctp/identity';
 import { ADMISSION_FIELDS, accountIdFromRequest, configuredAdministrator, createHost, isAdmissionList, type Host } from '@fctp/server-base';
 import { ActionDiscoveryError, discoverPolicyActions } from './actions.js';
 import { territoryAProduction, type Policy } from './domain.js';
@@ -17,6 +18,9 @@ export interface CreatePolicyAppOptions {
   adminSecret: string;
   additionalRoutes?: Route[];
   fetcher?: typeof fetch;
+  territoryAccountName?: string;
+  serverDisplayName?: string;
+  territoryDisplayName?: string;
 }
 
 export interface PolicyAppIds {
@@ -57,6 +61,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
     assets: [`${origin}/objects/assets/ore`, `${origin}/objects/assets/metal`]
   };
   const administrator = options.administrator === undefined ? undefined : configuredAdministrator(options.administrator);
+  const territoryAccountName = validateAuthorityAccountName(options.territoryAccountName ?? 'system.territory', 'territory');
   const portDocuments = ids.ports.map((id, index) => ({
     '@context': ['https://www.w3.org/ns/activitystreams', 'https://fctp.example/context'],
     id, type: 'Port', name: index === 0 ? 'East Haven' : 'West Haven', territory: actorId,
@@ -83,8 +88,14 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
   const hostRef: { current?: Host } = {};
   const host = await createHost({
     origin, storeFile: options.storeFile, ...(options.keyFile ? { keyFile: options.keyFile } : {}),
-    actors: [{ name: 'territory', role: 'territory' }],
+    actors: [{
+      name: 'territory',
+      role: 'territory',
+      accountName: territoryAccountName,
+      ...(options.territoryDisplayName === undefined ? {} : { displayName: options.territoryDisplayName })
+    }],
     nodeInfo: { name: 'fctp-policy' },
+    ...(options.serverDisplayName === undefined ? {} : { serverDisplayName: options.serverDisplayName }),
     ...(options.fetcher ? { fetcher: options.fetcher } : {}),
     resolveExpectedIssuer: resolveTerritoryIssuer,
     authorizeAdmin: async (request) => {
@@ -134,7 +145,7 @@ export async function createPolicyApp(options: CreatePolicyAppOptions) {
     if (!url.pathname.startsWith('/local/')) return false;
     const send = (status: number, value: unknown): void => { response.writeHead(status, { 'Content-Type': 'application/json', ...(url.pathname === '/local/territory/actions' ? { 'Cache-Control': 'no-store' } : {}) }); response.end(JSON.stringify(value)); };
     if (url.pathname === '/local/territory/info' && request.method === 'GET') {
-      send(200, { kind: 'policy', actor: actorId, ids, endpoints: ['/local/territory/info', '/local/territory/state', '/local/territory/actions', '/local/territory/traverse', '/local/territory/mine', '/local/territory/manufacture', '/local/territory/transfer', '/local/territory/load', '/local/territory/unload', '/local/territory/permissions', '/local/territory/admin/policy', '/local/territory/admin/admission'], production: { mining: { input: null, output: ore.id }, recipes: [{ id: 'ore-to-metal', input: ore.id, output: metal.id }] } });
+      send(200, { kind: 'policy', name: host.serverDisplayName, actor: actorId, ids, endpoints: ['/local/territory/info', '/local/territory/state', '/local/territory/actions', '/local/territory/traverse', '/local/territory/mine', '/local/territory/manufacture', '/local/territory/transfer', '/local/territory/load', '/local/territory/unload', '/local/territory/permissions', '/local/territory/admin/policy', '/local/territory/admin/admission'], production: { mining: { input: null, output: ore.id }, recipes: [{ id: 'ore-to-metal', input: ore.id, output: metal.id }] } });
       return true;
     }
     if (url.pathname === '/local/territory/actions' && request.method === 'GET') {

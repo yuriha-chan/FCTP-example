@@ -1,7 +1,7 @@
 import { mkdir, readFile, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validateHomeAccountName } from '@fctp/identity';
+import { validateAuthorityAccountName, validateHomeAccountName } from '@fctp/identity';
 
 const services = new Set(['authority', 'policy', 'simulation', 'client']);
 const applicationRoot = fileURLToPath(new globalThis.URL('../', import.meta.url));
@@ -78,6 +78,12 @@ function validateAdministrator(value) {
   return value;
 }
 
+function validateDisplayName(value, field) {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !value.trim()) fail(`Invalid ${field}`);
+  return value.trim();
+}
+
 function validateRoutes(value, origin, service) {
   if (!Array.isArray(value)) fail('Invalid additional routes');
   const reserved = service === 'policy' ? ['approach', 'coastal'] : ['approach'];
@@ -111,6 +117,10 @@ export async function readDeploymentConfig(service, path) {
     const administratorNames = input.administratorNames === undefined ? [] : validateNames(input.administratorNames, 'administrator names', true);
     const administrator = validateAdministrator(input.administrator);
     const homeAccountName = validateHomeAccountName(input.homeAccountName ?? 'system.home');
+    const registryAccountName = validateAuthorityAccountName(input.registryAccountName ?? 'system.registry', 'registry');
+    const serverDisplayName = validateDisplayName(input.serverDisplayName, 'server display name') ?? new globalThis.URL(origin).host;
+    const homeDisplayName = validateDisplayName(input.homeDisplayName, 'home display name') ?? `${serverDisplayName} Home`;
+    const registryDisplayName = validateDisplayName(input.registryDisplayName, 'registry display name') ?? `${serverDisplayName} Registry`;
     if (administratorNames.some((name) => playerNames.includes(name))) fail('Invalid account names');
     const vesselNames = validateVesselNames(input.vesselNames, playerNames);
     const startingPorts = validateStartingPorts(input.startingPorts);
@@ -123,7 +133,7 @@ export async function readDeploymentConfig(service, path) {
     try { accountPasswords = JSON.parse(await readFile(passwordFile, 'utf8')); } catch { fail('Invalid account password file'); }
     const accountNames = [...playerNames, ...administratorNames];
     if (!record(accountPasswords) || Object.keys(accountPasswords).length !== accountNames.length || accountNames.some((name) => typeof accountPasswords[name] !== 'string' || !accountPasswords[name])) fail('Invalid account passwords');
-    Object.assign(config, { playerNames, administratorNames, ...(administrator === undefined ? {} : { administrator }), homeAccountName, vesselNames, startingPorts, adminSecret, accountPasswords });
+    Object.assign(config, { playerNames, administratorNames, ...(administrator === undefined ? {} : { administrator }), homeAccountName, registryAccountName, serverDisplayName, homeDisplayName, registryDisplayName, vesselNames, startingPorts, adminSecret, accountPasswords });
   }
 
   if (service === 'policy' || service === 'simulation') {
@@ -131,7 +141,10 @@ export async function readDeploymentConfig(service, path) {
     const adminSecret = await readSecret(resolveFile(input.adminSecretFile, base));
     const peerOrigin = service === 'simulation' ? canonicalOrigin(input.peerOrigin, 'peer origin') : undefined;
     const additionalRoutes = input.additionalRoutes === undefined ? [] : validateRoutes(input.additionalRoutes, origin, service);
-    Object.assign(config, { ...(peerOrigin === undefined ? {} : { peerOrigin }), ...(administrator === undefined ? {} : { administrator }), adminSecret, additionalRoutes });
+    const territoryAccountName = validateAuthorityAccountName(input.territoryAccountName ?? 'system.territory', 'territory');
+    const serverDisplayName = validateDisplayName(input.serverDisplayName, 'server display name') ?? new globalThis.URL(origin).host;
+    const territoryDisplayName = validateDisplayName(input.territoryDisplayName, 'territory display name') ?? `${serverDisplayName} Territory`;
+    Object.assign(config, { ...(peerOrigin === undefined ? {} : { peerOrigin }), ...(administrator === undefined ? {} : { administrator }), adminSecret, additionalRoutes, territoryAccountName, serverDisplayName, territoryDisplayName });
   }
 
   if (service === 'client') {
@@ -166,15 +179,15 @@ export async function startDeployment(service, config) {
   try {
     if (service === 'authority') {
       const { createAuthorityApp } = await import('../apps/test-authority/dist/app.js');
-      app = await createAuthorityApp({ origin: config.origin, storeFile, keyFile, adminSecret: config.adminSecret, ...(config.administrator === undefined ? {} : { administrator: config.administrator }), playerNames: config.playerNames, administratorNames: config.administratorNames, vesselNames: config.vesselNames, startingPorts: config.startingPorts, accountPasswords: config.accountPasswords, homeAccountName: config.homeAccountName });
+      app = await createAuthorityApp({ origin: config.origin, storeFile, keyFile, adminSecret: config.adminSecret, ...(config.administrator === undefined ? {} : { administrator: config.administrator }), playerNames: config.playerNames, administratorNames: config.administratorNames, vesselNames: config.vesselNames, startingPorts: config.startingPorts, accountPasswords: config.accountPasswords, homeAccountName: config.homeAccountName, registryAccountName: config.registryAccountName, serverDisplayName: config.serverDisplayName, homeDisplayName: config.homeDisplayName, registryDisplayName: config.registryDisplayName });
     }
     if (service === 'policy') {
       const { createPolicyApp } = await import('../apps/territory-policy/dist/app.js');
-      app = await createPolicyApp({ origin: config.origin, storeFile, keyFile, ...(config.administrator === undefined ? {} : { administrator: config.administrator }), adminSecret: config.adminSecret, additionalRoutes: config.additionalRoutes });
+      app = await createPolicyApp({ origin: config.origin, storeFile, keyFile, ...(config.administrator === undefined ? {} : { administrator: config.administrator }), adminSecret: config.adminSecret, additionalRoutes: config.additionalRoutes, territoryAccountName: config.territoryAccountName, serverDisplayName: config.serverDisplayName, territoryDisplayName: config.territoryDisplayName });
     }
     if (service === 'simulation') {
       const { createSimulationApp } = await import('../apps/territory-sim/dist/app.js');
-      app = await createSimulationApp({ origin: config.origin, storeFile, keyFile, peerOrigin: config.peerOrigin, ...(config.administrator === undefined ? {} : { administrator: config.administrator }), adminSecret: config.adminSecret, additionalRoutes: config.additionalRoutes });
+      app = await createSimulationApp({ origin: config.origin, storeFile, keyFile, peerOrigin: config.peerOrigin, ...(config.administrator === undefined ? {} : { administrator: config.administrator }), adminSecret: config.adminSecret, additionalRoutes: config.additionalRoutes, territoryAccountName: config.territoryAccountName, serverDisplayName: config.serverDisplayName, territoryDisplayName: config.territoryDisplayName });
     }
     if (service === 'client') {
       const { createClientApplication } = await import('../apps/client-server/dist/app.js');

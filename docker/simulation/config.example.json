@@ -4,6 +4,9 @@
   "dataDir": "/data",
   "origin": "https://simulation.example.org",
   "workerIntervalMs": 1000,
+  "serverDisplayName": "Example Simulation",
+  "territoryAccountName": "system.territory",
+  "territoryDisplayName": "Example Simulation Territory",
   "adminSecretFile": "/run/secrets/admin-secret",
   "peerOrigin": "https://west.example.org",
   "administrator": "@governor@authority.example.org"

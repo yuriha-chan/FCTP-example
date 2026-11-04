@@ -34,7 +34,7 @@ test('authority persists private keys, publishes public keys, discovers Actors, 
     assert.equal((await actorResponse.json() as Record<string, unknown>).id, authority.actor(role).id);
   }
   const webfinger = new URL('/.well-known/webfinger', origin);
-  webfinger.searchParams.set('resource', `acct:@registry.registry@127.0.0.1:${port}`);
+  webfinger.searchParams.set('resource', `acct:@system.registry@127.0.0.1:${port}`);
   const discovery = await fetch(webfinger);
   assert.equal(discovery.status, 200);
   assert.equal((await discovery.json() as { links: Array<{ href: string }> }).links[0]?.href, authority.actor('registry').id);

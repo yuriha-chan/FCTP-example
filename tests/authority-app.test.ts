@@ -175,7 +175,7 @@ test('Home password login signs in a provisioned Player and preserves its native
 
     await assertRejectedLogin(await postHomeLogin(origin, { handle, password: 'wrong-password' }));
     await assertRejectedLogin(await postHomeLogin(origin, { handle: `@nobody@${host}`, password: 'alice-login-secret' }));
-    await assertRejectedLogin(await postHomeLogin(origin, { handle: `@home.home@${host}`, password: 'alice-login-secret' }));
+    await assertRejectedLogin(await postHomeLogin(origin, { handle: `@system.home@${host}`, password: 'alice-login-secret' }));
     await assertRejectedLogin(await postHomeLogin(origin, { handle: `@carol@${host}`, password: 'carol-login-secret' }));
 
     const invalidResponse = await postHomeLogin(origin, '{');

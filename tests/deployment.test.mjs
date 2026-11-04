@@ -127,6 +127,10 @@ test('authority deployment defaults the Home account name in config, NodeInfo, a
     }));
     const config = await readDeploymentConfig('authority', join(directory, 'config.json'));
     assert.equal(config.homeAccountName, 'system.home');
+    assert.equal(config.registryAccountName, 'system.registry');
+    assert.equal(config.serverDisplayName, new globalThis.URL(origin).host);
+    assert.equal(config.homeDisplayName, `${new globalThis.URL(origin).host} Home`);
+    assert.equal(config.registryDisplayName, `${new globalThis.URL(origin).host} Registry`);
     deployment = await startDeployment('authority', config);
     const nodeInfo = await readNodeInfo(origin);
     assert.equal(nodeInfo.metadata.homeAccountName, 'system.home');
@@ -169,6 +173,51 @@ test('authority deployment preserves a configured Home account name and Actor id
     await assertHomeAdvertisement(origin, 'academy.home');
   } finally {
     await deployment?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('authority deployment config rejects invalid registry account and display names before startup', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'deployment-identity-invalid-'));
+  try {
+    await writeFile(join(directory, 'admin-secret'), 'identity-invalid-admin-secret\n');
+    await writeFile(join(directory, 'passwords.json'), JSON.stringify({ player: 'player-password' }));
+    const base = {
+      origin: 'https://authority.example.org', listenHost: '127.0.0.1', port: 8080, dataDir: './data',
+      adminSecretFile: './admin-secret', playerNames: ['player'],
+      vesselNames: { player: 'player-vessel' }, accountPasswordsFile: './passwords.json'
+    };
+    for (const override of [
+      { registryAccountName: 'system' },
+      { serverDisplayName: '   ' },
+      { homeDisplayName: '' },
+      { registryDisplayName: '  ' }
+    ]) {
+      await writeFile(join(directory, 'config.json'), JSON.stringify({ ...base, ...override }));
+      await assert.rejects(readDeploymentConfig('authority', join(directory, 'config.json')), TypeError);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('territory deployment config rejects invalid territory account and display names before startup', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'deployment-territory-identity-invalid-'));
+  try {
+    await writeFile(join(directory, 'admin-secret'), 'territory-identity-invalid-admin-secret\n');
+    const base = {
+      origin: 'https://west.example.org', listenHost: '127.0.0.1', port: 8080, dataDir: './data',
+      adminSecretFile: './admin-secret', peerOrigin: 'https://simulation.example.org'
+    };
+    for (const override of [
+      { territoryAccountName: 'system' },
+      { serverDisplayName: '   ' },
+      { territoryDisplayName: '' }
+    ]) {
+      await writeFile(join(directory, 'config.json'), JSON.stringify({ ...base, ...override }));
+      await assert.rejects(readDeploymentConfig('policy', join(directory, 'config.json')), TypeError);
+    }
+  } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -344,12 +393,19 @@ test('territory deployments preserve peer defaults and do not automatically tick
     await writeFile(join(directory, 'simulation.json'), JSON.stringify({ ...shared, dataDir: './simulation-data', origin: simulationOrigin, port: simulationPort, peerOrigin: policyOrigin }));
     const policyConfig = await readDeploymentConfig('policy', join(directory, 'policy.json'));
     const simulationConfig = await readDeploymentConfig('simulation', join(directory, 'simulation.json'));
+    assert.equal(policyConfig.territoryAccountName, 'system.territory');
+    assert.equal(policyConfig.serverDisplayName, new globalThis.URL(policyOrigin).host);
+    assert.equal(policyConfig.territoryDisplayName, `${new globalThis.URL(policyOrigin).host} Territory`);
+    assert.equal(simulationConfig.territoryAccountName, 'system.territory');
+    assert.equal(simulationConfig.serverDisplayName, new globalThis.URL(simulationOrigin).host);
+    assert.equal(simulationConfig.territoryDisplayName, `${new globalThis.URL(simulationOrigin).host} Territory`);
     policy = await startDeployment('policy', policyConfig);
     simulation = await startDeployment('simulation', simulationConfig);
 
     const policyInfoResponse = await globalThis.fetch(`${policyOrigin}/local/territory/info`);
     assert.equal(policyInfoResponse.status, 200);
     const policyInfo = await policyInfoResponse.json();
+    assert.equal(policyInfo.name, new globalThis.URL(policyOrigin).host);
     assert.equal(policyInfo.actor, `${policyOrigin}/actors/territory`);
     const policyStateResponse = await globalThis.fetch(`${policyOrigin}/local/territory/state`, { headers: { authorization: 'Bearer territory-admin' } });
     const policyState = await policyStateResponse.json();

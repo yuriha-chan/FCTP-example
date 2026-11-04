@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { FCTPActor, URI } from '@fctp/protocol';
-import { validateHomeAccountName, type GeneratedActorKey } from '@fctp/identity';
+import { validateAuthorityAccountName, validateHomeAccountName, type GeneratedActorKey } from '@fctp/identity';
 import { accountIdFromRequest, configuredAdministrator, createHost, FctpServer, type ActivityHandler, type FctpServerOptions } from '@fctp/server-base';
 
 export type AuthorityRole = 'registry' | 'home' | 'player';
@@ -20,12 +20,17 @@ export interface CreateAuthorityOptions {
   authorizeResource?: FctpServerOptions['authorizeResource'];
   nodeInfo?: { name: string };
   homeAccountName?: string;
+  registryAccountName?: string;
+  serverDisplayName?: string;
+  homeDisplayName?: string;
+  registryDisplayName?: string;
   onInbound?: (server: FctpServer, actors: AuthorityActors) => void;
   inboxHandlers?: Partial<Record<AuthorityRole, Record<string, ActivityHandler>>>;
 }
 
 export interface Authority {
   readonly server: FctpServer;
+  readonly serverDisplayName: string;
   readonly actors: AuthorityActors;
   readonly keys: Readonly<Record<string, GeneratedActorKey>>;
   readonly players: Readonly<Record<string, FCTPActor & Record<string, unknown>>>;
@@ -42,10 +47,9 @@ export interface Authority {
   close(): Promise<void>;
 }
 
-const roles: AuthorityRole[] = ['registry', 'home', 'player'];
-
 export async function createAuthority(options: CreateAuthorityOptions): Promise<Authority> {
   const homeAccountName = validateHomeAccountName(options.homeAccountName ?? 'system.home');
+  const registryAccountName = validateAuthorityAccountName(options.registryAccountName ?? 'system.registry', 'registry');
   const playerNames = options.playerNames ?? ['player'];
   if (playerNames.length === 0 || new Set(playerNames).size !== playerNames.length || playerNames.some((name) => !/^[^.]+$/.test(name))) throw new TypeError('Player names must be non-empty, unique, and contain no dots');
   const administratorNames = options.administratorNames ?? [];
@@ -55,7 +59,21 @@ export async function createAuthority(options: CreateAuthorityOptions): Promise<
   const accountNames = [...playerNames, ...administratorNames];
   const playerRoles = new Set(accountNames);
   const administrator = options.administrator === undefined ? undefined : configuredAdministrator(options.administrator);
-  const descriptors = [...roles.slice(0, 2).map((name) => ({ name, role: name })), ...accountNames.map((name) => ({ name, role: 'player' }))];
+  const descriptors = [
+    {
+      name: 'registry',
+      role: 'registry',
+      accountName: registryAccountName,
+      ...(options.registryDisplayName === undefined ? {} : { displayName: options.registryDisplayName })
+    },
+    {
+      name: 'home',
+      role: 'home',
+      accountName: homeAccountName,
+      ...(options.homeDisplayName === undefined ? {} : { displayName: options.homeDisplayName })
+    },
+    ...accountNames.map((name) => ({ name, role: 'player' }))
+  ];
   const host = await createHost({
     origin: options.origin,
     storeFile: options.storeFile,
@@ -66,6 +84,7 @@ export async function createAuthority(options: CreateAuthorityOptions): Promise<
     ...(options.authorizeResource ? { authorizeResource: options.authorizeResource } : {}),
     nodeInfo: options.nodeInfo ?? { name: 'fctp-authority' },
     homeAccountName,
+    ...(options.serverDisplayName === undefined ? {} : { serverDisplayName: options.serverDisplayName }),
     authorizeAdmin: options.adminSecret === undefined ? async () => false : async (request) => matchesSecret(request, options.adminSecret!),
     ...(options.inboxHandlers ? { inboxHandlers: options.inboxHandlers } : {}),
     configure: (server, actors) => {
@@ -83,6 +102,7 @@ export async function createAuthority(options: CreateAuthorityOptions): Promise<
   const governors = new Set(administratorNames.map((name) => actors[name]!.id));
   return {
     server: host.server,
+    serverDisplayName: host.serverDisplayName,
     actors,
     keys: host.keys,
     players,

@@ -43,7 +43,11 @@ GET /.well-known/nodeinfo
 GET /nodeinfo/2.1
 ```
 
-The document reports the service name and build git metadata under `software.version` and `metadata.git`. Authority NodeInfo also advertises `metadata.homeAccountName`, the configured Home account name (default `system.home`). The Home Actor keeps the stable URI `<origin>/actors/home` and its persisted signing key; `homeAccountName` only controls the advertised handle, published as `<name>@<authority host>` and resolved through WebFinger as `acct:<name>@<authority host>`. Configure it in the Authority deployment JSON as a name followed by `.home`, without an authority or leading `@`. Build metadata is injected at image build time; the image does not read `.git` at runtime. Compose reads these values from the service `.env` file:
+The document reports the service name and build git metadata under `software.version` and `metadata.git`. Authority NodeInfo also advertises `metadata.homeAccountName`, the configured Home account name (default `system.home`). The Home Actor keeps the stable URI `<origin>/actors/home` and its persisted signing key; `homeAccountName` only controls the advertised handle, published as `<name>@<authority host>` and resolved through WebFinger as `acct:<name>@<authority host>`. Configure it in the Authority deployment JSON as a name followed by `.home`, without an authority or leading `@`. Build metadata is injected at image build time; the image does not read `.git` at runtime.
+
+Authority also accepts `registryAccountName` (default `system.registry`), while Policy and Simulation accept `territoryAccountName` (default `system.territory`). These fields control the published authority handles, not Actor URIs or persisted keys. `serverDisplayName` defaults to the canonical origin host. Authority derives `homeDisplayName` and `registryDisplayName` from `serverDisplayName` with ` Home` and ` Registry` suffixes; Policy and Simulation derive `territoryDisplayName` with a ` Territory` suffix. The server display name is published as `/local/info` `name`; Actor display names are published as the Actor document `name`.
+
+Compose reads these values from the service `.env` file:
 
 ```sh
 GIT_COMMIT="$(git rev-parse HEAD)" \

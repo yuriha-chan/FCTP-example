@@ -40,7 +40,7 @@ export function createAccountService(state: ClientApplicationState, fetcher: typ
       if (result.status !== 'signed-in') {
         return result.reason ? { status: result.status, reason: result.reason } : { status: result.status };
       }
-      await knownWorld.remember(resolution.homeActor, resolution.homeServer, resolution.homeOrigin);
+      await knownWorld.remember(resolution.homeActor, resolution.homeServer, resolution.homeOrigin, resolution.serverName);
       const id = result.handle;
       const login: LoginState = {
         status: 'signed-in',

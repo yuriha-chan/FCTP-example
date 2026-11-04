@@ -6,7 +6,7 @@ All routes below are local demo APIs under `/local/`, not standardized FCTP endp
 
 ## Authority (port 4100)
 
-`GET /local/info` and `GET /local/home/endpoints` are public discovery routes. `GET /local/registry/state` requires the authority admin credential and returns Registry state including vessel, requests, events, cargo and ExitEvent references.
+`GET /local/info` and `GET /local/home/endpoints` are public discovery routes. `/local/info` includes `name`, the configured server display name. `GET /local/registry/state` requires the authority admin credential and returns Registry state including vessel, requests, events, cargo and ExitEvent references.
 
 ### Player authoring
 
@@ -45,7 +45,7 @@ The permission-map routes require authentication. Missing or invalid credentials
 
 ## Territory A — policy (port 4101)
 
-`GET /local/territory/info` is public and returns `{ kind, actor, ids, endpoints, production }`. `GET /local/territory/state` requires a Player diplomatic token or A admin credential and returns `{ state, admission, decisions }`. A Territory accepts token declarations only from the Home resolved for the Player Actor's origin through NodeInfo 2.1 `metadata.homeAccountName` and canonical WebFinger. The resolved Home may use another origin; neither a guessed `/actors/home` path nor local enrollment grants issuer authority. No server or user allowlist is configured.
+`GET /local/territory/info` is public and returns `{ kind, name, actor, ids, endpoints, production }`, where `name` is the configured server display name. `GET /local/territory/state` requires a Player diplomatic token or A admin credential and returns `{ state, admission, decisions }`. A Territory accepts token declarations only from the Home resolved for the Player Actor's origin through NodeInfo 2.1 `metadata.homeAccountName` and canonical WebFinger. The resolved Home may use another origin; neither a guessed `/actors/home` path nor local enrollment grants issuer authority. No server or user allowlist is configured.
 
 | Route | Credential | Request | Response |
 |---|---|---|---|

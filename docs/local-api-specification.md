@@ -895,6 +895,7 @@ A Territory server that provides `/local/territory/info` MUST return at least `k
 ```json
 {
   "kind": "territory",
+  "name": "<server display name>",
   "actor": "<Territory Actor URI>",
   "ids": {},
   "endpoints": [],
@@ -907,6 +908,7 @@ A server that combines Home, Registry, and Repository roles MAY advertise its co
 ```json
 {
   "kind": "combined",
+  "name": "<server display name>",
   "actor": "<Actor ID map>",
   "ids": {},
   "players": {},

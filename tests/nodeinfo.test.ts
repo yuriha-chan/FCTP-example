@@ -224,6 +224,88 @@ test('authority advertises the default Home account name in NodeInfo and WebFing
   }
 });
 
+test('authority publishes configured account handles and display names', { timeout: 30000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-authority-identity-'));
+  let app: Awaited<ReturnType<typeof createAuthorityApp>> | undefined;
+  try {
+    const origin = 'https://authority-identity.test';
+    app = await createAuthorityApp({
+      origin,
+      storeFile: join(directory, 'authority.json'),
+      keyFile: join(directory, 'authority.keys.json'),
+      adminSecret: 'identity-admin-secret',
+      registryAccountName: 'academy.registry',
+      serverDisplayName: 'Academy',
+      homeDisplayName: 'Academy Home',
+      registryDisplayName: 'Academy Registry'
+    });
+    const port = await freePort();
+    await app.authority.listen(port);
+    const host = new URL(origin).host;
+    const local = `http://127.0.0.1:${port}`;
+    const home = await (await fetch(`${local}/actors/home`)).json() as Record<string, unknown>;
+    const registry = await (await fetch(`${local}/actors/registry`)).json() as Record<string, unknown>;
+    const info = await (await fetch(`${local}/local/info`)).json() as Record<string, unknown>;
+    assert.equal(home.webfinger, `system.home@${host}`);
+    assert.equal(home.name, 'Academy Home');
+    assert.equal(registry.webfinger, `academy.registry@${host}`);
+    assert.equal(registry.name, 'Academy Registry');
+    assert.equal(info.name, 'Academy');
+  } finally {
+    await app?.authority.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('territory apps publish configured account handles and display names', { timeout: 30000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fctp-territory-identity-'));
+  let policy: Awaited<ReturnType<typeof createPolicyApp>> | undefined;
+  let simulation: Awaited<ReturnType<typeof createSimulationApp>> | undefined;
+  try {
+    const policyOrigin = 'https://policy-identity.test';
+    policy = await createPolicyApp({
+      origin: policyOrigin,
+      storeFile: join(directory, 'policy.json'),
+      keyFile: join(directory, 'policy.keys.json'),
+      adminSecret: 'policy-identity-secret',
+      serverDisplayName: 'Academy',
+      territoryAccountName: 'academy.territory',
+      territoryDisplayName: 'Academy Territory'
+    });
+    const policyPort = await freePort();
+    await policy.host.listen(policyPort);
+    const policyHost = new URL(policyOrigin).host;
+    const policyLocal = `http://127.0.0.1:${policyPort}`;
+    const policyInfo = await (await fetch(`${policyLocal}/local/territory/info`)).json() as Record<string, unknown>;
+    const policyActor = await (await fetch(`${policyLocal}/actors/territory`)).json() as Record<string, unknown>;
+    assert.equal(policyInfo.name, 'Academy');
+    assert.equal(policyActor.webfinger, `academy.territory@${policyHost}`);
+    assert.equal(policyActor.name, 'Academy Territory');
+
+    const simulationOrigin = 'https://simulation-identity.test';
+    simulation = await createSimulationApp({
+      origin: simulationOrigin,
+      storeFile: join(directory, 'simulation.json'),
+      keyFile: join(directory, 'simulation.keys.json'),
+      peerOrigin: policyOrigin,
+      adminSecret: 'simulation-identity-secret'
+    });
+    const simulationPort = await freePort();
+    await simulation.host.listen(simulationPort);
+    const simulationHost = new URL(simulationOrigin).host;
+    const simulationLocal = `http://127.0.0.1:${simulationPort}`;
+    const simulationInfo = await (await fetch(`${simulationLocal}/local/territory/info`)).json() as Record<string, unknown>;
+    const simulationActor = await (await fetch(`${simulationLocal}/actors/territory`)).json() as Record<string, unknown>;
+    assert.equal(simulationInfo.name, simulationHost);
+    assert.equal(simulationActor.webfinger, `system.territory@${simulationHost}`);
+    assert.equal(simulationActor.name, `${simulationHost} Territory`);
+  } finally {
+    await policy?.host.close();
+    await simulation?.host.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('authority publishes and resolves a configured Home account name without changing other Actor handles', { timeout: 30000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-nodeinfo-home-custom-'));
   let authority: Awaited<ReturnType<typeof createAuthority>> | undefined;
@@ -247,7 +329,7 @@ test('authority publishes and resolves a configured Home account name without ch
     });
     await assertHomeAdvertisement(baseUrl, 'https://home-custom.test', 'academy.home');
     const host = new URL('https://home-custom.test').host;
-    assert.equal(authority.actor('registry').webfinger, `registry.registry@${host}`);
+    assert.equal(authority.actor('registry').webfinger, `system.registry@${host}`);
     assert.equal(authority.actor('player').webfinger, `player@${host}`);
   } finally {
     await authority?.close();

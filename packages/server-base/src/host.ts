@@ -12,6 +12,8 @@ import { SIGNED_REQUEST_HEADER } from './signed-request.js';
 export interface HostActorDescriptor {
   name: string;
   role: string;
+  accountName?: string;
+  displayName?: string;
   document?: FCTPActor & Record<string, unknown>;
 }
 
@@ -33,6 +35,7 @@ export interface CreateHostOptions {
   authorizeResource?: FctpServerOptions['authorizeResource'];
   nodeInfo?: { name: string };
   homeAccountName?: string;
+  serverDisplayName?: string;
   onWorkerError?: (failure: HostWorkerError) => void;
   inboxHandlers?: Partial<Record<string, Record<string, ActivityHandler>>>;
   configure?: (server: FctpServer, actors: Readonly<Record<string, FCTPActor & Record<string, unknown>>>, keys: Readonly<Record<string, GeneratedActorKey>>) => void;
@@ -40,6 +43,7 @@ export interface CreateHostOptions {
 
 export interface Host {
   readonly server: FctpServer;
+  readonly serverDisplayName: string;
   readonly actors: Record<string, FCTPActor & Record<string, unknown>>;
   readonly keys: Readonly<Record<string, GeneratedActorKey>>;
   readonly loader: DocumentLoader;
@@ -59,23 +63,41 @@ export async function createHost(options: CreateHostOptions): Promise<Host> {
   if (!['http:', 'https:'].includes(origin.protocol) || origin.pathname !== '/' || origin.search || origin.hash) throw new TypeError('origin must be an HTTP(S) origin');
   if (options.actors.length === 0 || new Set(options.actors.map(({ name }) => name)).size !== options.actors.length) throw new TypeError('Actor names must be non-empty and unique');
   if (options.actors.some(({ name, role }) => !name || !role || name.includes('/'))) throw new TypeError('Actor names and roles must be non-empty; names cannot contain slashes');
+  const configuredServerDisplayName = options.serverDisplayName?.trim();
+  if (options.serverDisplayName !== undefined && !configuredServerDisplayName) throw new TypeError('Server display name must be non-empty');
+  const serverDisplayName = configuredServerDisplayName ?? origin.host;
   const base = origin.origin;
   const descriptors = options.actors;
   const homeDescriptor = descriptors.find(({ role }) => role === 'home');
   const hostedHomeAccountName = homeDescriptor === undefined ? undefined : options.homeAccountName;
+  for (const { accountName, displayName } of descriptors) {
+    if (accountName !== undefined && !accountName.trim()) throw new TypeError('Actor account name must be non-empty');
+    if (displayName !== undefined && !displayName.trim()) throw new TypeError('Actor display name must be non-empty');
+  }
   const keyFile = options.keyFile ?? `${options.storeFile}.keys`;
   const persisted = await loadOrCreateKeys(keyFile, base, descriptors);
   const keys = Object.fromEntries(descriptors.map(({ name }) => [name, { keyPair: persisted[name]!.keyPair, publicKey: structuredClone(persisted[name]!.publicDocument) }])) as Record<string, GeneratedActorKey>;
-  const actors = Object.fromEntries(descriptors.map(({ name, role, document }) => {
+  const actors = Object.fromEntries(descriptors.map(({ name, role, accountName, displayName, document }) => {
     const id = `${base}/actors/${name}`;
-    const webfinger = role === 'home' && hostedHomeAccountName !== undefined
-      ? `${hostedHomeAccountName}@${origin.host}`
-      : role === 'player' ? `${name}@${origin.host}` : `${name}.${role}@${origin.host}`;
+    const trimmedAccountName = accountName?.trim();
+    const webfinger = trimmedAccountName !== undefined
+      ? `${trimmedAccountName}@${origin.host}`
+      : role === 'home' && hostedHomeAccountName !== undefined
+        ? `${hostedHomeAccountName}@${origin.host}`
+        : role === 'player' ? `${name}@${origin.host}` : `${name}.${role}@${origin.host}`;
+    const trimmedDisplayName = displayName?.trim();
+    const defaultDisplayName = role === 'home'
+      ? `${serverDisplayName} Home`
+      : role === 'registry'
+        ? `${serverDisplayName} Registry`
+        : role === 'territory' ? `${serverDisplayName} Territory` : undefined;
     const actor: Record<string, unknown> = document ? structuredClone(document) : {
       '@context': ['https://www.w3.org/ns/activitystreams', 'https://fctp.example/context'], id, type: 'Service', role,
       inbox: `${id}/inbox`, outbox: `${id}/outbox`, publicKeys: [keys[name]!.keyPair.id]
     };
     if (!('webfinger' in actor)) actor.webfinger = webfinger;
+    if (trimmedDisplayName !== undefined) actor.name = trimmedDisplayName;
+    else if (defaultDisplayName !== undefined && !('name' in actor)) actor.name = defaultDisplayName;
     actor['@context'] = withWebFingerContext(actor['@context']);
     return [name, actor];
   })) as Record<string, FCTPActor & Record<string, unknown>>;
@@ -191,7 +213,7 @@ export async function createHost(options: CreateHostOptions): Promise<Host> {
     return workerRun;
   };
   return {
-    server, actors, keys, loader, workerErrors,
+    server, serverDisplayName, actors, keys, loader, workerErrors,
     actor: (name) => { const actor = actors[name]; if (!actor) throw new TypeError(`Unknown Actor: ${name}`); return actor; },
     key: (name) => { const key = keys[name]; if (!key) throw new TypeError(`Unknown Actor: ${name}`); return key; },
     sign: (name, activity) => { const key = keys[name]; if (!key) throw new TypeError(`Unknown Actor: ${name}`); return signJsonLd(activity as unknown as JsonDocument, key.keyPair, loader) as Promise<Activity>; },

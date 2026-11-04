@@ -4,6 +4,9 @@
   "dataDir": "/data",
   "origin": "https://west.example.org",
   "workerIntervalMs": 1000,
+  "serverDisplayName": "Example West",
+  "territoryAccountName": "system.territory",
+  "territoryDisplayName": "Example West Territory",
   "adminSecretFile": "/run/secrets/admin-secret",
   "administrator": "@governor@authority.example.org"
 }

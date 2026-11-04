@@ -327,7 +327,7 @@ test('the configured administrator diplomatic token is rejected by secret-only p
 });
 
 const invalidAdministrators: Array<{ label: string; handle: (host: string) => string }> = [
-  { label: 'an authority-role handle', handle: (host) => `@home.home@${host}` },
+  { label: 'an authority-role handle', handle: (host) => `@system.home@${host}` },
   { label: 'an account on an untrusted server', handle: () => '@governor@untrusted.example' },
   { label: 'a local account that does not exist', handle: (host) => `@nobody@${host}` }
 ];

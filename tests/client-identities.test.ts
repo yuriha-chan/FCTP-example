@@ -52,7 +52,7 @@ interface ActorFixture {
 }
 
 interface DiscoveryBody {
-  servers?: Array<{ server?: string; origin?: string; authorities?: string[] }>;
+  servers?: Array<{ server?: string; origin?: string; authorities?: string[]; name?: string }>;
   authorities?: Array<{ actorId?: string; roles?: string[]; name?: string }>;
 }
 
@@ -398,7 +398,7 @@ test('POST /api/servers embeds the verified identity of the discovered Actor', {
     { id: DISCOVERED_ACTOR, name: 'Sana', role: 'territory', published: 'sana@identity-first.test' },
     { id: SECOND_ACTOR, name: 'Orla', published: `orla@${SECOND}` }
   ];
-  const info = { actor: { territory: DISCOVERED_ACTOR }, ids: { actor: { territory: DISCOVERED_ACTOR } } };
+  const info = { name: 'Discovery Server', actor: { territory: DISCOVERED_ACTOR }, ids: { actor: { territory: DISCOVERED_ACTOR } } };
   const harness = await openHarness(storeFile, discoveryHandler(fixtures, info));
   try {
     const response = await postServers(harness.client.origin, { origin: DISCOVERY_ORIGIN });
@@ -408,6 +408,7 @@ test('POST /api/servers embeds the verified identity of the discovered Actor', {
     assert.equal(body.servers?.length, 1);
     assert.equal(body.servers?.[0]?.server, DISCOVERY);
     assert.equal(body.servers?.[0]?.origin, DISCOVERY_ORIGIN);
+    assert.equal(body.servers?.[0]?.name, 'Discovery Server');
     assert.deepEqual(body.servers?.[0]?.authorities, [DISCOVERED_ACTOR]);
     assert.equal(body.authorities?.[0]?.actorId, DISCOVERED_ACTOR);
     assert.deepEqual(body.authorities?.[0]?.roles, ['territory']);

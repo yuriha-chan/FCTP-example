@@ -16,6 +16,7 @@ export interface AccountResolution {
   homeOrigin: string;
   homeAuthority: URI;
   homeActor: FCTPActor;
+  serverName?: string;
 }
 
 export interface AuthorityResolution {
@@ -50,7 +51,8 @@ export class FctpClient {
     if (typeof advertised !== 'string') throw new Error('Home discovery did not advertise an Actor');
     const home = await resolveActor(advertised as URI, this.#fetcher);
     if (home.actor.role !== 'home') throw new Error('Advertised Home Actor does not publish the Home role');
-    return { handle: parsed.handle, actorId: resolved.actor.id, actor: resolved.actor, homeServer: parsed.server, homeOrigin: origin, homeAuthority: home.actor.id, homeActor: home.actor };
+    const serverName = isRecord(info) && typeof info.name === 'string' && info.name.trim() ? info.name.trim() : undefined;
+    return { handle: parsed.handle, actorId: resolved.actor.id, actor: resolved.actor, homeServer: parsed.server, homeOrigin: origin, homeAuthority: home.actor.id, homeActor: home.actor, ...(serverName === undefined ? {} : { serverName }) };
   }
 
   async resolveAuthority(handle: string, options: { origin?: string } = {}): Promise<AuthorityResolution> {

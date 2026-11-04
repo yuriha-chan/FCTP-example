@@ -19,6 +19,10 @@ export interface CreateAuthorityAppOptions {
   startingPorts?: URI[];
   accountPasswords?: Record<string, string>;
   homeAccountName?: string;
+  registryAccountName?: string;
+  serverDisplayName?: string;
+  homeDisplayName?: string;
+  registryDisplayName?: string;
 }
 
 export interface AuthorityAppIds {
@@ -51,6 +55,10 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
     ...(options.playerNames ? { playerNames: options.playerNames } : {}),
     ...(options.administratorNames ? { administratorNames: options.administratorNames } : {}),
     ...(options.homeAccountName === undefined ? {} : { homeAccountName: options.homeAccountName }),
+    ...(options.registryAccountName === undefined ? {} : { registryAccountName: options.registryAccountName }),
+    ...(options.serverDisplayName === undefined ? {} : { serverDisplayName: options.serverDisplayName }),
+    ...(options.homeDisplayName === undefined ? {} : { homeDisplayName: options.homeDisplayName }),
+    ...(options.registryDisplayName === undefined ? {} : { registryDisplayName: options.registryDisplayName }),
     nodeInfo: { name: 'fctp-authority' },
     fetcher,
     verifyInbound: createInboundVerifier({
@@ -113,6 +121,7 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
     response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     response.end(JSON.stringify({
       kind: 'authority',
+      name: authority.serverDisplayName,
       actor: ids.actor,
       ids,
       players: ids.players,

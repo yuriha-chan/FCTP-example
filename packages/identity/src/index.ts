@@ -171,11 +171,15 @@ export function parseHandle(handle: string): ParsedHandle {
     : { handle, localName: localName!, server, kind: 'authority', role };
 }
 
-export function validateHomeAccountName(value: unknown): string {
-  if (typeof value !== 'string') throw new TypeError('Home account name must be a string');
-  const parsed = parseHandle(`@${value}@home`);
-  if (parsed.kind !== 'authority' || parsed.role !== 'home') throw new TypeError('Home account name must be a name followed by .home');
+export function validateAuthorityAccountName(value: unknown, role: 'home' | 'registry' | 'territory'): string {
+  if (typeof value !== 'string') throw new TypeError(`${role} account name must be a string`);
+  const parsed = parseHandle(`@${value}@server`);
+  if (parsed.kind !== 'authority' || parsed.role !== role) throw new TypeError(`${role} account name must be a name followed by .${role}`);
   return value;
+}
+
+export function validateHomeAccountName(value: unknown): string {
+  return validateAuthorityAccountName(value, 'home');
 }
 
 export interface ParsedWebFingerAddress {
