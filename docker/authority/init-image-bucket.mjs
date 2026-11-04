@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
+import { CreateBucketCommand, PutBucketPolicyCommand, S3Client } from '@aws-sdk/client-s3';
 
 const OPERATION_TIMEOUT_MS = 10_000;
 const DIAGNOSTIC_CODES = new Set([
@@ -40,6 +40,27 @@ function endpoint(value) {
   return url.origin;
 }
 
+function failure(label, error) {
+  const name = error && typeof error === 'object' ? error.name : undefined;
+  const code = DIAGNOSTIC_CODES.has(name) ? name
+    : DIAGNOSTIC_CODES.has(error?.code) ? error.code : 'UnknownError';
+  const status = error?.$metadata?.httpStatusCode;
+  const http = Number.isInteger(status) && status >= 400 && status <= 599 ? `; HTTP ${status}` : '';
+  return new Error(`${label} (${code}${http})`);
+}
+
+function publicReadPolicy(bucket) {
+  return JSON.stringify({
+    Version: '2012-10-17',
+    Statement: [{
+      Effect: 'Allow',
+      Principal: '*',
+      Action: ['s3:GetObject'],
+      Resource: [`arn:aws:s3:::${bucket}/*`]
+    }]
+  });
+}
+
 async function main() {
   const region = required('OBJECT_STORAGE_REGION');
   const bucket = required('OBJECT_STORAGE_BUCKET');
@@ -53,18 +74,19 @@ async function main() {
     maxAttempts: 1
   });
   try {
-    await client.send(new CreateBucketCommand({
-      Bucket: bucket,
-      ...(region === 'us-east-1' ? {} : { CreateBucketConfiguration: { LocationConstraint: region } })
-    }), { abortSignal: globalThis.AbortSignal.timeout(OPERATION_TIMEOUT_MS) });
-  } catch (error) {
-    const name = error && typeof error === 'object' ? error.name : undefined;
-    if (name !== 'BucketAlreadyOwnedByYou') {
-      const code = DIAGNOSTIC_CODES.has(name) ? name
-        : DIAGNOSTIC_CODES.has(error?.code) ? error.code : 'UnknownError';
-      const status = error?.$metadata?.httpStatusCode;
-      const http = Number.isInteger(status) && status >= 400 && status <= 599 ? `; HTTP ${status}` : '';
-      throw new Error(`Unable to initialize image bucket (${code}${http})`);
+    try {
+      await client.send(new CreateBucketCommand({
+        Bucket: bucket,
+        ...(region === 'us-east-1' ? {} : { CreateBucketConfiguration: { LocationConstraint: region } })
+      }), { abortSignal: globalThis.AbortSignal.timeout(OPERATION_TIMEOUT_MS) });
+    } catch (error) {
+      const name = error && typeof error === 'object' ? error.name : undefined;
+      if (name !== 'BucketAlreadyOwnedByYou') throw failure('Unable to initialize image bucket', error);
+    }
+    try {
+      await client.send(new PutBucketPolicyCommand({ Bucket: bucket, Policy: publicReadPolicy(bucket) }), { abortSignal: globalThis.AbortSignal.timeout(OPERATION_TIMEOUT_MS) });
+    } catch (error) {
+      throw failure('Unable to initialize image bucket policy', error);
     }
   } finally {
     client.destroy();

@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 
 export interface ImageObjectStorage {
   put(key: string, bytes: Uint8Array, mediaType: string): Promise<void>;
-  get(key: string): Promise<Uint8Array>;
+  publicUrl(key: string): string;
 }
 
 export type ImageMediaType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';

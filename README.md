@@ -16,7 +16,7 @@ Local administrator defaults are `demo-authority-admin`, `demo-policy-admin`, an
 
 Start at <http://127.0.0.1:4103> and follow [the client walkthrough](docs/client-walkthrough.md). For active roleplay, use the [browser-backed role CLI](docs/browser-harness.md) and [run browser manual](run/manuals/browser.md); `run/game.mjs` is historical API provenance and supervisor/archive tooling, not a parallel gameplay path. The HTTP routes and authorization boundaries are documented in [the local API reference](docs/api.md). [Specification mapping](docs/spec-mapping.md), [implementation conventions](docs/implementation-conventions.md), and [known limitations](docs/limitations.md) distinguish local demo behavior from protocol requirements.
 
-Player sessions also have a **Player creations** area for authoring text Assets and Variety definitions. The local native-auth API and public discovery/resource boundary are documented in [the local API reference](docs/api.md); the visible workflow is in [the client walkthrough](docs/client-walkthrough.md).
+Player sessions also have a **Player creations** area for authoring Assets with inert text and, when object storage is configured, public image media, plus Variety definitions. The local native-auth API and public discovery/resource boundary are documented in [the local API reference](docs/api.md); the visible workflow is in [the client walkthrough](docs/client-walkthrough.md).
 
 For independently operated Authority, Policy Territory, Simulation Territory, and Client containers, see the [separate Docker deployment guide](docs/deployment.md).
 

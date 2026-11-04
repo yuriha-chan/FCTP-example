@@ -15,7 +15,7 @@ import { createAuthorityApp } from '../apps/test-authority/src/app.js';
 const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 const PNG_MEDIA_TYPE = 'image/png';
 const REGION = 'eu-west-2';
-const BUCKET = 'private-images';
+const BUCKET = 'public-images';
 const ACCESS_KEY_ID = 'AKIDIMAGEINTEGRATION';
 const SECRET_ACCESS_KEY = 'image-integration-secret-access-key';
 const ADMIN_SECRET = 'image-integration-admin';
@@ -31,7 +31,9 @@ interface RecordedRequest {
 
 interface S3Fixture {
   endpoint: string;
+  publicBase: string;
   requests: RecordedRequest[];
+  publicRequests: RecordedRequest[];
   close(): Promise<void>;
 }
 
@@ -62,6 +64,7 @@ async function freePort(): Promise<number> {
 
 async function startS3Fixture(): Promise<S3Fixture> {
   const requests: RecordedRequest[] = [];
+  const publicRequests: RecordedRequest[] = [];
   const objects = new Map<string, { body: Buffer; mediaType: string }>();
   const server = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
@@ -99,10 +102,33 @@ async function startS3Fixture(): Promise<S3Fixture> {
   });
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
+  const mediaServer = createServer((request, response) => {
+    const url = new URL(request.url ?? '/', `http://${request.headers.host ?? '127.0.0.1'}`);
+    publicRequests.push({ method: request.method, pathname: url.pathname, headers: request.headers, body: Buffer.alloc(0) });
+    const match = /^\/media\/([0-9a-f]{32})$/.exec(url.pathname);
+    const stored = match === null ? undefined : objects.get(match[1]!);
+    if (request.method !== 'GET' || stored === undefined) {
+      response.writeHead(404, { 'Content-Type': 'text/plain' });
+      response.end('not found');
+      return;
+    }
+    response.writeHead(200, { 'Content-Type': stored.mediaType, 'Content-Length': String(stored.body.byteLength) });
+    response.end(stored.body);
+  });
+  await new Promise<void>((resolve, reject) => {
+    mediaServer.once('error', reject);
+    mediaServer.listen(0, '127.0.0.1', resolve);
+  });
+  const mediaAddress = mediaServer.address();
+  assert.ok(mediaAddress && typeof mediaAddress !== 'string');
   return {
     endpoint: `http://127.0.0.1:${address.port}`,
+    publicBase: `http://127.0.0.1:${mediaAddress.port}/media`,
     requests,
+    publicRequests,
     close: async () => {
+      mediaServer.closeAllConnections();
+      await new Promise<void>((resolve, reject) => mediaServer.close((error) => error ? reject(error) : resolve()));
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
@@ -148,7 +174,7 @@ function requestCount(fixture: S3Fixture, method: string): number {
   return fixture.requests.filter((request) => request.method === method).length;
 }
 
-test('image upload flows through real Authority S3 storage and the running Client from login to public read', { timeout: 120_000 }, async () => {
+test('image upload stores bytes once in S3 and the running Client returns an immediately public URL', { timeout: 120_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-image-client-e2e-'));
   const fixture = await startS3Fixture();
   const authorityPort = await freePort();
@@ -165,6 +191,7 @@ test('image upload flows through real Authority S3 storage and the running Clien
       accountPasswords: { [PLAYER]: PASSWORD },
       objectStorage: {
         endpoint: fixture.endpoint,
+        publicBaseUrl: fixture.publicBase,
         region: REGION,
         bucket: BUCKET,
         accessKeyId: ACCESS_KEY_ID,
@@ -210,11 +237,12 @@ test('image upload flows through real Authority S3 storage and the running Clien
     assert.equal(typeof descriptorBody.url, 'string');
     const descriptor = { url: String(descriptorBody.url), mediaType: PNG_MEDIA_TYPE };
     const descriptorUrl = new URL(descriptor.url);
-    assert.equal(descriptorUrl.origin, authorityOrigin, 'the descriptor points at the canonical Repository origin, not object storage');
-    assert.match(descriptorUrl.pathname, new RegExp(`^/objects/players/${PLAYER}/images/[0-9a-f]{32}$`));
+    assert.equal(descriptorUrl.origin, new URL(fixture.publicBase).origin, 'the descriptor points at the explicit public media base');
+    assert.equal(descriptorUrl.href.startsWith(`${fixture.publicBase}/`), true);
+    assert.match(descriptorUrl.pathname, /^\/media\/[0-9a-f]{32}$/);
+    assert.notEqual(descriptorUrl.origin, authorityOrigin, 'the public media base is distinct from the Authority API origin');
     assert.equal(descriptorUrl.search, '');
     assert.equal(descriptorUrl.hash, '');
-    assert.equal(descriptorUrl.href.includes(fixture.endpoint), false);
 
     assert.equal(requestCount(fixture, 'PUT'), 1, 'the upload performs exactly one S3 PUT without retry');
     const put = fixture.requests.find((request) => request.method === 'PUT');
@@ -222,11 +250,20 @@ test('image upload flows through real Authority S3 storage and the running Clien
     const putMatch = new RegExp(`^/${BUCKET}/([0-9a-f]{32})$`).exec(put.pathname);
     assert.ok(putMatch, `unexpected S3 PUT path ${put.pathname}`);
     const storageKey = putMatch[1]!;
+    assert.equal(descriptorUrl.pathname, `/media/${storageKey}`, 'the public URL carries the same strong random key as the single stored object');
     assert.equal(put.headers['content-type'], PNG_MEDIA_TYPE);
     assert.equal(put.headers['x-amz-acl'], undefined, 'the bucket object is written without a public ACL');
     assert.deepEqual(put.body, TINY_PNG);
     assertSignedS3Authorization(put.headers.authorization);
     assert.equal(requestCount(fixture, 'GET'), 0, 'upload does not read stored bytes');
+
+    const immediatePublic = await fetch(descriptorUrl);
+    assert.equal(immediatePublic.status, 200, 'the uploaded image is public before draft save or publication');
+    assert.equal(immediatePublic.headers.get('content-type'), PNG_MEDIA_TYPE);
+    assert.deepEqual(Buffer.from(await immediatePublic.arrayBuffer()), TINY_PNG);
+    assert.equal(requestCount(fixture, 'GET'), 0, 'the public read does not use the authenticated S3 API');
+    assert.equal(fixture.publicRequests.length, 1);
+    assert.equal(fixture.publicRequests[0]?.headers.authorization, undefined, 'the public read carries no native credential');
 
     const saved = await postJson(new URL(`/api/drafts/${encodeURIComponent(draftId)}`, clientServer.origin), clientToken, {
       accountId,
@@ -234,24 +271,7 @@ test('image upload flows through real Authority S3 storage and the running Clien
     });
     assert.equal(saved.status, 200, saved.text);
     assert.deepEqual(requireRecord(draftFrom(saved.body).fields, 'saved fields').media, [descriptor]);
-
-    const anonymous = await readResponse(await fetch(descriptorUrl));
-    assert.equal(anonymous.status, 401, 'an unpublished image is not anonymously readable');
-    assert.equal(requestCount(fixture, 'GET'), 0, 'a denied private read never reaches object storage or exposes bytes');
-
-    const preview = await postJson(new URL(`/api/drafts/${encodeURIComponent(draftId)}/images/read`, clientServer.origin), clientToken, {
-      accountId,
-      url: descriptor.url
-    });
-    assert.equal(preview.status, 200, preview.text);
-    const previewBody = requireRecord(preview.body, 'preview response');
-    assert.equal(previewBody.mediaType, PNG_MEDIA_TYPE);
-    assert.equal(previewBody.data, TINY_PNG.toString('base64'), 'the owner preview returns the exact uploaded bytes');
-    assert.equal(requestCount(fixture, 'GET'), 1, 'the owner preview performs exactly one S3 GET without retry');
-    const previewGet = fixture.requests.find((request) => request.method === 'GET');
-    assert.ok(previewGet);
-    assert.equal(previewGet.pathname, `/${BUCKET}/${storageKey}`);
-    assertSignedS3Authorization(previewGet.headers.authorization);
+    assert.equal(requestCount(fixture, 'PUT'), 1, 'saving the draft does not copy or re-upload image bytes');
 
     const publication = await postJson(new URL(`/api/drafts/${encodeURIComponent(draftId)}/publish`, clientServer.origin), clientToken, { accountId });
     assert.equal(publication.status, 200, publication.text);
@@ -260,12 +280,12 @@ test('image upload flows through real Authority S3 storage and the running Clien
     assert.equal(actionIsComplete(action), false, 'HTTP acceptance alone is not publication completion');
     const assetReference = action.resultReferences.find((reference) => reference.kind === 'resource');
     assert.ok(assetReference, 'publication retains the signed Asset identity');
-    assert.equal(requestCount(fixture, 'PUT'), 1, 'publication never re-uploads object bytes');
-    const getsAfterPublication = requestCount(fixture, 'GET');
-    assert.equal(getsAfterPublication, 2, 'publication exposes the image through one normal media observation without retry');
-    for (const get of fixture.requests.filter((request) => request.method === 'GET')) {
-      assert.equal(get.pathname, `/${BUCKET}/${storageKey}`);
-      assertSignedS3Authorization(get.headers.authorization);
+    assert.equal(requestCount(fixture, 'PUT'), 1, 'publication never re-uploads or copies object bytes');
+    assert.equal(requestCount(fixture, 'GET'), 0, 'publication never reads private S3 bytes');
+    const publicRequestsAfterPublication = fixture.publicRequests.length;
+    assert.ok(publicRequestsAfterPublication >= 2, 'publication observes the public image through the public base');
+    for (const get of fixture.publicRequests) {
+      assert.equal(get.headers.authorization, undefined, 'public media observation carries no native credential');
     }
 
     const refresh = await postJson(new URL(`/api/activity/${encodeURIComponent(action.id)}/refresh`, clientServer.origin), clientToken, { accountId });
@@ -275,7 +295,7 @@ test('image upload flows through real Authority S3 storage and the running Clien
     assert.equal(refreshed.outcome.status, 'completed');
     assert.ok(refreshed.outcome.evidence.some((evidence) => evidence.source === assetReference.id));
     assert.equal(requestCount(fixture, 'PUT'), 1, 'Action refresh does not resubmit or retry publication');
-    assert.equal(requestCount(fixture, 'GET'), getsAfterPublication, 'Action refresh does not refetch the image');
+    assert.equal(fixture.publicRequests.length, publicRequestsAfterPublication, 'Action refresh does not refetch the image');
 
     const assetResult = await readResponse(await fetch(assetReference.id, { headers: { Accept: 'application/ld+json, application/json' } }));
     assert.equal(assetResult.status, 200, assetResult.text);
@@ -289,31 +309,29 @@ test('image upload flows through real Authority S3 storage and the running Clien
     assert.equal(imageMedia.mediaType, PNG_MEDIA_TYPE);
     assert.equal(media.some((entry) => entry.mediaType === 'text/plain'), false, 'blank text does not add an empty text descriptor');
     assert.equal(new URL(descriptor.url).search, '', 'the public media reference is stable and not an expiring URL');
+    assert.equal(descriptorUrl.pathname, `/media/${storageKey}`, 'the signed Asset retains the exact permanent public URL');
     const key = requireRecord((await readResponse(await fetch(`${authorityOrigin}/keys/${PLAYER}`))).body, 'player key');
     const loader = createLocalDocumentLoader(new Map([[String(key.id), key]]));
     assert.equal((await verifyProofCryptography(asset, loader)).verified, true, 'the published Asset proof is cryptographically signed');
 
     const publicImage = await fetch(descriptorUrl);
-    assert.equal(publicImage.status, 200, 'the published image is publicly readable');
+    assert.equal(publicImage.status, 200, 'the published image remains publicly readable');
     assert.equal(publicImage.headers.get('content-type'), PNG_MEDIA_TYPE);
-    assert.equal(publicImage.headers.get('x-content-type-options'), 'nosniff');
-    assert.match(publicImage.headers.get('cache-control') ?? '', /public/);
     assert.deepEqual(Buffer.from(await publicImage.arrayBuffer()), TINY_PNG, 'the public image returns the exact uploaded bytes');
-    assert.equal(requestCount(fixture, 'GET'), getsAfterPublication + 1, 'the public read performs exactly one additional S3 GET without retry');
+    assert.equal(fixture.publicRequests.length, publicRequestsAfterPublication + 1);
+    assert.equal(requestCount(fixture, 'GET'), 0, 'the public read does not use the authenticated S3 API');
 
     const results: Array<[string, HttpResult]> = [
       ['login', login],
       ['draft', created],
       ['upload', upload],
       ['save', saved],
-      ['anonymous denial', anonymous],
-      ['preview', preview],
       ['publication', publication],
       ['refresh', refresh],
       ['signed Asset', assetResult]
     ];
     for (const [label, result] of results) {
-      for (const secret of [ACCESS_KEY_ID, SECRET_ACCESS_KEY, nativeToken, storageKey]) {
+      for (const secret of [ACCESS_KEY_ID, SECRET_ACCESS_KEY, nativeToken]) {
         assert.equal(result.text.includes(secret), false, `${label} must not expose S3 or native credentials`);
       }
     }

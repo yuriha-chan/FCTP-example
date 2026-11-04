@@ -686,16 +686,15 @@ Published Assets, Varieties, Grants, media, and the Player's public creations co
 
 ### 10.3 Image media
 
-A Repository MAY provide image upload and read support. This convention specifies the media descriptor and permission boundary, not runtime credential mechanics.
+A Repository MAY provide image upload support backed by public object storage. This convention specifies the media descriptor and ownership boundary, not provider-specific credential mechanics.
 
 | Method and path | Required permission | Request | Success |
 |---|---|---|---|
 | `POST /local/repository/authoring/images` | player | `{ mediaType: string, data: string }` | `201 { url: URI, mediaType: ImageMediaType }` |
-| `GET /objects/players/{name}/images/{id}` | player while unpublished; none after publication | None | `200` image bytes |
 
 `ImageMediaType` is `image/png`, `image/jpeg`, `image/gif`, or `image/webp`. Upload data MUST be canonical base64 encoding of nonempty bytes, MUST NOT exceed 10 MiB decoded, and MUST have a signature matching the declared media type. An implementation that limits the JSON request body MUST allow at least 15 MiB for this upload shape. SVG is not an accepted image type.
 
-The returned `{ url, mediaType }` descriptor identifies an uploaded image. Upload alone MUST NOT create or publish an Asset. To publish image media, the Player MUST submit the descriptor in an Asset's `media` array when authoring that Asset. The Repository MUST accept only descriptors retained for that same Player with the exact stored media type, and MUST use retained media metadata in the signed Asset. An unpublished image read MUST require the owning Player permission; a published image read is public. The descriptor is not itself published media. Clients MUST NOT automatically replay an upload after an ambiguous outcome; the convention does not require automatic publication or readback.
+The returned `{ url, mediaType }` descriptor MUST identify the image by a stable public URL containing a strong random key. Object storage MUST serve the image directly without requiring account authorization. Anyone who possesses the URL can retrieve the bytes, including before Asset publication. Upload alone MUST NOT create or publish an Asset. To publish image media, the Player MUST submit the descriptor in an Asset's `media` array when authoring that Asset. The Repository MUST accept only descriptors recorded for that same Player with the exact URL and stored media type and MUST use that retained metadata in the signed Asset. Publication MUST reference the same public image URL without changing its access requirements. Clients MUST NOT automatically replay an upload after an ambiguous outcome; the convention does not require automatic publication or readback.
 
 ## 11. Territory: Policy Endpoints
 

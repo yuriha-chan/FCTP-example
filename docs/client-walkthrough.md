@@ -28,7 +28,7 @@ With a signed-in Player selected, use **Author & Publish** to create a text Asse
 
 Mass may be fractional and positive. Production defaults to `[]` and is descriptive data only; creating a Variety does not install a Territory rule or generate cargo. A same-Player Asset selection creates an AssetGrant linking that Asset to the Variety. Publication returns the exact Asset and Variety identities. Asset text is displayed as text, not interpreted as HTML.
 
-Published objects, the Actor's `creations` collection, Outbox entries, and Asset text media are public resources even though the local authoring catalog is scoped to the authenticated Player. Loading another Player's `Published Player creations` collection adds `Asset text` controls; each attempts the public unauthenticated media GET first, falls back to an Actor-scoped read only on `401` or `403` with a native token, and keeps `404` or other failures visible. See the [Production authoring FAQ](authoring-faq.md).
+Published objects, the Actor's `creations` collection, Outbox entries, Asset text media, and image media URLs are public resources even though the local authoring catalog is scoped to the authenticated Player. Uploaded images are bearer-link media: the browser renders the returned public URL directly and does not request a private byte proxy. Loading another Player's `Published Player creations` collection adds `Asset text` controls; text attempts the public unauthenticated media GET first, falls back to an Actor-scoped read only on `401` or `403` with a native token, and keeps `404` or other failures visible. See the [Production authoring FAQ](authoring-faq.md).
 
 ## Logistics, production, and administration
 

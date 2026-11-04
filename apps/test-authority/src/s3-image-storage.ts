@@ -1,8 +1,9 @@
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { IMAGE_MAX_BYTES, type ImageObjectStorage } from './image-storage.js';
+import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import type { ImageObjectStorage } from './image-storage.js';
 
 export interface S3ImageStorageOptions {
   endpoint: string;
+  publicBaseUrl: string;
   region: string;
   bucket: string;
   accessKeyId: string;
@@ -16,6 +17,7 @@ export function validateS3ImageStorageOptions(options: unknown): S3ImageStorageO
   if (!options || typeof options !== 'object' || Array.isArray(options)) throw new TypeError('Invalid object storage configuration');
   const input = options as Record<string, unknown>;
   const endpoint = validateEndpoint(input.endpoint);
+  const publicBaseUrl = validatePublicBaseUrl(input.publicBaseUrl);
   const region = validateText(input.region, 'Invalid object storage region');
   const bucket = validateText(input.bucket, 'Invalid object storage bucket');
   const accessKeyId = validateText(input.accessKeyId, 'Invalid object storage access key');
@@ -23,6 +25,7 @@ export function validateS3ImageStorageOptions(options: unknown): S3ImageStorageO
   if (input.forcePathStyle !== undefined && typeof input.forcePathStyle !== 'boolean') throw new TypeError('Invalid object storage forcePathStyle');
   return {
     endpoint,
+    publicBaseUrl,
     region,
     bucket,
     accessKeyId,
@@ -41,22 +44,15 @@ export function createS3ImageStorage(options: S3ImageStorageOptions): ImageObjec
     maxAttempts: 1
   });
   return {
+    publicUrl(key): string {
+      return `${validated.publicBaseUrl}/${encodeURIComponent(key)}`;
+    },
     async put(key, bytes, mediaType): Promise<void> {
       const abortSignal = AbortSignal.timeout(OPERATION_TIMEOUT_MS);
       try {
         await client.send(new PutObjectCommand({ Bucket: validated.bucket, Key: key, Body: bytes, ContentType: mediaType }), { abortSignal });
       } catch {
         throw new Error('image storage put failed');
-      }
-    },
-    async get(key): Promise<Uint8Array> {
-      const abortSignal = AbortSignal.timeout(OPERATION_TIMEOUT_MS);
-      try {
-        const output = await client.send(new GetObjectCommand({ Bucket: validated.bucket, Key: key }), { abortSignal });
-        if (!output.Body) throw new Error('missing body');
-        return await readBoundedBody(output.Body);
-      } catch {
-        throw new Error('image storage get failed');
       }
     }
   };
@@ -70,28 +66,15 @@ function validateEndpoint(value: unknown): string {
   return url.origin;
 }
 
+function validatePublicBaseUrl(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0) throw new TypeError('Invalid object storage public base URL');
+  let url: URL;
+  try { url = new URL(value); } catch { throw new TypeError('Invalid object storage public base URL'); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new TypeError('Invalid object storage public base URL');
+  return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
+}
+
 function validateText(value: unknown, message: string): string {
   if (typeof value !== 'string' || value.trim().length === 0) throw new TypeError(message);
   return value;
-}
-
-async function readBoundedBody(body: { transformToWebStream(): ReadableStream<Uint8Array> }): Promise<Uint8Array> {
-  const reader = body.transformToWebStream().getReader();
-  const chunks: Buffer[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > IMAGE_MAX_BYTES) {
-        await reader.cancel();
-        throw new Error('image body exceeds limit');
-      }
-      chunks.push(Buffer.from(value));
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  return Buffer.concat(chunks, total);
 }

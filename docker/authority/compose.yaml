@@ -43,6 +43,8 @@ services:
       RUSTFS_CONSOLE_ADDRESS: ":9001"
       RUSTFS_CONSOLE_ENABLE: "true"
       RUSTFS_OBS_LOGGER_LEVEL: error
+    ports:
+      - "${RUSTFS_BIND_ADDRESS:-127.0.0.1}:${RUSTFS_API_PORT:-4104}:9000"
     volumes:
       - rustfs-data:/data
       - ./secrets/s3-access-key:/run/secrets/s3-access-key:ro

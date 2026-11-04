@@ -26,14 +26,13 @@ import {
   type ImageDescriptor,
   type LibraryResponse
 } from './application-api';
-import { isImageMediaType, useDraftImagePreviews } from './use-draft-image-previews';
 import { ReferencePicker } from './reference-picker';
 import type { ReferencePickerKind, ReferencePickerSelection, ReferencePickerSource } from './reference-picker';
 import type { AuthoringEditKind, AuthoringEditRoute } from './router';
 import { ResourceReader } from './resource-reader';
 import type { ResourceReference } from './resource-reader';
 import { AssetEditor } from './asset-editor';
-import { AssetCard, type AssetCardProps } from './asset-card';
+import { AssetCard } from './asset-card';
 import { VarietyCard } from './variety-card';
 import { HandleLabel } from './handle-label';
 import { ObjectIdentifier } from './object-identifier';
@@ -135,8 +134,19 @@ function draftMedia(draft: AuthoringDraft): LibraryMedia[] | undefined {
     : undefined;
 }
 
+const IMAGE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+function isImageMediaType(value: unknown): value is string {
+  return typeof value === 'string' && IMAGE_MEDIA_TYPES.has(value);
+}
+
 function isImageDescriptor(value: unknown): value is ImageDescriptor {
   return isRecord(value) && typeof value.url === 'string' && value.url.length > 0 && isImageMediaType(value.mediaType);
+}
+
+function draftImageItems(media: unknown): Array<ImageDescriptor & { index: number }> {
+  if (!Array.isArray(media)) return [];
+  return media.flatMap((entry, index) => isImageDescriptor(entry) ? [{ url: entry.url, mediaType: entry.mediaType, index }] : []);
 }
 
 function readFileAsBase64(file: File): Promise<string> {
@@ -460,21 +470,6 @@ function VarietyList(props: {
   );
 }
 
-function DraftAssetCard(props: AssetCardProps & { draft: AuthoringDraft }): ReactElement {
-  const { draft, ...card } = props;
-  const previews = useDraftImagePreviews(draft.accountId, draft.id, draftMedia(draft));
-  const media = draftMedia(draft)?.map((descriptor, index): LibraryMedia => {
-    const preview = previews.find((image) => image.index === index);
-    if (preview === undefined) return descriptor;
-    const fields = { ...descriptor };
-    delete fields.url;
-    return preview.src === undefined
-      ? { ...fields, state: preview.error === undefined ? 'not-retrieved' : 'unavailable' }
-      : { ...fields, url: preview.src };
-  });
-  return <AssetCard {...card} {...(media === undefined ? {} : { media })} />;
-}
-
 function AssetList(props: {
   title: string;
   entries: readonly LibraryEntry[];
@@ -493,13 +488,14 @@ function AssetList(props: {
       <ul className={styles.list}>
         {drafts.map((draft) => {
           const published = merged.published.get(draft.id);
+          const media = draftMedia(draft);
           return (
             <li key={`draft:${draft.id}`}>
-              <DraftAssetCard
-                draft={draft}
+              <AssetCard
                 name={draftTitle(draft, published)}
                 {...(published?.creator === undefined ? {} : { creator: published.creator })}
                 {...(published?.holder === undefined ? {} : { holder: published.holder })}
+                {...(media === undefined ? {} : { media })}
                 status={draftStatus(draft, activeDraftId, activeDirty)}
                 onPress={() => onEditDraft(draft.id)}
               />
@@ -943,8 +939,6 @@ export function Authoring(props: AuthoringProps): ReactElement {
     window.localStorage.setItem(AUTHORING_EDIT_STORAGE_KEY, JSON.stringify(edit));
   }, [edit]);
 
-  const imagePreviews = useDraftImagePreviews(accountId, editor?.kind === 'asset' ? editor.draftId : undefined, fields.media);
-
   const beginImageUpload = (file: File): void => {
     const current = editorRef.current;
     const account = accountId;
@@ -1353,7 +1347,7 @@ export function Authoring(props: AuthoringProps): ReactElement {
           onPublish={publishCurrent}
           onClose={closeEditorPage}
           image={{
-            items: imagePreviews,
+            items: draftImageItems(fields.media),
             uploading: imageUploading,
             ...(imageError === undefined ? {} : { error: imageError }),
             onChoose: beginImageUpload,

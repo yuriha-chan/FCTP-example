@@ -4643,18 +4643,17 @@ test('published and library resource documents are packed for the reader without
 
 const CLIENT_IMAGE_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 
-test('client image deadlines include upload descriptor and preview response bodies', async () => {
+test('client image deadline includes the upload descriptor body', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-client-image-deadline-'));
-  const imageUrl = new URL('/objects/players/sana/images/deadline', firstAccount.homeAuthority).href;
+  const imageUrl = 'https://media.example.test/media/deadline';
   const fetcher: typeof fetch = async (_input, init) => {
-    const upload = init?.method === 'POST';
-    const bytes = upload ? Buffer.from(JSON.stringify({ url: imageUrl, mediaType: 'image/png' })) : CLIENT_IMAGE_PNG;
+    const bytes = Buffer.from(JSON.stringify({ url: imageUrl, mediaType: 'image/png' }));
     return new Response(new ReadableStream({
       start(controller) {
         const timer = setTimeout(() => { controller.enqueue(bytes); controller.close(); }, 200);
         init?.signal?.addEventListener('abort', () => { clearTimeout(timer); controller.error(new Error('aborted')); }, { once: true });
       }
-    }), { headers: { 'Content-Type': upload ? 'application/json' : 'image/png' } });
+    }), { headers: { 'Content-Type': 'application/json' } });
   };
   const opened = await openFixtureApplication(join(directory, 'client.json'), fetcher);
   try {
@@ -4662,7 +4661,6 @@ test('client image deadlines include upload descriptor and preview response bodi
     const service = createAuthoringService(opened.application.state, fetcher, opened.application.observations, opened.application.actions, { timeoutMs: 20 });
     const { draft } = await service.createDraft({ accountId: firstAccount.id, kind: 'asset', fields: { name: 'Image' } });
     await assert.rejects(service.uploadImage(draft.id, { accountId: firstAccount.id, mediaType: 'image/png', data: CLIENT_IMAGE_PNG.toString('base64') }), /image-upload-failed/);
-    await assert.rejects(service.readImage(draft.id, { accountId: firstAccount.id, url: imageUrl }), /image-preview-failed/);
   } finally {
     await opened.client.close();
     await opened.application.close();
@@ -4696,7 +4694,7 @@ test('client image upload requires an account session and an owned asset draft b
   const directory = await mkdtemp(join(tmpdir(), 'fctp-client-image-upload-'));
   const calls: ClientImageCall[] = [];
   const uploadUrl = new URL('/local/repository/authoring/images', firstAccount.homeAuthority).href;
-  const imageUrl = new URL('/objects/players/sana/images/0123456789abcdef', firstAccount.homeAuthority).href;
+  const imageUrl = 'https://media.example.test/media/0123456789abcdef';
   const opened = await openFixtureApplication(join(directory, 'client.json'), recordingClientImageFetch(calls, (url, method) => {
     if (url.href === uploadUrl && method === 'POST') return Response.json({ url: imageUrl, mediaType: 'image/png' }, { status: 201 });
     return new Response('', { status: 404 });
@@ -4769,105 +4767,10 @@ test('client image upload requires an account session and an owned asset draft b
   }
 });
 
-test('client image preview permits only the exact Home Repository image path and validates the private response', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'fctp-client-image-read-'));
-  const calls: ClientImageCall[] = [];
-  const imageUrl = new URL('/objects/players/sana/images/0123456789abcdef', firstAccount.homeAuthority).href;
-  let readResponse = (): Response => new Response(new Uint8Array(CLIENT_IMAGE_PNG), {
-    status: 200, headers: { 'Content-Type': 'image/png', 'X-Content-Type-Options': 'nosniff' }
-  });
-  const opened = await openFixtureApplication(join(directory, 'client.json'), recordingClientImageFetch(calls, (url, method) => {
-    if (url.href === imageUrl && method === 'GET') return readResponse();
-    return new Response('', { status: 404 });
-  }));
-  await opened.application.state.transaction((state) => {
-    state.accounts[firstAccount.id] = firstAccount;
-    state.accounts[secondAccount.id] = secondAccount;
-  });
-  const origin = opened.client.origin;
-  const readPath = (draftId: string) => new URL(`/api/drafts/${encodeURIComponent(draftId)}/images/read`, origin);
-  try {
-    const created = await postJson(new URL('/api/drafts', origin), {
-      accountId: firstAccount.id,
-      kind: 'asset',
-      fields: { name: 'Preview', text: '', media: [{ url: imageUrl, mediaType: 'image/png' }] }
-    });
-    assert.ok([200, 201].includes(created.status), `creating a draft returned ${created.status}`);
-    const draftId = draftFrom(created.body).id as string;
-
-    const unauthenticated = await unauthenticatedFetch(readPath(draftId), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accountId: firstAccount.id, url: imageUrl })
-    });
-    assert.equal(unauthenticated.status, 401);
-    assert.equal(calls.length, 0);
-
-    const secondToken = await ensureClientSession(origin, secondAccount.id);
-    assert.ok(secondToken);
-    const crossAccount = await fetch(readPath(draftId), {
-      method: 'POST', headers: { 'Content-Type': 'application/json', ...authorization(secondToken) }, body: JSON.stringify({ accountId: firstAccount.id, url: imageUrl })
-    });
-    assert.equal(crossAccount.status, 403);
-    assert.equal(calls.length, 0);
-
-    const otherCreated = await postJson(new URL('/api/drafts', origin), { accountId: secondAccount.id, kind: 'asset', fields: { name: 'Other', text: 'Other' } });
-    const otherDraftId = draftFrom(otherCreated.body).id as string;
-    const foreignDraft = await postJson(readPath(otherDraftId), { accountId: firstAccount.id, url: imageUrl });
-    assert.equal(foreignDraft.status, 404);
-    assert.equal(calls.length, 0);
-
-    const varietyCreated = await postJson(new URL('/api/drafts', origin), { accountId: firstAccount.id, kind: 'variety', fields: { name: 'Variety', mass: 1, version: '1' } });
-    const varietyDraftId = draftFrom(varietyCreated.body).id as string;
-    const varietyRead = await postJson(readPath(varietyDraftId), { accountId: firstAccount.id, url: imageUrl });
-    assert.ok(varietyRead.status >= 400 && varietyRead.status < 500);
-    assert.equal(calls.length, 0);
-
-    const foreign = new URL('/objects/players/sana/images/0123456789abcdef', 'https://foreign.test:4200').href;
-    const arbitraryPath = new URL('/actors/sana', firstAccount.homeAuthority).href;
-    const textMediaPath = new URL('/objects/players/sana/media/0123456789abcdef', firstAccount.homeAuthority).href;
-    const queried = new URL(imageUrl);
-    queried.searchParams.set('width', '1');
-    const fragmented = new URL(imageUrl);
-    fragmented.hash = 'fragment';
-    const userinfo = new URL(imageUrl);
-    userinfo.username = 'user';
-    userinfo.password = 'pass';
-    const wrongProtocol = imageUrl.replace(/^https:/, 'http:');
-    const extraSegment = `${imageUrl}/extra`;
-    for (const url of [foreign, arbitraryPath, textMediaPath, queried.href, fragmented.href, userinfo.href, wrongProtocol, extraSegment]) {
-      const before: number = calls.length;
-      const rejected = await postJson(readPath(draftId), { accountId: firstAccount.id, url });
-      assert.ok(rejected.status >= 400 && rejected.status < 500, `previewing ${url} returned ${rejected.status}`);
-      assert.equal(calls.length, before, `previewing ${url} must not be forwarded`);
-    }
-
-    const valid = await postJson(readPath(draftId), { accountId: firstAccount.id, url: imageUrl });
-    assert.equal(valid.status, 200, JSON.stringify(valid.body));
-    const preview = bodyRecord(valid.body);
-    assert.equal(preview.mediaType, 'image/png');
-    assert.equal(preview.data, CLIENT_IMAGE_PNG.toString('base64'));
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]!.url, imageUrl);
-    assert.equal(calls[0]!.method, 'GET');
-    assert.equal(calls[0]!.authorization, `Bearer ${firstAccount.login.status === 'signed-in' ? firstAccount.login.nativeToken : ''}`);
-
-    readResponse = () => new Response(new Uint8Array(CLIENT_IMAGE_PNG), { status: 200, headers: { 'Content-Type': 'text/plain' } });
-    const wrongType = await postJson(readPath(draftId), { accountId: firstAccount.id, url: imageUrl });
-    assert.ok(wrongType.status >= 400, 'a non-image preview response is rejected');
-
-    readResponse = () => new Response(new Uint8Array(10 * 1024 * 1024 + 1), { status: 200, headers: { 'Content-Type': 'image/png' } });
-    const oversized = await postJson(readPath(draftId), { accountId: firstAccount.id, url: imageUrl });
-    assert.ok(oversized.status >= 400, 'a preview response over 10 MiB is rejected');
-  } finally {
-    await opened.client.close();
-    await opened.application.close();
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
 test('client publication forwards only allowed image descriptors and retains text-only publication', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-client-image-publication-'));
   const calls: ClientImageCall[] = [];
-  const imageUrl = new URL('/objects/players/sana/images/0123456789abcdef', firstAccount.homeAuthority).href;
+  const imageUrl = 'https://media.example.test/media/0123456789abcdef';
   const assetsUrl = new URL('/local/repository/authoring/assets', firstAccount.homeAuthority).href;
   const assetId = new URL('/objects/players/sana/assets/published', firstAccount.homeAuthority).href;
   const opened = await openFixtureApplication(join(directory, 'client.json'), recordingClientImageFetch(calls, (url, method, bodyText) => {

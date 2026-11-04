@@ -217,19 +217,11 @@ function draftPath(pathname: string): { draftId: string; publish: boolean } | un
   }
 }
 
-function draftImagePath(pathname: string): { draftId: string; read: boolean } | undefined {
-  const read = /^\/api\/drafts\/([^/]+)\/images\/read$/.exec(pathname);
-  if (read) {
-    try {
-      return { draftId: decodeURIComponent(read[1]!), read: true };
-    } catch {
-      throw new ApiError(404, 'draft-not-found');
-    }
-  }
+function draftImagePath(pathname: string): { draftId: string } | undefined {
   const upload = /^\/api\/drafts\/([^/]+)\/images$/.exec(pathname);
   if (!upload) return undefined;
   try {
-    return { draftId: decodeURIComponent(upload[1]!), read: false };
+    return { draftId: decodeURIComponent(upload[1]!) };
   } catch {
     throw new ApiError(404, 'draft-not-found');
   }
@@ -502,10 +494,6 @@ export async function createClientApplication(options: CreateClientApplicationOp
           const body = await readJsonBody(request, IMAGE_UPLOAD_BODY_MAX_BYTES);
           const accountId = accountScope(url, body, true)!;
           await requireClient(state, request, accountId);
-          if (draftImage.read) {
-            await send(200, await authoring.readImage(draftImage.draftId, { accountId, url: body.url }));
-            return true;
-          }
           await send(201, await authoring.uploadImage(draftImage.draftId, { accountId, mediaType: body.mediaType, data: body.data }));
           return true;
         }

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createServer as createHttpServer } from 'node:http';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -99,33 +100,48 @@ const TINY_WEBP = Buffer.concat([Buffer.from('RIFF'), Buffer.from([0x1a, 0x00, 0
 
 interface ImageObjectStorage {
   put(key: string, bytes: Uint8Array, mediaType: string): Promise<void>;
-  get(key: string): Promise<Uint8Array>;
+  publicUrl(key: string): string;
 }
 
 interface ImageStorageDouble extends ImageObjectStorage {
   readonly objects: Map<string, { bytes: Uint8Array; mediaType: string }>;
   readonly puts: Array<{ key: string; bytes: Uint8Array; mediaType: string }>;
-  readonly gets: string[];
+  publicBase: string;
   failNextPut?: string | undefined;
 }
 
-function imageStorageDouble(): ImageStorageDouble {
+function imageStorageDouble(publicBase = 'https://media.example.test/media/prefix'): ImageStorageDouble {
   const objects = new Map<string, { bytes: Uint8Array; mediaType: string }>();
   const puts: Array<{ key: string; bytes: Uint8Array; mediaType: string }> = [];
-  const gets: string[] = [];
   return {
-    objects, puts, gets,
+    objects, puts, publicBase,
+    publicUrl(key) { return `${this.publicBase}/${encodeURIComponent(key)}`; },
     async put(key, bytes, mediaType) {
       puts.push({ key, bytes: Uint8Array.from(bytes), mediaType });
       if (this.failNextPut !== undefined) { const message = this.failNextPut; this.failNextPut = undefined; throw new Error(message); }
       objects.set(key, { bytes: Uint8Array.from(bytes), mediaType });
     },
-    async get(key) {
-      gets.push(key);
-      const stored = objects.get(key);
-      if (!stored) throw new Error('image-not-found');
-      return Uint8Array.from(stored.bytes);
+  };
+}
+
+async function startPublicMedia(storage: ImageStorageDouble): Promise<{ base: string; close(): Promise<void> }> {
+  const server = createHttpServer((request, response) => {
+    const match = /^\/media\/prefix\/([0-9a-f]{32})$/.exec(new URL(request.url ?? '/', 'http://localhost').pathname);
+    const stored = match === null ? undefined : storage.objects.get(match[1]!);
+    if (request.method !== 'GET' || stored === undefined) {
+      response.writeHead(404, { 'Content-Type': 'text/plain' });
+      response.end('not found');
+      return;
     }
+    response.writeHead(200, { 'Content-Type': stored.mediaType, 'Content-Length': String(stored.bytes.byteLength) });
+    response.end(Buffer.from(stored.bytes));
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  return {
+    base: `http://127.0.0.1:${address.port}/media/prefix`,
+    close: async () => { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
   };
 }
 
@@ -158,10 +174,12 @@ function publishAsset(origin: string, token: string, body: Record<string, unknow
 async function bytesOf(response: Response): Promise<Buffer> { return Buffer.from(await response.arrayBuffer()); }
 function mediaTypeOf(response: Response): string | null { return response.headers.get('content-type')?.split(';')[0]?.trim() ?? null; }
 
-test('Player uploads an image to private object storage and publishes it as a signed public Asset', async () => {
+test('Player uploads an image once to public object storage and immediately exposes it by a stable URL', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-authoring-images-'));
   const port = await availablePort();
   const storage = imageStorageDouble();
+  const publicMedia = await startPublicMedia(storage);
+  storage.publicBase = publicMedia.base;
   const { app, origin, tokens, auth } = await startAuthoring(directory, port, storage);
   try {
     const unauthenticated = await fetch(`${origin}/local/repository/authoring/images`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mediaType: 'image/png', data: TINY_PNG.toString('base64') }) });
@@ -172,24 +190,18 @@ test('Player uploads an image to private object storage and publishes it as a si
     assert.equal(upload.status, 201);
     const descriptor = await upload.json() as { url: string; mediaType: string };
     assert.equal(descriptor.mediaType, 'image/png');
-    assert.ok(descriptor.url.startsWith(`${origin}/objects/players/p2/images/`));
+    assert.ok(descriptor.url.startsWith(`${storage.publicBase}/`));
+    assert.equal(descriptor.url.startsWith(`${origin}/`), false, 'the media URL must not be inferred from the Authority API origin');
+    assert.match(new URL(descriptor.url).pathname, /\/[0-9a-f]{32}$/);
     assert.equal(storage.puts.length, 1);
     assert.equal(storage.puts[0]!.mediaType, 'image/png');
     assert.deepEqual(Buffer.from(storage.puts[0]!.bytes), TINY_PNG);
-    assert.ok(storage.puts[0]!.key.length > 0);
+    assert.equal(descriptor.url, storage.publicUrl(storage.puts[0]!.key));
 
-    const anonymous = await fetch(descriptor.url);
-    assert.notEqual(anonymous.status, 200);
-    assert.notDeepEqual(await bytesOf(anonymous), TINY_PNG);
-    const foreign = await fetch(descriptor.url, { headers: auth('p3') });
-    assert.notEqual(foreign.status, 200);
-    assert.notDeepEqual(await bytesOf(foreign), TINY_PNG);
-    const preview = await fetch(descriptor.url, { headers: auth('p2') });
-    assert.equal(preview.status, 200);
-    assert.equal(mediaTypeOf(preview), 'image/png');
-    assert.equal(preview.headers.get('x-content-type-options'), 'nosniff');
-    assert.deepEqual(await bytesOf(preview), TINY_PNG);
-    assert.ok(storage.gets.length > 0);
+    const publicRead = await fetch(descriptor.url);
+    assert.equal(publicRead.status, 200);
+    assert.equal(mediaTypeOf(publicRead), 'image/png');
+    assert.deepEqual(await bytesOf(publicRead), TINY_PNG);
 
     const publication = await publishAsset(origin, tokens.get('p2')!, { name: 'Picture', text: '', media: [descriptor] });
     assert.equal(publication.status, 201);
@@ -203,21 +215,19 @@ test('Player uploads an image to private object storage and publishes it as a si
     const loader = createLocalDocumentLoader(new Map([[String(key.id), key]]));
     assert.equal((await verifyProofCryptography(asset as unknown as Record<string, unknown>, loader)).verified, true);
 
-    const publicRead = await fetch(descriptor.url);
-    assert.equal(publicRead.status, 200);
-    assert.equal(mediaTypeOf(publicRead), 'image/png');
-    assert.equal(publicRead.headers.get('x-content-type-options'), 'nosniff');
-    assert.deepEqual(await bytesOf(publicRead), TINY_PNG);
     const catalog = await fetch(`${origin}/local/repository/authoring`, { headers: auth('p2') }).then((response) => response.json()) as { assets: unknown[] };
     assert.equal(catalog.assets.length, 1);
-  } finally { await app.authority.close(); await rm(directory, { recursive: true, force: true }); }
+    assert.equal(storage.puts.length, 1, 'publication does not copy or re-upload image bytes');
+  } finally { await publicMedia.close(); await app.authority.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
 test('Repository accepts supported image types with matching signatures', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fctp-authoring-formats-'));
   const port = await availablePort();
   const storage = imageStorageDouble();
-  const { app, origin, tokens, auth } = await startAuthoring(directory, port, storage);
+  const publicMedia = await startPublicMedia(storage);
+  storage.publicBase = publicMedia.base;
+  const { app, origin, tokens } = await startAuthoring(directory, port, storage);
   try {
     const formats: Array<[string, Buffer]> = [['image/png', TINY_PNG], ['image/gif', TINY_GIF], ['image/jpeg', TINY_JPEG], ['image/webp', TINY_WEBP]];
     for (const [mediaType, bytes] of formats) {
@@ -225,12 +235,12 @@ test('Repository accepts supported image types with matching signatures', async 
       assert.equal(upload.status, 201, mediaType);
       const descriptor = await upload.json() as { url: string; mediaType: string };
       assert.equal(descriptor.mediaType, mediaType);
-      const preview = await fetch(descriptor.url, { headers: auth('p2') });
-      assert.equal(preview.status, 200);
-      assert.equal(mediaTypeOf(preview), mediaType);
-      assert.deepEqual(await bytesOf(preview), bytes);
+      const publicRead = await fetch(descriptor.url);
+      assert.equal(publicRead.status, 200);
+      assert.equal(mediaTypeOf(publicRead), mediaType);
+      assert.deepEqual(await bytesOf(publicRead), bytes);
     }
-  } finally { await app.authority.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { await publicMedia.close(); await app.authority.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
 test('Repository rejects malformed, signature-mismatched, and oversized image uploads before storage', async () => {
@@ -267,6 +277,8 @@ test('Repository refuses foreign, arbitrary, and type-substituted image referenc
   const directory = await mkdtemp(join(tmpdir(), 'fctp-authoring-references-'));
   const port = await availablePort();
   const storage = imageStorageDouble();
+  const publicMedia = await startPublicMedia(storage);
+  storage.publicBase = publicMedia.base;
   const { app, origin, tokens, auth } = await startAuthoring(directory, port, storage);
   try {
     const upload = await uploadImage(origin, tokens.get('p2')!, 'image/png', TINY_PNG);
@@ -275,15 +287,15 @@ test('Repository refuses foreign, arbitrary, and type-substituted image referenc
 
     const foreign = await publishAsset(origin, tokens.get('p3')!, { name: 'Foreign', text: '', media: [descriptor] });
     assert.ok([400, 403].includes(foreign.status));
-    const arbitrary = await publishAsset(origin, tokens.get('p2')!, { name: 'Arbitrary', text: '', media: [{ url: `${origin}/objects/players/p2/images/${'0'.repeat(32)}`, mediaType: 'image/png' }] });
+    const arbitrary = await publishAsset(origin, tokens.get('p2')!, { name: 'Arbitrary', text: '', media: [{ url: `${storage.publicBase}/${'0'.repeat(32)}`, mediaType: 'image/png' }] });
     assert.ok([400, 403].includes(arbitrary.status));
     const substituted = await publishAsset(origin, tokens.get('p2')!, { name: 'Substituted', text: '', media: [{ url: descriptor.url, mediaType: 'image/gif' }] });
     assert.ok([400, 403].includes(substituted.status));
 
     const catalog = await fetch(`${origin}/local/repository/authoring`, { headers: auth('p2') }).then((response) => response.json()) as { assets: unknown[] };
     assert.equal(catalog.assets.length, 0);
-    assert.notEqual((await fetch(descriptor.url)).status, 200);
-  } finally { await app.authority.close(); await rm(directory, { recursive: true, force: true }); }
+    assert.equal((await fetch(descriptor.url)).status, 200, 'an uploaded public image remains readable without publication');
+  } finally { await publicMedia.close(); await app.authority.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
 test('Repository reports bounded storage failures without publishing', async () => {
@@ -307,23 +319,25 @@ test('Uploaded image metadata and bytes survive restart and can be published aft
   const directory = await mkdtemp(join(tmpdir(), 'fctp-authoring-image-restart-'));
   const port = await availablePort();
   const storage = imageStorageDouble();
+  const publicMedia = await startPublicMedia(storage);
+  storage.publicBase = publicMedia.base;
   let session = await startAuthoring(directory, port, storage);
   try {
     const upload = await uploadImage(session.origin, session.tokens.get('p2')!, 'image/png', TINY_PNG);
     assert.equal(upload.status, 201);
     const descriptor = await upload.json() as { url: string; mediaType: string };
-    assert.equal((await fetch(descriptor.url, { headers: session.auth('p2') })).headers.get('content-type'), 'image/png');
+    assert.equal((await fetch(descriptor.url)).headers.get('content-type'), 'image/png');
     await session.app.authority.close();
     session = await startAuthoring(directory, port, storage, session.tokens);
-    const preview = await fetch(descriptor.url, { headers: session.auth('p2') });
-    assert.equal(preview.status, 200);
-    assert.deepEqual(await bytesOf(preview), TINY_PNG);
-    const publication = await publishAsset(session.origin, session.tokens.get('p2')!, { name: 'Restarted', text: '', media: [descriptor] });
-    assert.equal(publication.status, 201);
     const publicRead = await fetch(descriptor.url);
     assert.equal(publicRead.status, 200);
     assert.deepEqual(await bytesOf(publicRead), TINY_PNG);
-  } finally { await session.app.authority.close(); await rm(directory, { recursive: true, force: true }); }
+    const publication = await publishAsset(session.origin, session.tokens.get('p2')!, { name: 'Restarted', text: '', media: [descriptor] });
+    assert.equal(publication.status, 201);
+    const afterPublication = await fetch(descriptor.url);
+    assert.equal(afterPublication.status, 200);
+    assert.deepEqual(await bytesOf(afterPublication), TINY_PNG);
+  } finally { await publicMedia.close(); await session.app.authority.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
 test('Text authoring remains available and image upload is explicitly unavailable without object storage', async () => {

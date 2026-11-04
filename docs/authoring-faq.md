@@ -60,7 +60,7 @@ No. Publishing records the signed Variety and its descriptive Production. It doe
 
 ## Who can read published creations, and who can edit them?
 
-The authenticated Player's authoring catalog is private to that Player, but published Assets, Varieties, AssetGrants, Player Outbox entries, the public `creations` collection, and Asset text media are public resources. Public text is served as inert text, not interpreted as HTML. Catalog privacy does not make published resources private.
+The authenticated Player's authoring catalog is private to that Player, but published Assets, Varieties, AssetGrants, Player Outbox entries, the public `creations` collection, Asset text media, and image media URLs are public resources. Uploaded image URLs are public bearer links immediately: anyone with the URL can read the image before or after publication, so do not treat the URL as a secret. Upload does not itself publish an Asset; publication verifies the owned image metadata and signs the exact public URL. Public text is served as inert text, not interpreted as HTML. Catalog privacy does not make published resources private.
 
 In this local experimental authoring API, a Player can create and link only Assets that the same Player authored and holds. An Asset selection creates an AssetGrant linking that Asset to the new Variety for the Player. The API does not provide an edit/update workflow for these authored objects. Grants describe permission; they do not install Production or authorize a Territory to execute it. Local authoring publication archives signed Create activities but does not enqueue remote delivery.
 

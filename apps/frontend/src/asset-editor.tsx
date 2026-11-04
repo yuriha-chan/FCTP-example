@@ -1,12 +1,12 @@
-import type { ReactElement } from 'react';
+import { useState, type ReactElement } from 'react';
 import { Button } from 'react-aria-components';
 import cssStyles from './authoring.module.css';
-import type { DraftImagePreview } from './use-draft-image-previews';
+import type { ImageDescriptor } from './application-api';
 
 const styles = cssStyles as Record<'editor' | 'subheading' | 'field' | 'label' | 'input' | 'meta' | 'error' | 'controls' | 'button' | 'preview', string>;
 
 export interface AssetImageState {
-  items: readonly DraftImagePreview[];
+  items: readonly (ImageDescriptor & { index: number })[];
   uploading: boolean;
   error?: string;
   onChoose: (file: File) => void;
@@ -34,6 +34,13 @@ function textValue(value: unknown): string {
   if (value === undefined || value === null) return '';
   if (typeof value === 'string') return value;
   return String(value);
+}
+
+function AssetImagePreview({ url, number }: { url: string; number: number }): ReactElement {
+  const [failed, setFailed] = useState(false);
+  return failed
+    ? <p className={styles.error}>{`Image ${number} unavailable`}</p>
+    : <img className={styles.preview} src={url} alt={`Asset image ${number} preview`} onError={() => setFailed(true)} />;
 }
 
 export function AssetEditor(props: AssetEditorProps): ReactElement {
@@ -77,10 +84,7 @@ export function AssetEditor(props: AssetEditorProps): ReactElement {
           {image.error === undefined ? null : <p className={styles.error} role="alert">{image.error}</p>}
           {image.items.map((item, index) => (
             <div key={`${item.url}:${item.index}`}>
-              {item.src === undefined ? <p className={styles.meta}>Image preview unavailable</p> : (
-                <img className={styles.preview} src={item.src} alt={`Asset image ${index + 1} preview`} />
-              )}
-              {item.error === undefined ? null : <p className={styles.error} role="alert">{item.error}</p>}
+              <AssetImagePreview url={item.url} number={index + 1} />
               <div className={styles.controls}>
                 <Button className={styles.button} onPress={() => image.onRemove(item.index)}>{`Remove image ${index + 1}`}</Button>
               </div>

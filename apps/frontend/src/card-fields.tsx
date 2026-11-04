@@ -1,4 +1,4 @@
-import { Fragment } from 'react';
+import { Fragment, useState } from 'react';
 import type { ReactElement } from 'react';
 import type { LibraryMedia } from '@fctp/client-sdk';
 import { HandleLabel } from './handle-label';
@@ -32,10 +32,17 @@ export function CardIdentities(props: {
   );
 }
 
+function CardImage({ url, title }: { url: string; title: string }): ReactElement {
+  const [failed, setFailed] = useState(false);
+  return failed
+    ? <span className={styles.state}>Media unavailable</span>
+    : <img className={styles.image} src={url} alt={`${title} media`} loading="lazy" onError={() => setFailed(true)} />;
+}
+
 function mediaContent(media: LibraryMedia, title: string): ReactElement {
   const mediaType = typeof media.mediaType === 'string' ? media.mediaType : undefined;
   if (mediaType?.startsWith('image/') === true && typeof media.url === 'string') {
-    return <img className={styles.image} src={media.url} alt={`${title} media`} loading="lazy" />;
+    return <CardImage url={media.url} title={title} />;
   }
   if (media.state === 'not-retrieved') return <span className={styles.state}>Media not retrieved</span>;
   if (media.state === 'unavailable') return <span className={styles.state}>Media unavailable</span>;

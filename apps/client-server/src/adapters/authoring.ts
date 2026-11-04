@@ -19,7 +19,7 @@ export function imageUploadEndpoint(account: AccountRecord): string {
   return new URL('/local/repository/authoring/images', authoringOrigin(account)).href;
 }
 
-export function guardedImageUrl(value: unknown, origin: string): string | undefined {
+export function guardedPublicMediaUrl(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   let url: URL;
   try {
@@ -28,10 +28,10 @@ export function guardedImageUrl(value: unknown, origin: string): string | undefi
     if (error instanceof TypeError) return undefined;
     throw error;
   }
+  if (!['http:', 'https:'].includes(url.protocol)) return undefined;
   if (url.username !== '' || url.password !== '') return undefined;
   if (url.search !== '' || url.hash !== '') return undefined;
-  if (url.origin !== origin) return undefined;
-  if (!/^\/objects\/players\/[^/]+\/images\/[^/]+$/.test(url.pathname)) return undefined;
+  if (url.pathname === '' || url.pathname === '/') return undefined;
   return url.href;
 }
 

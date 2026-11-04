@@ -148,6 +148,13 @@ async function openFixture(t: TestContext): Promise<OpenedFixture> {
     }
     await route.fulfill({ status: 200, contentType: 'text/html', body: html });
   });
+  await page.route('https://media.invalid/**/*.png', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'image/png',
+      body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP4z8DwHwAFAAH/VscvDQAAAABJRU5ErkJggg==', 'base64')
+    });
+  });
 
   await page.goto(fixtureOrigin);
   await page.waitForFunction(() => {

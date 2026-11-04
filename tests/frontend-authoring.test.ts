@@ -6,6 +6,7 @@ import { chromium, type Browser, type Locator, type Page } from 'playwright';
 
 const projectRoot = fileURLToPath(new URL('..', import.meta.url));
 const fixtureOrigin = 'http://fixture.invalid/';
+const mediaOrigin = 'http://media.invalid/';
 const settleTimeout = 3_000;
 const accountA = 'account-a';
 const accountB = 'account-b';
@@ -37,8 +38,8 @@ const publicationDraftId = 'draft:1e7a3c90';
 const secondDraftId = 'draft:6c0b5d42';
 const accountBDraftId = 'draft:2f8e4a13';
 const mismatchDraftId = 'draft:0a1b2c3d';
-const imageUrl = 'http://fixture.invalid/objects/players/alpha/images/7f3a1c';
-const secondImageUrl = 'http://fixture.invalid/objects/players/alpha/images/9c2b4d';
+const imageUrl = 'http://media.invalid/media/7f3a1c';
+const secondImageUrl = 'http://media.invalid/media/9c2b4d';
 const tinyPngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP4z8DwHwAFAAH/VscvDQAAAABJRU5ErkJggg==';
 const secondPngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNgYPj/HwADAgH/OSkZvgAAAABJRU5ErkJggg==';
 
@@ -121,6 +122,7 @@ interface OpenedFixture {
   page: Page;
   requests: RequestInfo[];
   errors: string[];
+  mediaResponses: Array<{ url: string; status: number }>;
 }
 
 interface Deferred<T> {
@@ -293,7 +295,7 @@ after(async () => {
   await browser?.close();
 });
 
-async function openFixture(t: TestContext, handler: Handler, options: { accountId?: string | null; callbacks?: boolean } = {}): Promise<OpenedFixture> {
+async function openFixture(t: TestContext, handler: Handler, options: { accountId?: string | null; callbacks?: boolean; mediaFailures?: ReadonlyArray<{ url: string; status: number }> } = {}): Promise<OpenedFixture> {
   const activeBrowser = browser;
   const activeBundle = bundle;
   assert(activeBrowser, 'browser was not started');
@@ -312,6 +314,7 @@ async function openFixture(t: TestContext, handler: Handler, options: { accountI
   page.setDefaultTimeout(settleTimeout);
   const requests: RequestInfo[] = [];
   const errors: string[] = [];
+  const mediaResponses: Array<{ url: string; status: number }> = [];
   page.on('pageerror', (error) => { errors.push(error.message); });
 
   await page.route(`${fixtureOrigin}**`, async (route) => {
@@ -360,6 +363,19 @@ async function openFixture(t: TestContext, handler: Handler, options: { accountI
     });
   });
 
+  await page.route(`${mediaOrigin}**`, async (route) => {
+    const url = new URL(route.request().url());
+    const failure = options.mediaFailures?.find((entry) => entry.url === url.href);
+    if (failure !== undefined) {
+      mediaResponses.push({ url: url.href, status: failure.status });
+      await route.fulfill({ status: failure.status, contentType: 'text/plain', body: 'media unavailable' });
+      return;
+    }
+    mediaResponses.push({ url: url.href, status: 200 });
+    const data = url.pathname.includes('9c2b4d') ? secondPngBase64 : tinyPngBase64;
+    await route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from(data, 'base64') });
+  });
+
   const params = new URLSearchParams();
   params.set('account', options.accountId === null ? 'none' : options.accountId ?? accountA);
   if (options.callbacks === false) params.set('callbacks', '0');
@@ -368,7 +384,7 @@ async function openFixture(t: TestContext, handler: Handler, options: { accountI
     const fixture = (window as unknown as { __authoringFixture?: { controls?: unknown } }).__authoringFixture;
     return Boolean(fixture && fixture.controls);
   });
-  return { page, requests, errors };
+  return { page, requests, errors, mediaResponses };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -464,10 +480,6 @@ function requestsFor(requests: readonly RequestInfo[], pathname: string, method?
 
 function imageUploadRequests(requests: readonly RequestInfo[], draftId: string): RequestInfo[] {
   return requestsFor(requests, `/api/drafts/${encodeURIComponent(draftId)}/images`, 'POST');
-}
-
-function imageReadRequests(requests: readonly RequestInfo[], draftId: string): RequestInfo[] {
-  return requestsFor(requests, `/api/drafts/${encodeURIComponent(draftId)}/images/read`, 'POST');
 }
 
 function imageChooser(editor: Locator): Locator {
@@ -1936,7 +1948,7 @@ test('renders a retained Library Variety card with title, identities, mass, vers
   assert.deepEqual(errors, []);
 });
 
-test('uploads a PNG alongside concurrent name and text edits and previews it through the authenticated read path', async (t) => {
+test('uploads a PNG alongside concurrent name and text edits and renders its public URL directly', async (t) => {
   const pendingUpload = deferred<ServerResponse>();
   const initialFields = { name: 'Rope', text: 'Draft text' };
   let stored = makeDraft({ id: assetDraftId, kind: 'asset', fields: initialFields, savedAt: observedAt });
@@ -1949,9 +1961,6 @@ test('uploads a PNG alongside concurrent name and text edits and previews it thr
     }
     if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images` && request.method === 'POST') {
       return pendingUpload.promise;
-    }
-    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read` && request.method === 'POST') {
-      return { body: { mediaType: 'image/png', data: tinyPngBase64 } };
     }
     if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'POST') {
       stored = makeDraft({ id: assetDraftId, kind: 'asset', fields: requestFields(request), savedAt: laterAt });
@@ -1978,11 +1987,9 @@ test('uploads a PNG alongside concurrent name and text edits and previews it thr
   assert.equal(await button(editor, /^Publish draft$/i).isDisabled(), true, 'an incomplete pending upload must not publish');
 
   pendingUpload.resolve({ status: 201, body: { url: imageUrl, mediaType: 'image/png' } });
-  await waitFor(() => imageReadRequests(requests, assetDraftId).length === 1, 'expected the authenticated preview read');
-  const read = imageReadRequests(requests, assetDraftId)[0]!;
-  assert.deepEqual(read.body, { accountId: accountA, url: imageUrl });
-  assert.equal(read.headers.authorization, 'Bearer token-a');
+  await waitFor(async () => (await editor.locator('img').first().getAttribute('src')) === imageUrl, 'expected the direct public image URL');
   await waitForLoadedPreview(editor);
+  assert.equal(requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read`, 'POST').length, 0, 'direct media must not use the removed private preview route');
 
   assert.equal(await editor.getByLabel(/^Name$/i).inputValue(), 'Concurrent Rope', 'upload completion must retain concurrent name edits');
   assert.equal(await editor.getByLabel(/^Text$/i).inputValue(), 'Concurrent text', 'upload completion must retain concurrent text edits');
@@ -1996,7 +2003,7 @@ test('uploads a PNG alongside concurrent name and text edits and previews it thr
   assert.deepEqual(errors, []);
 });
 
-test('saves and reopens an image descriptor then obtains an authenticated preview and can remove the image', async (t) => {
+test('saves and reopens an image descriptor, renders its public URL directly, and can remove the image', async (t) => {
   const descriptor = { url: imageUrl, mediaType: 'image/png' };
   let stored = makeDraft({
     id: assetDraftId,
@@ -2011,9 +2018,6 @@ test('saves and reopens an image descriptor then obtains an authenticated previe
     if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'GET') {
       return { body: { draft: stored } };
     }
-    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read` && request.method === 'POST') {
-      return { body: { mediaType: 'image/png', data: tinyPngBase64 } };
-    }
     if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'POST') {
       stored = makeDraft({ id: assetDraftId, kind: 'asset', fields: requestFields(request), savedAt: laterAt });
       return { body: { draft: stored } };
@@ -2025,10 +2029,7 @@ test('saves and reopens an image descriptor then obtains an authenticated previe
   await waitForText(region, 'Rope', 'expected the retained image draft');
   await draftCard(page, 'Rope').click();
   const editor = await editorRegion(page, 'Asset');
-  await waitFor(() => imageReadRequests(requests, assetDraftId).length >= 1, 'expected the retained descriptor preview read');
-  const firstRead = imageReadRequests(requests, assetDraftId)[0]!;
-  assert.deepEqual(firstRead.body, { accountId: accountA, url: imageUrl });
-  assert.equal(firstRead.headers.authorization, 'Bearer token-a');
+  assert.equal(await editor.locator('img').first().getAttribute('src'), imageUrl, 'the saved descriptor renders its direct public URL');
   await waitForLoadedPreview(editor);
 
   await button(editor, /^Save draft$/i).click();
@@ -2042,10 +2043,7 @@ test('saves and reopens an image descriptor then obtains an authenticated previe
   await button(editor, /^Close editor$/i).click();
   await draftCard(page, 'Rope').click();
   const reopened = await editorRegion(page, 'Asset');
-  await waitFor(() => imageReadRequests(requests, assetDraftId).length >= 2, 'expected a fresh authenticated preview after reopen');
-  const reopenRead = imageReadRequests(requests, assetDraftId).at(-1)!;
-  assert.deepEqual(reopenRead.body, { accountId: accountA, url: imageUrl });
-  assert.equal(reopenRead.headers.authorization, 'Bearer token-a');
+  assert.equal(await reopened.locator('img').first().getAttribute('src'), imageUrl, 'reopening renders the same direct public URL');
   await waitForLoadedPreview(reopened);
 
   await button(reopened, /remove.*image|image.*remove/i).click();
@@ -2058,12 +2056,13 @@ test('saves and reopens an image descriptor then obtains an authenticated previe
     'removing the image must remove its descriptor'
   );
 
+  assert.equal(requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read`, 'POST').length, 0, 'no private preview route is used');
   const localKeys = await page.evaluate(() => Object.keys(localStorage).sort());
-  assert.deepEqual(localKeys, ['fctp.client-sessions'], 'preview data must remain transient');
+  assert.deepEqual(localKeys, ['fctp.client-sessions'], 'media rendering must remain transient');
   const sessionKeys = await page.evaluate(() => Object.keys(sessionStorage));
-  assert.deepEqual(sessionKeys, [], 'the preview must not add session storage');
+  assert.deepEqual(sessionKeys, [], 'the public image URL must not add session storage');
   const storageText = await page.evaluate(() => JSON.stringify(localStorage));
-  assert.equal(storageText.includes(tinyPngBase64), false, 'the preview must not persist image bytes in browser storage');
+  assert.equal(storageText.includes(tinyPngBase64), false, 'the browser must not persist image bytes in storage');
   assert.deepEqual(errors, []);
 });
 
@@ -2082,9 +2081,6 @@ test('publishes an image draft through the existing publication flow', async (t)
     }
     if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'GET') {
       return { body: { draft: stored } };
-    }
-    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read` && request.method === 'POST') {
-      return { body: { mediaType: 'image/png', data: tinyPngBase64 } };
     }
     if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/publish` && request.method === 'POST') {
       publishCalls += 1;
@@ -2110,7 +2106,7 @@ test('publishes an image draft through the existing publication flow', async (t)
   await waitForText(region, 'Rope', 'expected the retained image draft');
   await draftCard(page, 'Rope').click();
   const editor = await editorRegion(page, 'Asset');
-  await waitFor(() => imageReadRequests(requests, assetDraftId).length >= 1, 'expected the retained image preview');
+  assert.equal(await editor.locator('img').first().getAttribute('src'), imageUrl, 'the clean saved draft renders its direct public URL');
   await waitForLoadedPreview(editor);
 
   const publish = button(editor, /^Publish draft$/i);
@@ -2192,9 +2188,6 @@ test('does not apply a late upload from a previous draft to the currently open d
     if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images` && request.method === 'POST') {
       return pendingUpload.promise;
     }
-    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read` && request.method === 'POST') {
-      return { body: { mediaType: 'image/png', data: tinyPngBase64 } };
-    }
     if (request.pathname === `/api/drafts/${encodeURIComponent(secondDraftId)}` && request.method === 'POST') {
       second = makeDraft({ id: secondDraftId, kind: 'asset', fields: requestFields(request), savedAt: freshAt });
       return { body: { draft: second } };
@@ -2218,8 +2211,7 @@ test('does not apply a late upload from a previous draft to the currently open d
   await sleep(250);
   assert.equal(await secondEditor.getByLabel(/^Name$/i).inputValue(), 'Second', 'a late upload must not replace the open draft name');
   assert.equal(await secondEditor.getByLabel(/^Text$/i).inputValue(), 'second text', 'a late upload must not replace the open draft text');
-  assert.equal(await secondEditor.locator('img').count(), 0, 'a late upload must not preview in another draft');
-  assert.equal(imageReadRequests(requests, assetDraftId).length, 0, 'a late upload must not request a preview for the previous draft');
+  assert.equal(await secondEditor.locator('img').count(), 0, 'a late upload must not render in another draft');
   assert.equal(await secondEditor.getByRole('alert').count(), 0, 'a late upload must not report an error in another draft');
 
   await button(secondEditor, /^Save draft$/i).click();
@@ -2248,9 +2240,6 @@ test('does not apply a late upload after switching accounts', async (t) => {
     if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images` && request.method === 'POST') {
       return pendingUpload.promise;
     }
-    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read` && request.method === 'POST') {
-      return { body: { mediaType: 'image/png', data: tinyPngBase64 } };
-    }
     if (request.pathname === `/api/drafts/${encodeURIComponent(accountBDraftId)}` && request.method === 'POST') {
       storedB = makeDraft({ id: accountBDraftId, accountId: accountB, kind: 'asset', fields: requestFields(request), savedAt: freshAt });
       return { body: { draft: storedB } };
@@ -2276,8 +2265,7 @@ test('does not apply a late upload after switching accounts', async (t) => {
   await sleep(250);
   assert.equal(await secondEditor.getByLabel(/^Name$/i).inputValue(), 'Account B image', 'a late upload must not replace the open account draft name');
   assert.equal(await secondEditor.getByLabel(/^Text$/i).inputValue(), 'b-only', 'a late upload must not replace the open account draft text');
-  assert.equal(await secondEditor.locator('img').count(), 0, 'a late old-account upload must not preview in the current account');
-  assert.equal(imageReadRequests(requests, assetDraftId).length, 0, 'a late old-account upload must not request a preview');
+  assert.equal(await secondEditor.locator('img').count(), 0, 'a late old-account upload must not render in the current account');
   assert.equal(await secondEditor.getByRole('alert').count(), 0, 'a late old-account upload must not report an error in the current account');
 
   await button(secondEditor, /^Save draft$/i).click();
@@ -2302,10 +2290,6 @@ test('does not let an older upload completion replace or unlock a newer pending 
       uploadCount += 1;
       return uploadCount === 1 ? firstUpload.promise : secondUpload.promise;
     }
-    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read` && request.method === 'POST') {
-      const url = asRecord(request.body).url;
-      return { body: { mediaType: 'image/png', data: url === secondImageUrl ? secondPngBase64 : tinyPngBase64 } };
-    }
     if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'POST') {
       stored = makeDraft({ id: assetDraftId, kind: 'asset', fields: requestFields(request), savedAt: laterAt });
       return { body: { draft: stored } };
@@ -2329,15 +2313,11 @@ test('does not let an older upload completion replace or unlock a newer pending 
   firstUpload.resolve({ status: 201, body: { url: imageUrl, mediaType: 'image/png' } });
   await sleep(250);
   assert.equal(await button(editor, /^Publish draft$/i).isDisabled(), true, 'an older completion must not unlock the newer pending upload');
-  assert.equal(imageReadRequests(requests, assetDraftId).length, 0, 'an older completion must not request a preview for a superseded selection');
-  assert.equal(await editor.locator('img').count(), 0, 'an older completion must not preview a superseded selection');
+  assert.equal(await editor.locator('img').count(), 0, 'an older completion must not render a superseded selection');
   assert.equal(await editor.getByRole('alert').count(), 0, 'an older completion must not report an error for a superseded selection');
 
   secondUpload.resolve({ status: 201, body: { url: secondImageUrl, mediaType: 'image/png' } });
-  await waitFor(() => imageReadRequests(requests, assetDraftId).length === 1, 'expected the newer selection preview read');
-  const read = imageReadRequests(requests, assetDraftId)[0]!;
-  assert.deepEqual(read.body, { accountId: accountA, url: secondImageUrl });
-  assert.equal(read.headers.authorization, 'Bearer token-a');
+  await waitFor(async () => (await editor.locator('img').first().getAttribute('src')) === secondImageUrl, 'expected the newer selection public URL');
   await waitForLoadedPreview(editor);
 
   await button(editor, /^Save draft$/i).click();
@@ -2350,7 +2330,7 @@ test('does not let an older upload completion replace or unlock a newer pending 
   assert.deepEqual(errors, []);
 });
 
-test('previews every saved image descriptor and removes each independently while preserving sibling descriptors and extensions', async (t) => {
+test('renders every saved image descriptor directly and removes each independently while preserving sibling descriptors and extensions', async (t) => {
   const firstDescriptor = { url: imageUrl, mediaType: 'image/png', extension: { label: 'first', rank: 1 } };
   const textDescriptor = { mediaType: 'text/plain', value: 'Caption text' };
   const secondDescriptor = { url: secondImageUrl, mediaType: 'image/png', extension: { label: 'second', rank: 2 } };
@@ -2361,16 +2341,12 @@ test('previews every saved image descriptor and removes each independently while
     savedAt: observedAt
   });
   const savedFields: Array<Record<string, unknown>> = [];
-  const { page, requests, errors } = await openFixture(t, (request) => {
+  const { page, errors } = await openFixture(t, (request) => {
     if (request.pathname === '/api/library' && request.method === 'GET') {
       return libraryPage(accountA, { drafts: [stored] });
     }
     if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'GET') {
       return { body: { draft: stored } };
-    }
-    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read` && request.method === 'POST') {
-      const url = asRecord(request.body).url;
-      return { body: { mediaType: 'image/png', data: url === secondImageUrl ? secondPngBase64 : tinyPngBase64 } };
     }
     if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'POST') {
       const fields = requestFields(request);
@@ -2386,18 +2362,25 @@ test('previews every saved image descriptor and removes each independently while
   await draftCard(page, 'Rope').click();
   const editor = await editorRegion(page, 'Asset');
 
-  await waitFor(async () => (await editor.locator('img').count()) === 2, 'expected a visible preview for every saved image descriptor');
+  await waitFor(async () => (await editor.locator('img').count()) === 2, 'expected a visible image for every saved image descriptor');
   const previews = editor.locator('img');
-  await waitFor(async () => {
+  const previewSources = async (): Promise<string[]> => {
     const count = await previews.count();
-    if (count !== 2) return false;
+    const sources: string[] = [];
     for (let index = 0; index < count; index += 1) {
+      sources.push((await previews.nth(index).getAttribute('src')) ?? '');
+    }
+    return sources;
+  };
+  await waitFor(async () => {
+    const sources = await previewSources();
+    if (sources.length !== 2 || !sources.includes(imageUrl) || !sources.includes(secondImageUrl)) return false;
+    for (let index = 0; index < 2; index += 1) {
       const loaded = await previews.nth(index).evaluate((element) => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0);
       if (!loaded) return false;
     }
     return true;
-  }, 'expected every saved image preview to load');
-  await waitFor(() => [imageUrl, secondImageUrl].every((url) => imageReadRequests(requests, assetDraftId).some((request) => asRecord(request.body).url === url && request.headers.authorization === 'Bearer token-a')), 'expected an authenticated preview read for every saved image descriptor');
+  }, 'expected every saved image public URL to render and load');
 
   const removeButtons = editor.getByRole('button', { name: /remove.*image|image.*remove/i });
   assert.equal(await removeButtons.count(), 2, 'every saved image descriptor must expose an independent remove action');
@@ -2407,11 +2390,12 @@ test('previews every saved image descriptor and removes each independently while
   }
 
   await removeButtons.first().click();
-  await waitFor(async () => (await editor.locator('img').count()) === 1, 'removing one image must leave exactly one visible preview');
+  await waitFor(async () => (await editor.locator('img').count()) === 1, 'removing one image must leave exactly one visible image');
   const remainingPreview = editor.locator('img').first();
+  assert.equal(await remainingPreview.getAttribute('src'), secondImageUrl, 'removing the first image leaves the sibling public URL');
   await waitFor(
     async () => remainingPreview.evaluate((element) => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0),
-    'the preserved image preview must load'
+    'the preserved image public URL must load'
   );
 
   await button(editor, /^Save draft$/i).click();
@@ -2432,7 +2416,86 @@ test('previews every saved image descriptor and removes each independently while
   assert.deepEqual(errors, []);
 });
 
-test('loads draft Library card images through the authenticated read path with no direct private fetch before and after save and reopen', async (t) => {
+test('shows an unavailable indication for a failed saved image while keeping its loaded sibling and independent removal', async (t) => {
+  const failedDescriptor = { url: imageUrl, mediaType: 'image/png' };
+  const loadedDescriptor = { url: secondImageUrl, mediaType: 'image/png' };
+  let stored = makeDraft({
+    id: assetDraftId,
+    kind: 'asset',
+    fields: { name: 'Rope', text: 'Stored text', media: [failedDescriptor, loadedDescriptor] },
+    savedAt: observedAt
+  });
+  const savedFields: Array<Record<string, unknown>> = [];
+  const { page, errors, mediaResponses } = await openFixture(t, (request) => {
+    if (request.pathname === '/api/library' && request.method === 'GET') {
+      return libraryPage(accountA, { drafts: [stored] });
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'GET') {
+      return { body: { draft: stored } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'POST') {
+      const fields = requestFields(request);
+      savedFields.push(fields);
+      stored = makeDraft({ id: assetDraftId, kind: 'asset', fields, savedAt: laterAt });
+      return { body: { draft: stored } };
+    }
+    return { status: 404, body: { error: 'unexpected request' } };
+  }, { mediaFailures: [{ url: imageUrl, status: 503 }] });
+
+  const region = await waitForRegion(page);
+  await waitForText(region, 'Rope', 'expected the retained image draft');
+  const card = draftCard(page, 'Rope');
+  await waitFor(
+    async () => card.locator(`img[src="${secondImageUrl}"]`).evaluate((element) => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0),
+    'the successful sibling image must load in the draft card'
+  );
+  assert.match(
+    await card.ariaSnapshot(),
+    /unavailable|failed|could not|couldn't|unable|not available|can't be (shown|loaded)/i,
+    'a failed saved image must present an understandable unavailable indication in the draft card'
+  );
+  await card.click();
+  const editor = await editorRegion(page, 'Asset');
+
+  await waitFor(
+    () => mediaResponses.some((response) => response.url === imageUrl && response.status === 503),
+    'expected the failed public image to return an HTTP failure'
+  );
+  const loadedPreview = editor.locator(`img[src="${secondImageUrl}"]`).first();
+  await waitFor(
+    async () => loadedPreview.evaluate((element) => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0),
+    'the successful sibling public image must load'
+  );
+
+  const accessibleText = await editor.ariaSnapshot();
+  assert.match(
+    accessibleText,
+    /unavailable|failed|could not|couldn't|unable|not available|can't be (shown|loaded)/i,
+    'a failed saved image must present an understandable unavailable indication in the editor'
+  );
+
+  const removeButtons = editor.getByRole('button', { name: /remove.*image|image.*remove/i });
+  assert.equal(await removeButtons.count(), 2, 'both saved images must remain independently removable');
+  await removeButtons.first().click();
+  await waitFor(async () => (await editor.locator('img').count()) === 1, 'removing the failed image must leave exactly the loaded sibling image');
+  const sibling = editor.locator('img').first();
+  assert.equal(await sibling.getAttribute('src'), secondImageUrl, 'the loaded sibling image must remain after removing the failed image');
+  await waitFor(
+    async () => sibling.evaluate((element) => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0),
+    'the loaded sibling image must stay loaded after removing the failed image'
+  );
+
+  await button(editor, /^Save draft$/i).click();
+  await waitFor(() => savedFields.length === 1, 'expected the save after removing the failed image');
+  assert.deepEqual(
+    mediaDescriptors(savedFields[0]!),
+    [loadedDescriptor],
+    'removing the failed image must preserve only the loaded sibling descriptor'
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('renders draft Library card images from draft media public URLs before and after save and reopen', async (t) => {
   const descriptor = { url: imageUrl, mediaType: 'image/png', extension: { source: 'upload' } };
   let stored = makeDraft({
     id: assetDraftId,
@@ -2447,34 +2510,25 @@ test('loads draft Library card images through the authenticated read path with n
     if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'GET') {
       return { body: { draft: stored } };
     }
-    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read` && request.method === 'POST') {
-      return { body: { mediaType: 'image/png', data: tinyPngBase64 } };
-    }
     if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'POST') {
       stored = makeDraft({ id: assetDraftId, kind: 'asset', fields: requestFields(request), savedAt: laterAt });
       return { body: { draft: stored } };
     }
     return { status: 404, body: { error: 'unexpected request' } };
   });
-  const privatePath = new URL(imageUrl).pathname;
-  const directPrivateRequests = (): RequestInfo[] => requests.filter((request) => request.pathname === privatePath);
 
   const region = await waitForRegion(page);
   await waitForText(region, 'Rope', 'expected the retained image draft card');
-  await waitFor(() => imageReadRequests(requests, assetDraftId).length === 1, 'expected the draft Library card to use the authenticated image read path');
-  const cardRead = imageReadRequests(requests, assetDraftId)[0]!;
-  assert.deepEqual(cardRead.body, { accountId: accountA, url: imageUrl });
-  assert.equal(cardRead.headers.authorization, 'Bearer token-a');
 
   const card = draftCard(page, 'Rope');
   const cardImage = card.locator('img').first();
   await cardImage.waitFor({ state: 'visible', timeout: settleTimeout });
+  assert.equal(await cardImage.getAttribute('src'), imageUrl, 'the draft card uses only the draft media public URL');
   await waitFor(
     async () => cardImage.evaluate((element) => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0),
-    'expected the draft Library card image to load through the authenticated read path'
+    'expected the draft Library card public image to load'
   );
-  assert.notEqual(await cardImage.getAttribute('src'), imageUrl, 'the draft card must not point the image at the private upload URL');
-  assert.equal(directPrivateRequests().length, 0, 'the draft card must not make an unauthenticated direct private image request');
+  assert.equal(requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read`, 'POST').length, 0, 'the draft card does not use a private preview route');
 
   await card.click();
   const editor = await editorRegion(page, 'Asset');
@@ -2483,14 +2537,10 @@ test('loads draft Library card images through the authenticated read path with n
   await waitFor(() => requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}`, 'POST').length === 1, 'expected the draft save to keep the image descriptor');
   await button(editor, /^Close editor$/i).click();
 
-  const readsBeforeReopen = imageReadRequests(requests, assetDraftId).length;
   await draftCard(page, 'Rope').click();
   const reopened = await editorRegion(page, 'Asset');
-  await waitFor(() => imageReadRequests(requests, assetDraftId).length > readsBeforeReopen, 'expected a fresh authenticated preview after reopening the saved draft');
-  const reopenRead = imageReadRequests(requests, assetDraftId).at(-1)!;
-  assert.deepEqual(reopenRead.body, { accountId: accountA, url: imageUrl });
-  assert.equal(reopenRead.headers.authorization, 'Bearer token-a');
+  assert.equal(await reopened.locator('img').first().getAttribute('src'), imageUrl, 'reopening renders the same draft media public URL');
   await waitForLoadedPreview(reopened);
-  assert.equal(directPrivateRequests().length, 0, 'reopening the saved draft must not make an unauthenticated direct private image request');
+  assert.equal(requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read`, 'POST').length, 0, 'reopening does not use a private preview route');
   assert.deepEqual(errors, []);
 });

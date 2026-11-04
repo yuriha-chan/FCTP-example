@@ -254,14 +254,16 @@ test('authority deployment config reads object storage credentials from secret f
       adminSecretFile: './admin-secret', playerNames: ['player'],
       vesselNames: { player: 'player-vessel' }, accountPasswordsFile: './passwords.json',
       objectStorage: {
-        endpoint: 'http://rustfs:9000', region: 'us-east-1', bucket: 'image-bucket',
+        endpoint: 'http://rustfs:9000', publicBaseUrl: 'https://media.example.org/site/media/',
+        region: 'us-east-1', bucket: 'image-bucket',
         accessKeyIdFile: './secrets/s3-access-key', secretAccessKeyFile: './secrets/s3-secret-key',
         forcePathStyle: false
       }
     }));
     const config = await readDeploymentConfig('authority', join(directory, 'config.json'));
     assert.deepEqual(config.objectStorage, {
-      endpoint: 'http://rustfs:9000', region: 'us-east-1', bucket: 'image-bucket',
+      endpoint: 'http://rustfs:9000', publicBaseUrl: 'https://media.example.org/site/media',
+      region: 'us-east-1', bucket: 'image-bucket',
       accessKeyId: 'object-storage-access-key', secretAccessKey: 'object-storage-secret-key',
       forcePathStyle: false
     });
@@ -303,7 +305,8 @@ test('authority deployment config rejects malformed object storage before startu
       vesselNames: { player: 'player-vessel' }, accountPasswordsFile: './passwords.json'
     };
     const valid = {
-      endpoint: 'https://objects.example.test', region: 'us-east-1', bucket: 'image-bucket',
+      endpoint: 'https://objects.example.test', publicBaseUrl: 'https://media.example.test/media',
+      region: 'us-east-1', bucket: 'image-bucket',
       accessKeyIdFile: './s3-access-key', secretAccessKeyFile: './s3-secret-key'
     };
     for (const override of [
@@ -313,6 +316,14 @@ test('authority deployment config rejects malformed object storage before startu
       { endpoint: `https://${marker}:${marker}@objects.example.test` },
       { endpoint: 'https://objects.example.test?policy=public' },
       { endpoint: 'https://objects.example.test#fragment' },
+      { publicBaseUrl: undefined },
+      { publicBaseUrl: '' },
+      { publicBaseUrl: 'media.example.test' },
+      { publicBaseUrl: '/media' },
+      { publicBaseUrl: 'ftp://media.example.test' },
+      { publicBaseUrl: `https://${marker}:${marker}@media.example.test` },
+      { publicBaseUrl: 'https://media.example.test?token=value' },
+      { publicBaseUrl: 'https://media.example.test#fragment' },
       { region: '' },
       { bucket: '' },
       { accessKeyIdFile: '' },

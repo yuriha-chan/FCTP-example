@@ -84,6 +84,14 @@ function validateDisplayName(value, field) {
   return value.trim();
 }
 
+function validateObjectStoragePublicBase(value) {
+  if (typeof value !== 'string' || !value) fail('Invalid object storage public base URL');
+  let url;
+  try { url = new globalThis.URL(value); } catch { fail('Invalid object storage public base URL'); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) fail('Invalid object storage public base URL');
+  return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
+}
+
 function validateObjectStorageEndpoint(value) {
   if (typeof value !== 'string' || !value) fail('Invalid object storage endpoint');
   let url;
@@ -95,12 +103,14 @@ function validateObjectStorageEndpoint(value) {
 async function validateObjectStorage(value, base) {
   if (!record(value)) fail('Invalid object storage configuration');
   const endpoint = validateObjectStorageEndpoint(value.endpoint);
+  const publicBaseUrl = validateObjectStoragePublicBase(value.publicBaseUrl);
   if (typeof value.region !== 'string' || !value.region.trim() || typeof value.bucket !== 'string' || !value.bucket.trim()) fail('Invalid object storage configuration');
   if (value.forcePathStyle !== undefined && typeof value.forcePathStyle !== 'boolean') fail('Invalid object storage configuration');
   const accessKeyId = await readSecret(resolveFile(value.accessKeyIdFile, base));
   const secretAccessKey = await readSecret(resolveFile(value.secretAccessKeyFile, base));
   return {
     endpoint,
+    publicBaseUrl,
     region: value.region,
     bucket: value.bucket,
     accessKeyId,

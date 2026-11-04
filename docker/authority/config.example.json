@@ -18,6 +18,7 @@
   "accountPasswordsFile": "/run/secrets/account-passwords.json",
   "objectStorage": {
     "endpoint": "http://rustfs:9000",
+    "publicBaseUrl": "http://127.0.0.1:4104/image-bucket",
     "region": "us-east-1",
     "bucket": "image-bucket",
     "accessKeyIdFile": "/run/secrets/s3-access-key",
