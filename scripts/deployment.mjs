@@ -84,6 +84,31 @@ function validateDisplayName(value, field) {
   return value.trim();
 }
 
+function validateObjectStorageEndpoint(value) {
+  if (typeof value !== 'string' || !value) fail('Invalid object storage endpoint');
+  let url;
+  try { url = new globalThis.URL(value); } catch { fail('Invalid object storage endpoint'); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || (url.pathname !== '' && url.pathname !== '/')) fail('Invalid object storage endpoint');
+  return url.origin;
+}
+
+async function validateObjectStorage(value, base) {
+  if (!record(value)) fail('Invalid object storage configuration');
+  const endpoint = validateObjectStorageEndpoint(value.endpoint);
+  if (typeof value.region !== 'string' || !value.region.trim() || typeof value.bucket !== 'string' || !value.bucket.trim()) fail('Invalid object storage configuration');
+  if (value.forcePathStyle !== undefined && typeof value.forcePathStyle !== 'boolean') fail('Invalid object storage configuration');
+  const accessKeyId = await readSecret(resolveFile(value.accessKeyIdFile, base));
+  const secretAccessKey = await readSecret(resolveFile(value.secretAccessKeyFile, base));
+  return {
+    endpoint,
+    region: value.region,
+    bucket: value.bucket,
+    accessKeyId,
+    secretAccessKey,
+    ...(value.forcePathStyle === undefined ? {} : { forcePathStyle: value.forcePathStyle })
+  };
+}
+
 function validateRoutes(value, origin, service) {
   if (!Array.isArray(value)) fail('Invalid additional routes');
   const reserved = service === 'policy' ? ['approach', 'coastal'] : ['approach'];
@@ -133,7 +158,8 @@ export async function readDeploymentConfig(service, path) {
     try { accountPasswords = JSON.parse(await readFile(passwordFile, 'utf8')); } catch { fail('Invalid account password file'); }
     const accountNames = [...playerNames, ...administratorNames];
     if (!record(accountPasswords) || Object.keys(accountPasswords).length !== accountNames.length || accountNames.some((name) => typeof accountPasswords[name] !== 'string' || !accountPasswords[name])) fail('Invalid account passwords');
-    Object.assign(config, { playerNames, administratorNames, ...(administrator === undefined ? {} : { administrator }), homeAccountName, registryAccountName, serverDisplayName, homeDisplayName, registryDisplayName, vesselNames, startingPorts, adminSecret, accountPasswords });
+    const objectStorage = input.objectStorage === undefined ? undefined : await validateObjectStorage(input.objectStorage, base);
+    Object.assign(config, { playerNames, administratorNames, ...(administrator === undefined ? {} : { administrator }), homeAccountName, registryAccountName, serverDisplayName, homeDisplayName, registryDisplayName, vesselNames, startingPorts, adminSecret, accountPasswords, ...(objectStorage === undefined ? {} : { objectStorage }) });
   }
 
   if (service === 'policy' || service === 'simulation') {
@@ -179,7 +205,7 @@ export async function startDeployment(service, config) {
   try {
     if (service === 'authority') {
       const { createAuthorityApp } = await import('../apps/test-authority/dist/app.js');
-      app = await createAuthorityApp({ origin: config.origin, storeFile, keyFile, adminSecret: config.adminSecret, ...(config.administrator === undefined ? {} : { administrator: config.administrator }), playerNames: config.playerNames, administratorNames: config.administratorNames, vesselNames: config.vesselNames, startingPorts: config.startingPorts, accountPasswords: config.accountPasswords, homeAccountName: config.homeAccountName, registryAccountName: config.registryAccountName, serverDisplayName: config.serverDisplayName, homeDisplayName: config.homeDisplayName, registryDisplayName: config.registryDisplayName });
+      app = await createAuthorityApp({ origin: config.origin, storeFile, keyFile, adminSecret: config.adminSecret, ...(config.administrator === undefined ? {} : { administrator: config.administrator }), playerNames: config.playerNames, administratorNames: config.administratorNames, vesselNames: config.vesselNames, startingPorts: config.startingPorts, accountPasswords: config.accountPasswords, homeAccountName: config.homeAccountName, registryAccountName: config.registryAccountName, serverDisplayName: config.serverDisplayName, homeDisplayName: config.homeDisplayName, registryDisplayName: config.registryDisplayName, ...(config.objectStorage === undefined ? {} : { objectStorage: config.objectStorage }) });
     }
     if (service === 'policy') {
       const { createPolicyApp } = await import('../apps/territory-policy/dist/app.js');

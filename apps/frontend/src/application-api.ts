@@ -328,6 +328,9 @@ export function refreshResourceReader(resourceId: string, input: { accountId?: s
 export type LibraryResponse = PageResponse<LibraryData>;
 export interface DraftResponse { draft: AuthoringDraft }
 export interface DraftPublicationResponse { action: ActionRecord; draft: AuthoringDraft }
+export interface ImageDescriptor { url: string; mediaType: string }
+export type ImageUploadResponse = ImageDescriptor;
+export interface ImageReadResponse { mediaType: string; data: string }
 
 export function readLibrary(accountId: string): Promise<LibraryResponse> {
   return request(`/api/library?accountId=${encodeURIComponent(accountId)}`);
@@ -351,6 +354,14 @@ export function saveDraft(draftId: string, input: { accountId: string; fields: R
 
 export function publishDraft(draftId: string, accountId: string): Promise<DraftPublicationResponse> {
   return request(`/api/drafts/${encodeURIComponent(draftId)}/publish`, { method: 'POST', body: JSON.stringify({ accountId }) });
+}
+
+export function uploadDraftImage(draftId: string, input: { accountId: string; mediaType: string; data: string }): Promise<ImageUploadResponse> {
+  return request(`/api/drafts/${encodeURIComponent(draftId)}/images`, { method: 'POST', body: JSON.stringify(input) });
+}
+
+export function readDraftImage(draftId: string, input: { accountId: string; url: string }): Promise<ImageReadResponse> {
+  return request(`/api/drafts/${encodeURIComponent(draftId)}/images/read`, { method: 'POST', body: JSON.stringify(input) });
 }
 
 

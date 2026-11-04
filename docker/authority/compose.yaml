@@ -12,6 +12,11 @@ services:
     image: fctp-authority:local
     init: true
     stop_grace_period: 30s
+    depends_on:
+      rustfs:
+        condition: service_healthy
+      rustfs-init:
+        condition: service_completed_successfully
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:4100:8080"
     volumes:
@@ -24,5 +29,47 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+  rustfs:
+    image: rustfs/rustfs:latest
+    init: true
+    group_add:
+      - "1000"
+    restart: unless-stopped
+    command: ["/data"]
+    environment:
+      RUSTFS_ACCESS_KEY_FILE: /run/secrets/s3-access-key
+      RUSTFS_SECRET_KEY_FILE: /run/secrets/s3-secret-key
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_OBS_LOGGER_LEVEL: error
+    volumes:
+      - rustfs-data:/data
+      - ./secrets/s3-access-key:/run/secrets/s3-access-key:ro
+      - ./secrets/s3-secret-key:/run/secrets/s3-secret-key:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+  rustfs-init:
+    image: fctp-authority:local
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    entrypoint: ["node", "/app/scripts/init-image-bucket.mjs"]
+    environment:
+      OBJECT_STORAGE_ENDPOINT: http://rustfs:9000
+      OBJECT_STORAGE_REGION: us-east-1
+      OBJECT_STORAGE_BUCKET: image-bucket
+      OBJECT_STORAGE_ACCESS_KEY_FILE: /run/secrets/s3-access-key
+      OBJECT_STORAGE_SECRET_ACCESS_KEY_FILE: /run/secrets/s3-secret-key
+      OBJECT_STORAGE_FORCE_PATH_STYLE: "true"
+    volumes:
+      - ./init-image-bucket.mjs:/app/scripts/init-image-bucket.mjs:ro
+      - ./secrets:/run/secrets:ro
+    restart: "no"
 volumes:
   authority-data:
+  rustfs-data:

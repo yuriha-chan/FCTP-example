@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
@@ -235,6 +235,99 @@ test('authority deployment config rejects invalid Home account names before star
     for (const homeAccountName of ['system', '@system.home', 'system.home@authority.example.org', 'system_home']) {
       await writeFile(join(directory, 'config.json'), JSON.stringify({ ...base, homeAccountName }));
       await assert.rejects(readDeploymentConfig('authority', join(directory, 'config.json')), TypeError);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('authority deployment config reads object storage credentials from secret files before startup', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'deployment-object-storage-'));
+  try {
+    await mkdir(join(directory, 'secrets'));
+    await writeFile(join(directory, 'admin-secret'), 'object-storage-admin-secret\n');
+    await writeFile(join(directory, 'passwords.json'), JSON.stringify({ player: 'player-password' }));
+    await writeFile(join(directory, 'secrets', 's3-access-key'), 'object-storage-access-key\n');
+    await writeFile(join(directory, 'secrets', 's3-secret-key'), 'object-storage-secret-key\n');
+    await writeFile(join(directory, 'config.json'), JSON.stringify({
+      origin: 'https://authority.example.org', listenHost: '127.0.0.1', port: 8080, dataDir: './data',
+      adminSecretFile: './admin-secret', playerNames: ['player'],
+      vesselNames: { player: 'player-vessel' }, accountPasswordsFile: './passwords.json',
+      objectStorage: {
+        endpoint: 'http://rustfs:9000', region: 'us-east-1', bucket: 'image-bucket',
+        accessKeyIdFile: './secrets/s3-access-key', secretAccessKeyFile: './secrets/s3-secret-key',
+        forcePathStyle: false
+      }
+    }));
+    const config = await readDeploymentConfig('authority', join(directory, 'config.json'));
+    assert.deepEqual(config.objectStorage, {
+      endpoint: 'http://rustfs:9000', region: 'us-east-1', bucket: 'image-bucket',
+      accessKeyId: 'object-storage-access-key', secretAccessKey: 'object-storage-secret-key',
+      forcePathStyle: false
+    });
+    await assert.rejects(stat(join(directory, 'data')), { code: 'ENOENT' });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('authority deployment config omits object storage for text-only authoring', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'deployment-object-storage-omitted-'));
+  try {
+    await writeFile(join(directory, 'admin-secret'), 'text-only-admin-secret\n');
+    await writeFile(join(directory, 'passwords.json'), JSON.stringify({ player: 'player-password' }));
+    await writeFile(join(directory, 'config.json'), JSON.stringify({
+      origin: 'https://authority.example.org', dataDir: './data',
+      adminSecretFile: './admin-secret', playerNames: ['player'],
+      vesselNames: { player: 'player-vessel' }, accountPasswordsFile: './passwords.json'
+    }));
+    const config = await readDeploymentConfig('authority', join(directory, 'config.json'));
+    assert.equal(config.objectStorage, undefined);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('authority deployment config rejects malformed object storage before startup writes', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'deployment-object-storage-invalid-'));
+  const marker = 'secret-marker-that-must-not-appear';
+  try {
+    await writeFile(join(directory, 'admin-secret'), 'invalid-object-storage-admin-secret\n');
+    await writeFile(join(directory, 'passwords.json'), JSON.stringify({ player: 'player-password' }));
+    await writeFile(join(directory, 's3-access-key'), 'object-storage-access-key\n');
+    await writeFile(join(directory, 's3-secret-key'), 'object-storage-secret-key\n');
+    await writeFile(join(directory, 'empty-secret'), '');
+    const base = {
+      origin: 'https://authority.example.org', dataDir: './data',
+      adminSecretFile: './admin-secret', playerNames: ['player'],
+      vesselNames: { player: 'player-vessel' }, accountPasswordsFile: './passwords.json'
+    };
+    const valid = {
+      endpoint: 'https://objects.example.test', region: 'us-east-1', bucket: 'image-bucket',
+      accessKeyIdFile: './s3-access-key', secretAccessKeyFile: './s3-secret-key'
+    };
+    for (const override of [
+      { endpoint: 'objects.example.test' },
+      { endpoint: '/objects' },
+      { endpoint: 'ftp://objects.example.test' },
+      { endpoint: `https://${marker}:${marker}@objects.example.test` },
+      { endpoint: 'https://objects.example.test?policy=public' },
+      { endpoint: 'https://objects.example.test#fragment' },
+      { region: '' },
+      { bucket: '' },
+      { accessKeyIdFile: '' },
+      { secretAccessKeyFile: '' },
+      { accessKeyIdFile: './missing-access-key' },
+      { secretAccessKeyFile: './empty-secret' },
+      { forcePathStyle: 'yes' }
+    ]) {
+      await writeFile(join(directory, 'config.json'), JSON.stringify({ ...base, objectStorage: { ...valid, ...override } }));
+      await assert.rejects(readDeploymentConfig('authority', join(directory, 'config.json')), (error) => {
+        assert.equal(error instanceof TypeError, true);
+        assert.equal(error.message.includes(marker), false);
+        return true;
+      });
+      await assert.rejects(stat(join(directory, 'data')), { code: 'ENOENT' });
     }
   } finally {
     await rm(directory, { recursive: true, force: true });

@@ -3,8 +3,47 @@ import type { ActionReference } from '../actions.js';
 
 const forbiddenDraftFields = new Set(['accountId', 'holder', 'endpoint', 'target']);
 
+const imageMediaTypes: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+export type ImageMediaType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function isImageMediaType(value: unknown): value is ImageMediaType {
+  return typeof value === 'string' && imageMediaTypes.has(value);
+}
+
+export function imageUploadEndpoint(account: AccountRecord): string {
+  return new URL('/local/repository/authoring/images', authoringOrigin(account)).href;
+}
+
+export function guardedImageUrl(value: unknown, origin: string): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch (error) {
+    if (error instanceof TypeError) return undefined;
+    throw error;
+  }
+  if (url.username !== '' || url.password !== '') return undefined;
+  if (url.search !== '' || url.hash !== '') return undefined;
+  if (url.origin !== origin) return undefined;
+  if (!/^\/objects\/players\/[^/]+\/images\/[^/]+$/.test(url.pathname)) return undefined;
+  return url.href;
+}
+
+function publicationMedia(value: unknown): Array<{ url: string; mediaType: ImageMediaType }> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const media = value.flatMap((descriptor) => {
+    if (!isRecord(descriptor)) return [];
+    const { url, mediaType } = descriptor;
+    if (typeof url !== 'string' || !isImageMediaType(mediaType)) return [];
+    return [{ url, mediaType }];
+  });
+  return media.length > 0 ? media : undefined;
 }
 
 export function sanitizeDraftFields(value: unknown): Record<string, unknown> {
@@ -30,10 +69,13 @@ export function publicationEndpoint(account: AccountRecord, kind: AuthoringKind)
 
 export function publicationBody(kind: AuthoringKind, fields: Record<string, unknown>): Record<string, unknown> {
   if (kind === 'asset') {
-    return {
+    const body: Record<string, unknown> = {
       name: typeof fields.name === 'string' ? fields.name : '',
       text: typeof fields.text === 'string' ? fields.text : ''
     };
+    const media = publicationMedia(fields.media);
+    if (media !== undefined) body.media = media;
+    return body;
   }
   const body: Record<string, unknown> = {
     name: typeof fields.name === 'string' ? fields.name : '',

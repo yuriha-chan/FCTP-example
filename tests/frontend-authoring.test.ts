@@ -37,6 +37,10 @@ const publicationDraftId = 'draft:1e7a3c90';
 const secondDraftId = 'draft:6c0b5d42';
 const accountBDraftId = 'draft:2f8e4a13';
 const mismatchDraftId = 'draft:0a1b2c3d';
+const imageUrl = 'http://fixture.invalid/objects/players/alpha/images/7f3a1c';
+const secondImageUrl = 'http://fixture.invalid/objects/players/alpha/images/9c2b4d';
+const tinyPngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP4z8DwHwAFAAH/VscvDQAAAABJRU5ErkJggg==';
+const secondPngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNgYPj/HwADAgH/OSkZvgAAAABJRU5ErkJggg==';
 
 const html = '<!doctype html><html><head><meta charset="utf-8"></head><body><div id="root"></div><script src="/bundle.js"></script></body></html>';
 
@@ -318,6 +322,16 @@ async function openFixture(t: TestContext, handler: Handler, options: { accountI
       return;
     }
     if (!url.pathname.startsWith('/api/')) {
+      if (url.pathname.startsWith('/objects/')) {
+        requests.push({
+          method: request.method(),
+          pathname: url.pathname,
+          params: Object.fromEntries(url.searchParams),
+          headers: request.headers()
+        });
+        await route.fulfill({ status: 403, contentType: 'text/plain', body: 'forbidden' });
+        return;
+      }
       await route.fulfill({ status: 200, contentType: 'text/html', body: html });
       return;
     }
@@ -446,6 +460,38 @@ function requestFields(request: RequestInfo): Record<string, unknown> {
 
 function requestsFor(requests: readonly RequestInfo[], pathname: string, method?: string): RequestInfo[] {
   return requests.filter((request) => request.pathname === pathname && (method === undefined || request.method === method));
+}
+
+function imageUploadRequests(requests: readonly RequestInfo[], draftId: string): RequestInfo[] {
+  return requestsFor(requests, `/api/drafts/${encodeURIComponent(draftId)}/images`, 'POST');
+}
+
+function imageReadRequests(requests: readonly RequestInfo[], draftId: string): RequestInfo[] {
+  return requestsFor(requests, `/api/drafts/${encodeURIComponent(draftId)}/images/read`, 'POST');
+}
+
+function imageChooser(editor: Locator): Locator {
+  return editor.getByLabel(/image/i).first();
+}
+
+async function chooseImage(editor: Locator, name: string, data: string): Promise<void> {
+  await imageChooser(editor).setInputFiles({ name, mimeType: 'image/png', buffer: Buffer.from(data, 'base64') });
+}
+
+async function waitForLoadedPreview(editor: Locator): Promise<Locator> {
+  const preview = editor.locator('img').first();
+  await preview.waitFor({ state: 'visible', timeout: settleTimeout });
+  await waitFor(
+    async () => preview.evaluate((element) => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0),
+    'expected the image preview to load'
+  );
+  return preview;
+}
+
+function mediaDescriptors(fields: Record<string, unknown>): Array<Record<string, unknown>> {
+  const media = fields.media;
+  if (!Array.isArray(media)) return [];
+  return media.filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null && !Array.isArray(item));
 }
 
 async function setAccount(page: Page, accountId: string): Promise<void> {
@@ -1887,5 +1933,564 @@ test('renders a retained Library Variety card with title, identities, mass, vers
   assert.equal(read.headers.authorization, 'Bearer token-a');
   const reader = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Alloy Details' }) });
   await reader.waitFor({ state: 'visible', timeout: settleTimeout });
+  assert.deepEqual(errors, []);
+});
+
+test('uploads a PNG alongside concurrent name and text edits and previews it through the authenticated read path', async (t) => {
+  const pendingUpload = deferred<ServerResponse>();
+  const initialFields = { name: 'Rope', text: 'Draft text' };
+  let stored = makeDraft({ id: assetDraftId, kind: 'asset', fields: initialFields, savedAt: observedAt });
+  const { page, requests, errors } = await openFixture(t, (request) => {
+    if (request.pathname === '/api/library' && request.method === 'GET') {
+      return libraryPage(accountA, { drafts: [stored] });
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'GET') {
+      return { body: { draft: stored } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images` && request.method === 'POST') {
+      return pendingUpload.promise;
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read` && request.method === 'POST') {
+      return { body: { mediaType: 'image/png', data: tinyPngBase64 } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'POST') {
+      stored = makeDraft({ id: assetDraftId, kind: 'asset', fields: requestFields(request), savedAt: laterAt });
+      return { body: { draft: stored } };
+    }
+    return { status: 404, body: { error: 'unexpected request' } };
+  });
+
+  const region = await waitForRegion(page);
+  await waitForText(region, 'Rope', 'expected the retained image draft');
+  await draftCard(page, 'Rope').click();
+  const editor = await editorRegion(page, 'Asset');
+  await waitFor(async () => (await editor.getByLabel(/^Name$/i).inputValue()) === 'Rope', 'expected the retained draft fields');
+
+  await chooseImage(editor, 'tiny.png', tinyPngBase64);
+  await waitFor(() => imageUploadRequests(requests, assetDraftId).length === 1, 'expected the image upload request');
+  const upload = imageUploadRequests(requests, assetDraftId)[0]!;
+  assert.deepEqual(upload.body, { accountId: accountA, mediaType: 'image/png', data: tinyPngBase64 });
+  assert.equal(upload.headers.authorization, 'Bearer token-a');
+  await waitForText(editor, /upload|pending|in progress/i, 'expected an upload status');
+
+  await editor.getByLabel(/^Name$/i).fill('Concurrent Rope');
+  await editor.getByLabel(/^Text$/i).fill('Concurrent text');
+  assert.equal(await button(editor, /^Publish draft$/i).isDisabled(), true, 'an incomplete pending upload must not publish');
+
+  pendingUpload.resolve({ status: 201, body: { url: imageUrl, mediaType: 'image/png' } });
+  await waitFor(() => imageReadRequests(requests, assetDraftId).length === 1, 'expected the authenticated preview read');
+  const read = imageReadRequests(requests, assetDraftId)[0]!;
+  assert.deepEqual(read.body, { accountId: accountA, url: imageUrl });
+  assert.equal(read.headers.authorization, 'Bearer token-a');
+  await waitForLoadedPreview(editor);
+
+  assert.equal(await editor.getByLabel(/^Name$/i).inputValue(), 'Concurrent Rope', 'upload completion must retain concurrent name edits');
+  assert.equal(await editor.getByLabel(/^Text$/i).inputValue(), 'Concurrent text', 'upload completion must retain concurrent text edits');
+
+  await button(editor, /^Save draft$/i).click();
+  await waitFor(() => requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}`, 'POST').length === 1, 'expected the draft save with the image descriptor');
+  const saved = requestFields(requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}`, 'POST')[0]!);
+  assert.equal(saved.name, 'Concurrent Rope');
+  assert.equal(saved.text, 'Concurrent text');
+  assert.deepEqual(mediaDescriptors(saved), [{ url: imageUrl, mediaType: 'image/png' }]);
+  assert.deepEqual(errors, []);
+});
+
+test('saves and reopens an image descriptor then obtains an authenticated preview and can remove the image', async (t) => {
+  const descriptor = { url: imageUrl, mediaType: 'image/png' };
+  let stored = makeDraft({
+    id: assetDraftId,
+    kind: 'asset',
+    fields: { name: 'Rope', text: 'Stored text', media: [descriptor] },
+    savedAt: observedAt
+  });
+  const { page, requests, errors } = await openFixture(t, (request) => {
+    if (request.pathname === '/api/library' && request.method === 'GET') {
+      return libraryPage(accountA, { drafts: [stored] });
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'GET') {
+      return { body: { draft: stored } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read` && request.method === 'POST') {
+      return { body: { mediaType: 'image/png', data: tinyPngBase64 } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'POST') {
+      stored = makeDraft({ id: assetDraftId, kind: 'asset', fields: requestFields(request), savedAt: laterAt });
+      return { body: { draft: stored } };
+    }
+    return { status: 404, body: { error: 'unexpected request' } };
+  });
+
+  const region = await waitForRegion(page);
+  await waitForText(region, 'Rope', 'expected the retained image draft');
+  await draftCard(page, 'Rope').click();
+  const editor = await editorRegion(page, 'Asset');
+  await waitFor(() => imageReadRequests(requests, assetDraftId).length >= 1, 'expected the retained descriptor preview read');
+  const firstRead = imageReadRequests(requests, assetDraftId)[0]!;
+  assert.deepEqual(firstRead.body, { accountId: accountA, url: imageUrl });
+  assert.equal(firstRead.headers.authorization, 'Bearer token-a');
+  await waitForLoadedPreview(editor);
+
+  await button(editor, /^Save draft$/i).click();
+  await waitFor(() => requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}`, 'POST').length === 1, 'expected the no-op save to keep the descriptor');
+  assert.deepEqual(
+    mediaDescriptors(requestFields(requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}`, 'POST')[0]!)),
+    [descriptor],
+    'saving must preserve the retained image descriptor'
+  );
+
+  await button(editor, /^Close editor$/i).click();
+  await draftCard(page, 'Rope').click();
+  const reopened = await editorRegion(page, 'Asset');
+  await waitFor(() => imageReadRequests(requests, assetDraftId).length >= 2, 'expected a fresh authenticated preview after reopen');
+  const reopenRead = imageReadRequests(requests, assetDraftId).at(-1)!;
+  assert.deepEqual(reopenRead.body, { accountId: accountA, url: imageUrl });
+  assert.equal(reopenRead.headers.authorization, 'Bearer token-a');
+  await waitForLoadedPreview(reopened);
+
+  await button(reopened, /remove.*image|image.*remove/i).click();
+  await waitFor(async () => (await reopened.locator('img').count()) === 0, 'expected removing the image to clear the preview');
+  await button(reopened, /^Save draft$/i).click();
+  await waitFor(() => requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}`, 'POST').length === 2, 'expected the save after removing the image');
+  assert.deepEqual(
+    mediaDescriptors(requestFields(requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}`, 'POST')[1]!)),
+    [],
+    'removing the image must remove its descriptor'
+  );
+
+  const localKeys = await page.evaluate(() => Object.keys(localStorage).sort());
+  assert.deepEqual(localKeys, ['fctp.client-sessions'], 'preview data must remain transient');
+  const sessionKeys = await page.evaluate(() => Object.keys(sessionStorage));
+  assert.deepEqual(sessionKeys, [], 'the preview must not add session storage');
+  const storageText = await page.evaluate(() => JSON.stringify(localStorage));
+  assert.equal(storageText.includes(tinyPngBase64), false, 'the preview must not persist image bytes in browser storage');
+  assert.deepEqual(errors, []);
+});
+
+test('publishes an image draft through the existing publication flow', async (t) => {
+  const descriptor = { url: imageUrl, mediaType: 'image/png' };
+  let stored = makeDraft({
+    id: assetDraftId,
+    kind: 'asset',
+    fields: { name: 'Rope', text: 'Image text', media: [descriptor] },
+    savedAt: observedAt
+  });
+  let publishCalls = 0;
+  const { page, requests, errors } = await openFixture(t, (request) => {
+    if (request.pathname === '/api/library' && request.method === 'GET') {
+      return libraryPage(accountA, { drafts: [stored] });
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'GET') {
+      return { body: { draft: stored } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read` && request.method === 'POST') {
+      return { body: { mediaType: 'image/png', data: tinyPngBase64 } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/publish` && request.method === 'POST') {
+      publishCalls += 1;
+      const action = makeAction({
+        id: actionId,
+        resultReferences: [{ kind: 'resource', id: assetId }],
+        submission: { status: 'accepted' },
+        outcome: { status: 'pending', evidence: [] }
+      });
+      stored = makeDraft({
+        id: assetDraftId,
+        kind: 'asset',
+        fields: stored.fields as Record<string, unknown>,
+        savedAt: laterAt,
+        publication: { actionId, resourceIds: [assetId] }
+      });
+      return { body: { action, draft: stored } };
+    }
+    return { status: 404, body: { error: 'unexpected request' } };
+  });
+
+  const region = await waitForRegion(page);
+  await waitForText(region, 'Rope', 'expected the retained image draft');
+  await draftCard(page, 'Rope').click();
+  const editor = await editorRegion(page, 'Asset');
+  await waitFor(() => imageReadRequests(requests, assetDraftId).length >= 1, 'expected the retained image preview');
+  await waitForLoadedPreview(editor);
+
+  const publish = button(editor, /^Publish draft$/i);
+  assert.equal(await publish.isDisabled(), false, 'a clean saved image draft may publish');
+  await publish.click();
+  await waitFor(() => publishCalls === 1, 'expected one publication request');
+  const publishRequest = requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}/publish`, 'POST')[0]!;
+  assert.equal(asRecord(publishRequest.body).accountId, accountA);
+  assert.equal(publishRequest.headers.authorization, 'Bearer token-a');
+  const accepted = await waitForText(region, actionId, 'expected the accepted publication action');
+  assert.ok(accepted.includes(assetId), 'expected the returned image resource reference');
+  assert.match(accepted, /accepted/i);
+  assert.equal(await resourceButton(page, assetId).count(), 1);
+  assert.deepEqual(errors, []);
+});
+
+test('reports an image upload failure honestly without a fake preview or publication', async (t) => {
+  const initialFields = { name: 'Rope', text: 'Draft text' };
+  let stored = makeDraft({ id: assetDraftId, kind: 'asset', fields: initialFields, savedAt: observedAt });
+  let publishCalls = 0;
+  const { page, requests, errors } = await openFixture(t, (request) => {
+    if (request.pathname === '/api/library' && request.method === 'GET') {
+      return libraryPage(accountA, { drafts: [stored] });
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'GET') {
+      return { body: { draft: stored } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images` && request.method === 'POST') {
+      return { status: 503, body: { error: 'image storage unavailable' } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'POST') {
+      stored = makeDraft({ id: assetDraftId, kind: 'asset', fields: requestFields(request), savedAt: laterAt });
+      return { body: { draft: stored } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/publish` && request.method === 'POST') {
+      publishCalls += 1;
+      return { status: 500, body: { error: 'unexpected publication' } };
+    }
+    return { status: 404, body: { error: 'unexpected request' } };
+  });
+
+  const region = await waitForRegion(page);
+  await waitForText(region, 'Rope', 'expected the retained image draft');
+  await draftCard(page, 'Rope').click();
+  const editor = await editorRegion(page, 'Asset');
+  await waitFor(async () => (await editor.getByLabel(/^Name$/i).inputValue()) === 'Rope', 'expected the retained draft fields');
+
+  await chooseImage(editor, 'tiny.png', tinyPngBase64);
+  const alert = editor.getByRole('alert').first();
+  await alert.waitFor({ state: 'visible', timeout: settleTimeout });
+  await waitForText(alert, /image storage unavailable/i, 'expected the honest upload failure');
+  assert.equal(await editor.locator('img').count(), 0, 'a failed upload must not show a fake preview');
+  assert.equal(publishCalls, 0, 'a failed upload must not publish');
+  assert.equal(await button(region, /^Check publication$/i).count(), 0, 'a failed upload must not expose a publication check');
+
+  await button(editor, /^Save draft$/i).click();
+  await waitFor(() => requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}`, 'POST').length === 1, 'expected the save after the failed upload');
+  const saved = requestFields(requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}`, 'POST')[0]!);
+  assert.deepEqual(mediaDescriptors(saved), [], 'a failed upload must not add an image descriptor');
+  assert.deepEqual(errors, []);
+});
+
+test('does not apply a late upload from a previous draft to the currently open draft', async (t) => {
+  const pendingUpload = deferred<ServerResponse>();
+  const firstFields = { name: 'First', text: 'first text' };
+  const secondFields = { name: 'Second', text: 'second text' };
+  const first = makeDraft({ id: assetDraftId, kind: 'asset', fields: firstFields, savedAt: observedAt });
+  let second = makeDraft({ id: secondDraftId, kind: 'asset', fields: secondFields, savedAt: laterAt });
+  const { page, requests, errors } = await openFixture(t, (request) => {
+    if (request.pathname === '/api/library' && request.method === 'GET') {
+      return libraryPage(accountA, { drafts: [first, second] });
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'GET') {
+      return { body: { draft: first } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(secondDraftId)}` && request.method === 'GET') {
+      return { body: { draft: second } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images` && request.method === 'POST') {
+      return pendingUpload.promise;
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read` && request.method === 'POST') {
+      return { body: { mediaType: 'image/png', data: tinyPngBase64 } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(secondDraftId)}` && request.method === 'POST') {
+      second = makeDraft({ id: secondDraftId, kind: 'asset', fields: requestFields(request), savedAt: freshAt });
+      return { body: { draft: second } };
+    }
+    return { status: 404, body: { error: 'unexpected request' } };
+  });
+
+  await waitForRegion(page);
+  await waitForText(authoringRegion(page), 'First', 'expected the first retained draft');
+  await draftCard(page, 'First').click();
+  const firstEditor = await editorRegion(page, 'Asset');
+  await waitFor(async () => (await firstEditor.getByLabel(/^Name$/i).inputValue()) === 'First', 'expected the first draft fields');
+  await chooseImage(firstEditor, 'tiny.png', tinyPngBase64);
+  await waitFor(() => imageUploadRequests(requests, assetDraftId).length === 1, 'expected the first upload request');
+
+  await draftCard(page, 'Second').click();
+  const secondEditor = await editorRegion(page, 'Asset');
+  await waitFor(async () => (await secondEditor.getByLabel(/^Name$/i).inputValue()) === 'Second', 'expected the second draft fields');
+
+  pendingUpload.resolve({ status: 201, body: { url: imageUrl, mediaType: 'image/png' } });
+  await sleep(250);
+  assert.equal(await secondEditor.getByLabel(/^Name$/i).inputValue(), 'Second', 'a late upload must not replace the open draft name');
+  assert.equal(await secondEditor.getByLabel(/^Text$/i).inputValue(), 'second text', 'a late upload must not replace the open draft text');
+  assert.equal(await secondEditor.locator('img').count(), 0, 'a late upload must not preview in another draft');
+  assert.equal(imageReadRequests(requests, assetDraftId).length, 0, 'a late upload must not request a preview for the previous draft');
+  assert.equal(await secondEditor.getByRole('alert').count(), 0, 'a late upload must not report an error in another draft');
+
+  await button(secondEditor, /^Save draft$/i).click();
+  await waitFor(() => requestsFor(requests, `/api/drafts/${encodeURIComponent(secondDraftId)}`, 'POST').length === 1, 'expected the second draft save');
+  assert.deepEqual(mediaDescriptors(requestFields(requestsFor(requests, `/api/drafts/${encodeURIComponent(secondDraftId)}`, 'POST')[0]!)), []);
+  assert.deepEqual(errors, []);
+});
+
+test('does not apply a late upload after switching accounts', async (t) => {
+  const pendingUpload = deferred<ServerResponse>();
+  const draftA = makeDraft({ id: assetDraftId, kind: 'asset', fields: { name: 'Account A image', text: 'a-private' }, savedAt: observedAt });
+  const draftB = makeDraft({ id: accountBDraftId, accountId: accountB, kind: 'asset', fields: { name: 'Account B image', text: 'b-only' }, savedAt: laterAt });
+  let storedB = draftB;
+  const { page, requests, errors } = await openFixture(t, (request) => {
+    if (request.pathname === '/api/library' && request.method === 'GET') {
+      return request.params.accountId === accountB
+        ? libraryPage(accountB, { drafts: [storedB] })
+        : libraryPage(accountA, { drafts: [draftA] });
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'GET') {
+      return { body: { draft: draftA } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(accountBDraftId)}` && request.method === 'GET') {
+      return { body: { draft: storedB } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images` && request.method === 'POST') {
+      return pendingUpload.promise;
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read` && request.method === 'POST') {
+      return { body: { mediaType: 'image/png', data: tinyPngBase64 } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(accountBDraftId)}` && request.method === 'POST') {
+      storedB = makeDraft({ id: accountBDraftId, accountId: accountB, kind: 'asset', fields: requestFields(request), savedAt: freshAt });
+      return { body: { draft: storedB } };
+    }
+    return { status: 404, body: { error: 'unexpected request' } };
+  });
+
+  await waitForRegion(page);
+  await waitForText(authoringRegion(page), 'Account A image', 'expected account A drafts');
+  await draftCard(page, 'Account A image').click();
+  const firstEditor = await editorRegion(page, 'Asset');
+  await waitFor(async () => (await firstEditor.getByLabel(/^Name$/i).inputValue()) === 'Account A image', 'expected account A draft fields');
+  await chooseImage(firstEditor, 'tiny.png', tinyPngBase64);
+  await waitFor(() => imageUploadRequests(requests, assetDraftId).length === 1, 'expected the account A upload request');
+
+  await setAccount(page, accountB);
+  await waitForText(authoringRegion(page), 'Account B image', 'expected the account B Library');
+  await draftCard(page, 'Account B image').click();
+  const secondEditor = await editorRegion(page, 'Asset');
+  await waitFor(async () => (await secondEditor.getByLabel(/^Name$/i).inputValue()) === 'Account B image', 'expected account B draft fields');
+
+  pendingUpload.resolve({ status: 201, body: { url: imageUrl, mediaType: 'image/png' } });
+  await sleep(250);
+  assert.equal(await secondEditor.getByLabel(/^Name$/i).inputValue(), 'Account B image', 'a late upload must not replace the open account draft name');
+  assert.equal(await secondEditor.getByLabel(/^Text$/i).inputValue(), 'b-only', 'a late upload must not replace the open account draft text');
+  assert.equal(await secondEditor.locator('img').count(), 0, 'a late old-account upload must not preview in the current account');
+  assert.equal(imageReadRequests(requests, assetDraftId).length, 0, 'a late old-account upload must not request a preview');
+  assert.equal(await secondEditor.getByRole('alert').count(), 0, 'a late old-account upload must not report an error in the current account');
+
+  await button(secondEditor, /^Save draft$/i).click();
+  await waitFor(() => requestsFor(requests, `/api/drafts/${encodeURIComponent(accountBDraftId)}`, 'POST').length === 1, 'expected the account B draft save');
+  assert.deepEqual(mediaDescriptors(requestFields(requestsFor(requests, `/api/drafts/${encodeURIComponent(accountBDraftId)}`, 'POST')[0]!)), []);
+  assert.deepEqual(errors, []);
+});
+
+test('does not let an older upload completion replace or unlock a newer pending image selection', async (t) => {
+  const firstUpload = deferred<ServerResponse>();
+  const secondUpload = deferred<ServerResponse>();
+  let uploadCount = 0;
+  let stored = makeDraft({ id: assetDraftId, kind: 'asset', fields: { name: 'Rope', text: 'Draft text' }, savedAt: observedAt });
+  const { page, requests, errors } = await openFixture(t, (request) => {
+    if (request.pathname === '/api/library' && request.method === 'GET') {
+      return libraryPage(accountA, { drafts: [stored] });
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'GET') {
+      return { body: { draft: stored } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images` && request.method === 'POST') {
+      uploadCount += 1;
+      return uploadCount === 1 ? firstUpload.promise : secondUpload.promise;
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read` && request.method === 'POST') {
+      const url = asRecord(request.body).url;
+      return { body: { mediaType: 'image/png', data: url === secondImageUrl ? secondPngBase64 : tinyPngBase64 } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'POST') {
+      stored = makeDraft({ id: assetDraftId, kind: 'asset', fields: requestFields(request), savedAt: laterAt });
+      return { body: { draft: stored } };
+    }
+    return { status: 404, body: { error: 'unexpected request' } };
+  });
+
+  const region = await waitForRegion(page);
+  await waitForText(region, 'Rope', 'expected the retained image draft');
+  await draftCard(page, 'Rope').click();
+  const editor = await editorRegion(page, 'Asset');
+  await waitFor(async () => (await editor.getByLabel(/^Name$/i).inputValue()) === 'Rope', 'expected the retained draft fields');
+
+  await chooseImage(editor, 'first.png', tinyPngBase64);
+  await waitFor(() => uploadCount === 1, 'expected the first upload request');
+  assert.equal(await button(editor, /^Publish draft$/i).isDisabled(), true, 'the first pending upload must not publish');
+  await chooseImage(editor, 'second.png', secondPngBase64);
+  await waitFor(() => uploadCount === 2, 'expected a newer upload request');
+  assert.equal(await button(editor, /^Publish draft$/i).isDisabled(), true, 'a newer pending upload must not publish');
+
+  firstUpload.resolve({ status: 201, body: { url: imageUrl, mediaType: 'image/png' } });
+  await sleep(250);
+  assert.equal(await button(editor, /^Publish draft$/i).isDisabled(), true, 'an older completion must not unlock the newer pending upload');
+  assert.equal(imageReadRequests(requests, assetDraftId).length, 0, 'an older completion must not request a preview for a superseded selection');
+  assert.equal(await editor.locator('img').count(), 0, 'an older completion must not preview a superseded selection');
+  assert.equal(await editor.getByRole('alert').count(), 0, 'an older completion must not report an error for a superseded selection');
+
+  secondUpload.resolve({ status: 201, body: { url: secondImageUrl, mediaType: 'image/png' } });
+  await waitFor(() => imageReadRequests(requests, assetDraftId).length === 1, 'expected the newer selection preview read');
+  const read = imageReadRequests(requests, assetDraftId)[0]!;
+  assert.deepEqual(read.body, { accountId: accountA, url: secondImageUrl });
+  assert.equal(read.headers.authorization, 'Bearer token-a');
+  await waitForLoadedPreview(editor);
+
+  await button(editor, /^Save draft$/i).click();
+  await waitFor(() => requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}`, 'POST').length === 1, 'expected the newer selection save');
+  assert.deepEqual(
+    mediaDescriptors(requestFields(requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}`, 'POST')[0]!)),
+    [{ url: secondImageUrl, mediaType: 'image/png' }],
+    'saving must keep the newer image selection descriptor'
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('previews every saved image descriptor and removes each independently while preserving sibling descriptors and extensions', async (t) => {
+  const firstDescriptor = { url: imageUrl, mediaType: 'image/png', extension: { label: 'first', rank: 1 } };
+  const textDescriptor = { mediaType: 'text/plain', value: 'Caption text' };
+  const secondDescriptor = { url: secondImageUrl, mediaType: 'image/png', extension: { label: 'second', rank: 2 } };
+  let stored = makeDraft({
+    id: assetDraftId,
+    kind: 'asset',
+    fields: { name: 'Rope', text: 'Stored text', media: [firstDescriptor, textDescriptor, secondDescriptor] },
+    savedAt: observedAt
+  });
+  const savedFields: Array<Record<string, unknown>> = [];
+  const { page, requests, errors } = await openFixture(t, (request) => {
+    if (request.pathname === '/api/library' && request.method === 'GET') {
+      return libraryPage(accountA, { drafts: [stored] });
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'GET') {
+      return { body: { draft: stored } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read` && request.method === 'POST') {
+      const url = asRecord(request.body).url;
+      return { body: { mediaType: 'image/png', data: url === secondImageUrl ? secondPngBase64 : tinyPngBase64 } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'POST') {
+      const fields = requestFields(request);
+      savedFields.push(fields);
+      stored = makeDraft({ id: assetDraftId, kind: 'asset', fields, savedAt: laterAt });
+      return { body: { draft: stored } };
+    }
+    return { status: 404, body: { error: 'unexpected request' } };
+  });
+
+  const region = await waitForRegion(page);
+  await waitForText(region, 'Rope', 'expected the retained image draft');
+  await draftCard(page, 'Rope').click();
+  const editor = await editorRegion(page, 'Asset');
+
+  await waitFor(async () => (await editor.locator('img').count()) === 2, 'expected a visible preview for every saved image descriptor');
+  const previews = editor.locator('img');
+  await waitFor(async () => {
+    const count = await previews.count();
+    if (count !== 2) return false;
+    for (let index = 0; index < count; index += 1) {
+      const loaded = await previews.nth(index).evaluate((element) => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0);
+      if (!loaded) return false;
+    }
+    return true;
+  }, 'expected every saved image preview to load');
+  await waitFor(() => [imageUrl, secondImageUrl].every((url) => imageReadRequests(requests, assetDraftId).some((request) => asRecord(request.body).url === url && request.headers.authorization === 'Bearer token-a')), 'expected an authenticated preview read for every saved image descriptor');
+
+  const removeButtons = editor.getByRole('button', { name: /remove.*image|image.*remove/i });
+  assert.equal(await removeButtons.count(), 2, 'every saved image descriptor must expose an independent remove action');
+  for (let index = 0; index < 2; index += 1) {
+    assert.equal(await removeButtons.nth(index).isVisible(), true, 'every remove action must be visible');
+    assert.equal(await removeButtons.nth(index).isEnabled(), true, 'every remove action must be usable');
+  }
+
+  await removeButtons.first().click();
+  await waitFor(async () => (await editor.locator('img').count()) === 1, 'removing one image must leave exactly one visible preview');
+  const remainingPreview = editor.locator('img').first();
+  await waitFor(
+    async () => remainingPreview.evaluate((element) => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0),
+    'the preserved image preview must load'
+  );
+
+  await button(editor, /^Save draft$/i).click();
+  await waitFor(() => savedFields.length === 1, 'expected the save after removing one image');
+  const remaining = mediaDescriptors(savedFields[0]!);
+  const remainingImages = remaining.filter((descriptor) => descriptor.url === imageUrl || descriptor.url === secondImageUrl);
+  assert.equal(remainingImages.length, 1, 'removing one image must preserve exactly the other saved image descriptor');
+  const survivor = remainingImages[0]!;
+  assert.equal(
+    asRecord(survivor.extension).label,
+    asRecord(survivor.url === imageUrl ? firstDescriptor.extension : secondDescriptor.extension).label,
+    'the preserved image descriptor must keep its unknown extensions'
+  );
+  assert.ok(
+    remaining.some((descriptor) => descriptor.mediaType === 'text/plain' && descriptor.value === textDescriptor.value),
+    'removing an image must preserve sibling non-image descriptors'
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('loads draft Library card images through the authenticated read path with no direct private fetch before and after save and reopen', async (t) => {
+  const descriptor = { url: imageUrl, mediaType: 'image/png', extension: { source: 'upload' } };
+  let stored = makeDraft({
+    id: assetDraftId,
+    kind: 'asset',
+    fields: { name: 'Rope', text: 'Stored text', media: [descriptor] },
+    savedAt: observedAt
+  });
+  const { page, requests, errors } = await openFixture(t, (request) => {
+    if (request.pathname === '/api/library' && request.method === 'GET') {
+      return libraryPage(accountA, { drafts: [stored] });
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'GET') {
+      return { body: { draft: stored } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}/images/read` && request.method === 'POST') {
+      return { body: { mediaType: 'image/png', data: tinyPngBase64 } };
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(assetDraftId)}` && request.method === 'POST') {
+      stored = makeDraft({ id: assetDraftId, kind: 'asset', fields: requestFields(request), savedAt: laterAt });
+      return { body: { draft: stored } };
+    }
+    return { status: 404, body: { error: 'unexpected request' } };
+  });
+  const privatePath = new URL(imageUrl).pathname;
+  const directPrivateRequests = (): RequestInfo[] => requests.filter((request) => request.pathname === privatePath);
+
+  const region = await waitForRegion(page);
+  await waitForText(region, 'Rope', 'expected the retained image draft card');
+  await waitFor(() => imageReadRequests(requests, assetDraftId).length === 1, 'expected the draft Library card to use the authenticated image read path');
+  const cardRead = imageReadRequests(requests, assetDraftId)[0]!;
+  assert.deepEqual(cardRead.body, { accountId: accountA, url: imageUrl });
+  assert.equal(cardRead.headers.authorization, 'Bearer token-a');
+
+  const card = draftCard(page, 'Rope');
+  const cardImage = card.locator('img').first();
+  await cardImage.waitFor({ state: 'visible', timeout: settleTimeout });
+  await waitFor(
+    async () => cardImage.evaluate((element) => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0),
+    'expected the draft Library card image to load through the authenticated read path'
+  );
+  assert.notEqual(await cardImage.getAttribute('src'), imageUrl, 'the draft card must not point the image at the private upload URL');
+  assert.equal(directPrivateRequests().length, 0, 'the draft card must not make an unauthenticated direct private image request');
+
+  await card.click();
+  const editor = await editorRegion(page, 'Asset');
+  await waitForLoadedPreview(editor);
+  await button(editor, /^Save draft$/i).click();
+  await waitFor(() => requestsFor(requests, `/api/drafts/${encodeURIComponent(assetDraftId)}`, 'POST').length === 1, 'expected the draft save to keep the image descriptor');
+  await button(editor, /^Close editor$/i).click();
+
+  const readsBeforeReopen = imageReadRequests(requests, assetDraftId).length;
+  await draftCard(page, 'Rope').click();
+  const reopened = await editorRegion(page, 'Asset');
+  await waitFor(() => imageReadRequests(requests, assetDraftId).length > readsBeforeReopen, 'expected a fresh authenticated preview after reopening the saved draft');
+  const reopenRead = imageReadRequests(requests, assetDraftId).at(-1)!;
+  assert.deepEqual(reopenRead.body, { accountId: accountA, url: imageUrl });
+  assert.equal(reopenRead.headers.authorization, 'Bearer token-a');
+  await waitForLoadedPreview(reopened);
+  assert.equal(directPrivateRequests().length, 0, 'reopening the saved draft must not make an unauthenticated direct private image request');
   assert.deepEqual(errors, []);
 });

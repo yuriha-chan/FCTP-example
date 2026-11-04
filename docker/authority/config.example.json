@@ -15,5 +15,13 @@
   "administrator": "@governor@authority.example.org",
   "vesselNames": {},
   "startingPorts": ["https://west.example.org/objects/ports/east"],
-  "accountPasswordsFile": "/run/secrets/account-passwords.json"
+  "accountPasswordsFile": "/run/secrets/account-passwords.json",
+  "objectStorage": {
+    "endpoint": "http://rustfs:9000",
+    "region": "us-east-1",
+    "bucket": "image-bucket",
+    "accessKeyIdFile": "/run/secrets/s3-access-key",
+    "secretAccessKeyFile": "/run/secrets/s3-secret-key",
+    "forcePathStyle": true
+  }
 }

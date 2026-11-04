@@ -59,9 +59,17 @@ function writeJson(response: ServerResponse, status: number, body: unknown): voi
   response.end(JSON.stringify(body));
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+const IMAGE_UPLOAD_BODY_MAX_BYTES = 15 * 1024 * 1024;
+
+async function readJsonBody(request: IncomingMessage, maxBytes?: number): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
-  for await (const chunk of request) chunks.push(Buffer.from(chunk));
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.from(chunk);
+    size += buffer.length;
+    if (maxBytes !== undefined && size > maxBytes) throw new ApiError(413, 'request-too-large');
+    chunks.push(buffer);
+  }
   const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new TypeError('Request body must be a JSON object');
   return parsed as Record<string, unknown>;
@@ -204,6 +212,24 @@ function draftPath(pathname: string): { draftId: string; publish: boolean } | un
   if (!detail) return undefined;
   try {
     return { draftId: decodeURIComponent(detail[1]!), publish: false };
+  } catch {
+    throw new ApiError(404, 'draft-not-found');
+  }
+}
+
+function draftImagePath(pathname: string): { draftId: string; read: boolean } | undefined {
+  const read = /^\/api\/drafts\/([^/]+)\/images\/read$/.exec(pathname);
+  if (read) {
+    try {
+      return { draftId: decodeURIComponent(read[1]!), read: true };
+    } catch {
+      throw new ApiError(404, 'draft-not-found');
+    }
+  }
+  const upload = /^\/api\/drafts\/([^/]+)\/images$/.exec(pathname);
+  if (!upload) return undefined;
+  try {
+    return { draftId: decodeURIComponent(upload[1]!), read: false };
   } catch {
     throw new ApiError(404, 'draft-not-found');
   }
@@ -469,6 +495,18 @@ export async function createClientApplication(options: CreateClientApplicationOp
           const accountId = accountScope(url, body, true)!;
           await requireClient(state, request, accountId);
           await send(201, await authoring.createDraft({ accountId, kind: bodyKind(body), fields: body.fields }));
+          return true;
+        }
+        const draftImage = draftImagePath(pathname);
+        if (draftImage && request.method === 'POST') {
+          const body = await readJsonBody(request, IMAGE_UPLOAD_BODY_MAX_BYTES);
+          const accountId = accountScope(url, body, true)!;
+          await requireClient(state, request, accountId);
+          if (draftImage.read) {
+            await send(200, await authoring.readImage(draftImage.draftId, { accountId, url: body.url }));
+            return true;
+          }
+          await send(201, await authoring.uploadImage(draftImage.draftId, { accountId, mediaType: body.mediaType, data: body.data }));
           return true;
         }
         const draft = draftPath(pathname);

@@ -21,16 +21,19 @@ import {
   refreshExplorePlaces,
   refreshLibrary,
   saveDraft,
+  uploadDraftImage,
   type ExplorePlacesResponse,
+  type ImageDescriptor,
   type LibraryResponse
 } from './application-api';
+import { isImageMediaType, useDraftImagePreviews } from './use-draft-image-previews';
 import { ReferencePicker } from './reference-picker';
 import type { ReferencePickerKind, ReferencePickerSelection, ReferencePickerSource } from './reference-picker';
 import type { AuthoringEditKind, AuthoringEditRoute } from './router';
 import { ResourceReader } from './resource-reader';
 import type { ResourceReference } from './resource-reader';
 import { AssetEditor } from './asset-editor';
-import { AssetCard } from './asset-card';
+import { AssetCard, type AssetCardProps } from './asset-card';
 import { VarietyCard } from './variety-card';
 import { HandleLabel } from './handle-label';
 import { ObjectIdentifier } from './object-identifier';
@@ -130,6 +133,29 @@ function draftMedia(draft: AuthoringDraft): LibraryMedia[] | undefined {
   return typeof text === 'string' && text.length > 0
     ? [{ mediaType: 'text/plain', value: text }]
     : undefined;
+}
+
+function isImageDescriptor(value: unknown): value is ImageDescriptor {
+  return isRecord(value) && typeof value.url === 'string' && value.url.length > 0 && isImageMediaType(value.mediaType);
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== 'string') {
+        reject(new Error('The selected image could not be read.'));
+        return;
+      }
+      const comma = result.indexOf(',');
+      resolve(comma === -1 ? result : result.slice(comma + 1));
+    };
+    reader.onerror = () => {
+      reject(reader.error ?? new Error('The selected image could not be read.'));
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function publishedDraftEntries(
@@ -434,6 +460,21 @@ function VarietyList(props: {
   );
 }
 
+function DraftAssetCard(props: AssetCardProps & { draft: AuthoringDraft }): ReactElement {
+  const { draft, ...card } = props;
+  const previews = useDraftImagePreviews(draft.accountId, draft.id, draftMedia(draft));
+  const media = draftMedia(draft)?.map((descriptor, index): LibraryMedia => {
+    const preview = previews.find((image) => image.index === index);
+    if (preview === undefined) return descriptor;
+    const fields = { ...descriptor };
+    delete fields.url;
+    return preview.src === undefined
+      ? { ...fields, state: preview.error === undefined ? 'not-retrieved' : 'unavailable' }
+      : { ...fields, url: preview.src };
+  });
+  return <AssetCard {...card} {...(media === undefined ? {} : { media })} />;
+}
+
 function AssetList(props: {
   title: string;
   entries: readonly LibraryEntry[];
@@ -452,14 +493,13 @@ function AssetList(props: {
       <ul className={styles.list}>
         {drafts.map((draft) => {
           const published = merged.published.get(draft.id);
-          const media = draftMedia(draft);
           return (
             <li key={`draft:${draft.id}`}>
-              <AssetCard
+              <DraftAssetCard
+                draft={draft}
                 name={draftTitle(draft, published)}
                 {...(published?.creator === undefined ? {} : { creator: published.creator })}
                 {...(published?.holder === undefined ? {} : { holder: published.holder })}
-                {...(media === undefined ? {} : { media })}
                 status={draftStatus(draft, activeDraftId, activeDirty)}
                 onPress={() => onEditDraft(draft.id)}
               />
@@ -507,6 +547,8 @@ export function Authoring(props: AuthoringProps): ReactElement {
   const [publication, setPublication] = useState<PublicationState | undefined>();
   const [checking, setChecking] = useState(false);
   const [reader, setReader] = useState<ResourceReference | undefined>();
+  const [imageUploading, setImageUploading] = useState(false);
+  const [imageError, setImageError] = useState<string | undefined>();
 
   const accountRef = useRef(accountId);
   const scopeGeneration = useRef(0);
@@ -530,6 +572,8 @@ export function Authoring(props: AuthoringProps): ReactElement {
   const exploreAttempted = useRef(false);
   const refreshingExploreRef = useRef(false);
   const pickerRef = useRef<PickerState | undefined>(undefined);
+  const imageUploadingRef = useRef(false);
+  const imageUploadGeneration = useRef(0);
 
   const applyLibrary = (value: LibraryResponse | undefined): void => {
     libraryRef.current = value;
@@ -554,6 +598,13 @@ export function Authoring(props: AuthoringProps): ReactElement {
   const applyBaseline = (value: Record<string, unknown>): void => {
     baselineRef.current = value;
     setBaseline(value);
+  };
+
+  const resetImageState = (): void => {
+    imageUploadGeneration.current += 1;
+    imageUploadingRef.current = false;
+    setImageUploading(false);
+    setImageError(undefined);
   };
 
   const setProductionValidity = (valid: boolean): void => {
@@ -607,6 +658,7 @@ export function Authoring(props: AuthoringProps): ReactElement {
     setChecking(false);
     setPublication(undefined);
     setReader(undefined);
+    resetImageState();
     setExploreLoading(false);
     setExploreError(undefined);
     setRefreshingExplore(false);
@@ -770,6 +822,7 @@ export function Authoring(props: AuthoringProps): ReactElement {
   const startNew = (kind: AuthoringKind): void => {
     closePicker();
     openGeneration.current += 1;
+    resetImageState();
     const next = kind === 'asset'
       ? { name: '', text: '' }
       : { name: '', mass: 0, version: '' };
@@ -818,6 +871,7 @@ export function Authoring(props: AuthoringProps): ReactElement {
   };
 
   const applyDraft = (draft: AuthoringDraft): void => {
+    if (editorRef.current?.draftId !== draft.id) resetImageState();
     const next = { ...draft.fields };
     applyEditor({ draftId: draft.id, kind: draft.kind });
     applyFields(next);
@@ -831,6 +885,7 @@ export function Authoring(props: AuthoringProps): ReactElement {
   const closeEditor = (): void => {
     closePicker();
     openGeneration.current += 1;
+    resetImageState();
     applyEditor(undefined);
     applyFields({});
     applyBaseline({});
@@ -887,6 +942,74 @@ export function Authoring(props: AuthoringProps): ReactElement {
     if (edit === undefined) return;
     window.localStorage.setItem(AUTHORING_EDIT_STORAGE_KEY, JSON.stringify(edit));
   }, [edit]);
+
+  const imagePreviews = useDraftImagePreviews(accountId, editor?.kind === 'asset' ? editor.draftId : undefined, fields.media);
+
+  const beginImageUpload = (file: File): void => {
+    const current = editorRef.current;
+    const account = accountId;
+    if (current === undefined || current.kind !== 'asset' || current.draftId === undefined || account === undefined) return;
+    if (!isImageMediaType(file.type) || file.size === 0 || file.size > 10 * 1024 * 1024) {
+      setImageError('Choose a PNG, JPEG, GIF, or WebP image up to 10 MiB.');
+      return;
+    }
+    const draftId = current.draftId;
+    const scope = scopeGeneration.current;
+    const selection = openGeneration.current;
+    imageUploadGeneration.current += 1;
+    const generation = imageUploadGeneration.current;
+    imageUploadingRef.current = true;
+    setImageUploading(true);
+    setImageError(undefined);
+    const isCurrent = (): boolean => scope === scopeGeneration.current
+      && accountRef.current === account
+      && generation === imageUploadGeneration.current
+      && selection === openGeneration.current
+      && editorRef.current?.draftId === draftId;
+    readFileAsBase64(file)
+      .then((data) => isCurrent() ? uploadDraftImage(draftId, { accountId: account, mediaType: file.type, data }) : undefined)
+      .then(
+        (response) => {
+          if (!isCurrent()) return;
+          imageUploadingRef.current = false;
+          setImageUploading(false);
+          if (!isImageDescriptor(response)) {
+            setImageError('The server returned an unexpected image descriptor.');
+            return;
+          }
+          const latest = fieldsRef.current;
+          const media = Array.isArray(latest.media) ? latest.media.slice() : [];
+          media.push({ url: response.url, mediaType: response.mediaType });
+          const next = { ...latest, media };
+          dirtySinceOpen.current = true;
+          fieldsRef.current = next;
+          setFields(next);
+          setImageError(undefined);
+        },
+        (error: unknown) => {
+          if (!isCurrent()) return;
+          imageUploadingRef.current = false;
+          setImageUploading(false);
+          setImageError(errorText(error));
+        }
+      );
+  };
+
+  const removeImage = (index: number): void => {
+    const current = editorRef.current;
+    if (current === undefined || current.kind !== 'asset') return;
+    const latest = fieldsRef.current;
+    const media = Array.isArray(latest.media) ? latest.media : [];
+    if (!isRecord(media[index]) || !isImageMediaType(media[index].mediaType)) return;
+    imageUploadGeneration.current += 1;
+    imageUploadingRef.current = false;
+    setImageUploading(false);
+    setImageError(undefined);
+    const next = { ...latest, media: media.filter((_, candidate) => candidate !== index) };
+    dirtySinceOpen.current = true;
+    fieldsRef.current = next;
+    setFields(next);
+  };
 
   const handleFieldsChange = (next: Record<string, unknown>): void => {
     dirtySinceOpen.current = true;
@@ -957,7 +1080,7 @@ export function Authoring(props: AuthoringProps): ReactElement {
     const current = editorRef.current;
     const account = accountId;
     if (current === undefined || account === undefined || current.draftId === undefined) return;
-    if (publishingRef.current || savingRef.current) return;
+    if (publishingRef.current || savingRef.current || imageUploadingRef.current) return;
     if (JSON.stringify(fieldsRef.current) !== JSON.stringify(baselineRef.current)) {
       setEditorError('Save the draft before publishing; unsaved changes are not published.');
       return;
@@ -1070,7 +1193,7 @@ export function Authoring(props: AuthoringProps): ReactElement {
   };
 
   const dirty = editor !== undefined && JSON.stringify(fields) !== JSON.stringify(baseline);
-  const canPublish = editor !== undefined && editor.draftId !== undefined && !dirty && !saving && !publishing;
+  const canPublish = editor !== undefined && editor.draftId !== undefined && !dirty && !saving && !publishing && !imageUploading;
   const showEditor = edit !== undefined || onOpenDraft === undefined;
   const editorErrors = [editorError, ...validationErrors].filter((message): message is string => message !== undefined);
 
@@ -1229,6 +1352,13 @@ export function Authoring(props: AuthoringProps): ReactElement {
           onSave={saveCurrent}
           onPublish={publishCurrent}
           onClose={closeEditorPage}
+          image={{
+            items: imagePreviews,
+            uploading: imageUploading,
+            ...(imageError === undefined ? {} : { error: imageError }),
+            onChoose: beginImageUpload,
+            onRemove: removeImage
+          }}
         />
       ) : (
         <VarietyEditor

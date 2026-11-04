@@ -4,13 +4,16 @@ import { signJsonLd, createLocalDocumentLoader } from '@fctp/identity';
 import { validateModel, validateProduction, type Asset, type AssetGrant, type Production, type URI, type Variety } from '@fctp/protocol';
 import type { Authority } from './bootstrap.js';
 import type { HomeService } from './home.js';
+import { IMAGE_UPLOAD_JSON_MAX_BYTES, imageObjectKey, ImageValidationError, validateImageUpload, type ImageObjectStorage } from './image-storage.js';
 
-interface AuthoringState { players: Record<string, { assets: Asset[]; varieties: Variety[]; grants: AssetGrant[]; media: Record<string, string> }> }
+interface AuthoringImage { key: string; mediaType: string; published: boolean }
+interface AuthoringPlayer { assets: Asset[]; varieties: Variety[]; grants: AssetGrant[]; media: Record<string, string>; images?: Record<string, AuthoringImage> }
+interface AuthoringState { players: Record<string, AuthoringPlayer> }
 export interface AuthoringService {
   catalog(playerId: URI): Promise<{ actor: URI; assets: Asset[]; varieties: Variety[]; grants: AssetGrant[] }>;
 }
 
-export function installAuthoring(authority: Authority, home: HomeService, origin: string): AuthoringService {
+export function installAuthoring(authority: Authority, home: HomeService, origin: string, imageStorage?: ImageObjectStorage): AuthoringService {
   const base = origin.replace(/\/$/, '');
   const playerNames = new Map(Object.entries(authority.players).map(([name, player]) => [player.id, name]));
   const loader = createLocalDocumentLoader(new Map(Object.values(authority.keys).map(({ keyPair, publicKey }) => [keyPair.id, publicKey])));
@@ -25,6 +28,25 @@ export function installAuthoring(authority: Authority, home: HomeService, origin
   };
   authority.server.addRoute(async ({ request, response, url }) => {
     const send = (status: number, body: unknown): void => json(response, status, body);
+    const imageMatch = /^\/objects\/players\/([^/]+)\/images\/([^/]+)$/.exec(url.pathname);
+    if (imageMatch && request.method === 'GET') {
+      const player = authority.players[decodeURIComponent(imageMatch[1]!)];
+      if (!player) { send(404, { error: 'not-found' }); return true; }
+      const imageUrl = `${base}${url.pathname}`;
+      const image = await authority.server.store.read((state) => (state.domain.authoring as AuthoringState | undefined)?.players[player.id]?.images?.[imageUrl]);
+      if (!image) { send(404, { error: 'not-found' }); return true; }
+      if (!image.published) {
+        const callerId = await authenticate(request, home);
+        if (callerId !== player.id) { send(callerId ? 403 : 401, { error: callerId ? 'forbidden' : 'unauthorized' }); return true; }
+      }
+      if (!imageStorage) { send(503, { error: 'image-storage-unavailable' }); return true; }
+      let bytes: Uint8Array;
+      try { bytes = await imageStorage.get(image.key); }
+      catch { send(500, { error: 'image-storage-failure' }); return true; }
+      response.writeHead(200, { 'Content-Type': image.mediaType, 'Content-Length': String(bytes.byteLength), 'X-Content-Type-Options': 'nosniff', 'Cache-Control': image.published ? 'public, max-age=0, must-revalidate' : 'private, no-store' });
+      response.end(Buffer.from(bytes));
+      return true;
+    }
     const mediaMatch = /^\/objects\/players\/[^/]+\/media\/([^/]+)$/.exec(url.pathname);
     if (mediaMatch && request.method === 'GET') {
       const mediaId = `${base}${url.pathname}`;
@@ -46,6 +68,28 @@ export function installAuthoring(authority: Authority, home: HomeService, origin
     const playerId = await authenticate(request, home);
     if (!playerId) { send(401, { error: 'unauthorized' }); return true; }
     if (request.method === 'GET' && url.pathname === '/local/repository/authoring') { send(200, await service.catalog(playerId)); return true; }
+    if (request.method === 'POST' && url.pathname === '/local/repository/authoring/images') {
+      if (!imageStorage) { send(503, { error: 'image-storage-unavailable' }); return true; }
+      try {
+        const body = await readObject(request, IMAGE_UPLOAD_JSON_MAX_BYTES);
+        rejectKeys(body, ['mediaType', 'data']);
+        const upload = validateImageUpload(body.mediaType, body.data);
+        const playerName = playerNames.get(playerId)!;
+        const imageUrl = `${base}/objects/players/${encodeURIComponent(playerName)}/images/${randomBytes(16).toString('hex')}`;
+        const key = imageObjectKey();
+        try { await imageStorage.put(key, upload.bytes, upload.mediaType); }
+        catch { send(500, { error: 'image-storage-failure' }); return true; }
+        await authority.server.store.transaction((state) => {
+          const authoringState = (state.domain.authoring ??= { players: {} }) as AuthoringState;
+          const row = (authoringState.players[playerId] ??= { assets: [], varieties: [], grants: [], media: {} });
+          (row.images ??= {})[imageUrl] = { key, mediaType: upload.mediaType, published: false };
+        });
+        send(201, { url: imageUrl, mediaType: upload.mediaType }); return true;
+      } catch (error) {
+        if (!(error instanceof BadRequestError) && !(error instanceof ImageValidationError)) throw error;
+        send(400, { error: error.message }); return true;
+      }
+    }
     if (request.method !== 'POST' || !['/local/repository/authoring/assets', '/local/repository/authoring/varieties'].includes(url.pathname)) { send(404, { error: 'not-found' }); return true; }
     try {
       const body = await readObject(request);
@@ -54,12 +98,15 @@ export function installAuthoring(authority: Authority, home: HomeService, origin
       const collectionRoot = `${base}/objects/players/${encodeURIComponent(playerName)}`;
       const id = (): URI => `${collectionRoot}/${randomBytes(16).toString('hex')}`;
       if (url.pathname.endsWith('/assets')) {
-        rejectKeys(body, ['name', 'text']);
+        rejectKeys(body, ['name', 'text', 'media']);
         const text = requiredString(body, 'text', true);
-        const assetId = id(); const mediaId = `${collectionRoot}/media/${randomBytes(16).toString('hex')}`;
-        const asset = await signJsonLd({ '@context': ['https://www.w3.org/ns/activitystreams', 'https://fctp.example/context'], id: assetId, type: 'Asset', name, creator: [playerId], holder: playerId, media: [{ url: mediaId, mediaType: 'text/plain' }] }, authority.keys[playerName]!.keyPair, loader) as unknown as Asset;
+        const assetId = id(); const textMediaId = `${collectionRoot}/media/${randomBytes(16).toString('hex')}`;
+        const retained = body.media === undefined ? [] : await retainedImageMedia(authority, playerId, body.media);
+        const imageMedia = retained.map(({ url, mediaType }) => ({ url, mediaType }));
+        const textMedia = imageMedia.length > 0 && text.length === 0 ? [] : [{ url: textMediaId, mediaType: 'text/plain' }];
+        const asset = await signJsonLd({ '@context': ['https://www.w3.org/ns/activitystreams', 'https://fctp.example/context'], id: assetId, type: 'Asset', name, creator: [playerId], holder: playerId, media: [...imageMedia, ...textMedia] }, authority.keys[playerName]!.keyPair, loader) as unknown as Asset;
         const activityId = id();
-        await authority.server.commit((domain) => { const state = (domain.authoring ??= { players: {} }) as AuthoringState; const row = (state.players[playerId] ??= { assets: [], varieties: [], grants: [], media: {} }); row.assets.push(asset); row.media[mediaId] = text; }, [], [{ actorId: playerId, object: asset as unknown as Record<string, unknown>, activityId }]);
+        await authority.server.commit((domain) => { const state = (domain.authoring ??= { players: {} }) as AuthoringState; const row = (state.players[playerId] ??= { assets: [], varieties: [], grants: [], media: {} }); row.assets.push(asset); if (textMedia.length > 0) row.media[textMediaId] = text; if (retained.length > 0) { const images = (row.images ??= {}); for (const { url } of retained) { const image = images[url]; if (image) image.published = true; } } }, [], [{ actorId: playerId, object: asset as unknown as Record<string, unknown>, activityId }]);
         send(201, { asset, activity: await archived(authority, playerId, activityId) }); return true;
       }
       rejectKeys(body, ['name', 'mass', 'version', 'asset', 'production']);
@@ -98,7 +145,23 @@ export function installAuthoring(authority: Authority, home: HomeService, origin
 
 async function archived(authority: Authority, actorId: URI, activityId: URI): Promise<unknown> { return authority.server.store.read((state) => state.outboxArchive.find((item) => item.actorId === actorId && item.activity.id === activityId)?.activity); }
 async function authenticate(request: IncomingMessage, home: HomeService): Promise<URI | undefined> { const value = request.headers.authorization ?? ''; return value.startsWith('Bearer ') ? home.authenticateNativeToken(value.slice(7)) : undefined; }
-async function readObject(request: IncomingMessage): Promise<Record<string, unknown>> { const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk)); let value: unknown; try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch (error) { if (error instanceof SyntaxError) throw new BadRequestError('malformed JSON'); throw error; } if (!value || typeof value !== 'object' || Array.isArray(value)) throw new BadRequestError('request must be an object'); return value as Record<string, unknown>; }
+async function retainedImageMedia(authority: Authority, playerId: URI, value: unknown): Promise<Array<{ url: URI; mediaType: string }>> {
+  if (!Array.isArray(value)) throw new BadRequestError('media must be an array');
+  if (value.length === 0) return [];
+  const images: Record<string, AuthoringImage> = await authority.server.store.read((state) => (state.domain.authoring as AuthoringState | undefined)?.players[playerId]?.images ?? {});
+  const retained: Array<{ url: URI; mediaType: string }> = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new BadRequestError('invalid media descriptor');
+    const descriptor = item as Record<string, unknown>;
+    if (Object.keys(descriptor).some((key) => !['url', 'mediaType'].includes(key))) throw new BadRequestError('invalid media descriptor');
+    if (typeof descriptor.url !== 'string' || typeof descriptor.mediaType !== 'string') throw new BadRequestError('invalid media descriptor');
+    const image = images[descriptor.url];
+    if (!image || image.mediaType !== descriptor.mediaType) throw new BadRequestError('image reference is not owned');
+    retained.push({ url: descriptor.url as URI, mediaType: image.mediaType });
+  }
+  return retained;
+}
+async function readObject(request: IncomingMessage, maxBytes?: number): Promise<Record<string, unknown>> { const chunks: Buffer[] = []; let size = 0; for await (const chunk of request) { const buffer = Buffer.from(chunk); size += buffer.length; if (maxBytes !== undefined && size > maxBytes) throw new BadRequestError('request too large'); chunks.push(buffer); } let value: unknown; try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch (error) { if (error instanceof SyntaxError) throw new BadRequestError('malformed JSON'); throw error; } if (!value || typeof value !== 'object' || Array.isArray(value)) throw new BadRequestError('request must be an object'); return value as Record<string, unknown>; }
 function requiredString(body: Record<string, unknown>, key: string, allowEmpty = false): string { const value = body[key]; if (typeof value !== 'string' || (!allowEmpty && value.trim().length === 0)) throw new BadRequestError(`${key} must be a nonempty string`); return value; }
 function rejectKeys(body: Record<string, unknown>, allowed: string[]): void { if (Object.keys(body).some((key) => !allowed.includes(key))) throw new BadRequestError('unsupported request field'); }
 class BadRequestError extends Error {}

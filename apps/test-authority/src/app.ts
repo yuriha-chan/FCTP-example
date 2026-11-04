@@ -4,6 +4,8 @@ import { createAuthority, type Authority } from './bootstrap.js';
 import { installHome, type HomeService } from './home.js';
 import { installRegistry, type Registry } from './registry.js';
 import { installAuthoring, type AuthoringService } from './authoring.js';
+import type { ImageObjectStorage } from './image-storage.js';
+import { createS3ImageStorage, type S3ImageStorageOptions } from './s3-image-storage.js';
 
 export interface CreateAuthorityAppOptions {
   origin: string;
@@ -23,6 +25,8 @@ export interface CreateAuthorityAppOptions {
   serverDisplayName?: string;
   homeDisplayName?: string;
   registryDisplayName?: string;
+  imageStorage?: ImageObjectStorage;
+  objectStorage?: S3ImageStorageOptions;
 }
 
 export interface AuthorityAppIds {
@@ -41,6 +45,8 @@ export interface AuthorityApp {
 }
 
 export async function createAuthorityApp(options: CreateAuthorityAppOptions): Promise<AuthorityApp> {
+  if (options.imageStorage && options.objectStorage) throw new TypeError('Provide either imageStorage or objectStorage, not both');
+  const imageStorage = options.imageStorage ?? (options.objectStorage ? createS3ImageStorage(options.objectStorage) : undefined);
   const fetcher = options.fetcher ?? fetch;
   const origin = new URL(options.origin).origin;
   const playerNames = options.playerNames ?? ['player'];
@@ -71,7 +77,7 @@ export async function createAuthorityApp(options: CreateAuthorityAppOptions): Pr
     ...(options.accountPasswords ? { accountPasswords: options.accountPasswords } : {})
   });
   await home.ready;
-  const authoring = installAuthoring(authority, home, origin);
+  const authoring = installAuthoring(authority, home, origin, imageStorage);
   const vessels = Object.fromEntries(vesselAssignments.map(([name, vesselName]) => [name, {
     id: `${origin}/objects/vessels/${vesselName}`,
     registry: authority.actor('registry').id,

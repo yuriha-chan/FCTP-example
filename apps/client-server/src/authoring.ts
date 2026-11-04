@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { FctpClient } from '@fctp/client-sdk';
 import type { AccountRecord, ActionEvidence, ActionRecord, AuthoringDraft, AuthoringKind, LibraryData, LibraryEntry, PageResponse, SourcedObservation } from '@fctp/client-sdk';
 import type { URI } from '@fctp/protocol';
-import { catalogData, catalogEntries, publicationBody, publicationEndpoint, publicationObjects, publicationReferences, sanitizeDraftFields } from './adapters/authoring.js';
+import { catalogData, catalogEntries, authoringOrigin, guardedImageUrl, imageUploadEndpoint, isImageMediaType, publicationBody, publicationEndpoint, publicationObjects, publicationReferences, sanitizeDraftFields, type ImageMediaType } from './adapters/authoring.js';
 import type { ActionHandler, ActionService } from './actions.js';
+import { withDeadline } from './deadline.js';
 import type { ObservationService } from './observations.js';
 import { packResourceMedia, packResourceObjects, resourceObjectDocuments, resourceObservationKey } from './resource-observations.js';
 import type { ClientApplicationState } from './store.js';
@@ -34,16 +35,35 @@ export interface DraftSaveInput {
   fields: unknown;
 }
 
+export interface ImageUploadInput {
+  accountId: string;
+  mediaType: unknown;
+  data: unknown;
+}
+
+export interface ImageReadInput {
+  accountId: string;
+  url: unknown;
+}
+
+export interface ImageDescriptor {
+  url: string;
+  mediaType: ImageMediaType;
+}
+
 export interface AuthoringService {
   library(accountId: string): Promise<PageResponse<LibraryData>>;
   refreshLibrary(accountId: string): Promise<PageResponse<LibraryData>>;
   createDraft(input: DraftInput): Promise<{ draft: AuthoringDraft }>;
   getDraft(draftId: string, accountId: string): Promise<{ draft: AuthoringDraft }>;
   saveDraft(draftId: string, input: DraftSaveInput): Promise<{ draft: AuthoringDraft }>;
+  uploadImage(draftId: string, input: ImageUploadInput): Promise<ImageDescriptor>;
+  readImage(draftId: string, input: ImageReadInput): Promise<{ mediaType: ImageMediaType; data: string }>;
   publishDraft(draftId: string, accountId: string): Promise<{ action: ActionRecord; draft: AuthoringDraft }>;
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -51,6 +71,43 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isKind(value: unknown): value is AuthoringKind {
   return value === 'asset' || value === 'variety';
+}
+
+function isCanonicalBase64(data: string): boolean {
+  if (data.length === 0 || data.length % 4 !== 0) return false;
+  if (data.length > Math.ceil(IMAGE_MAX_BYTES / 3) * 4) return false;
+  return Buffer.from(data, 'base64').toString('base64') === data;
+}
+
+function validateImageUploadData(mediaType: unknown, data: unknown): { mediaType: ImageMediaType; data: string } {
+  if (!isImageMediaType(mediaType)) throw new AuthoringRequestError(415, 'unsupported-image-media-type');
+  if (typeof data !== 'string' || !isCanonicalBase64(data)) throw new AuthoringRequestError(400, 'invalid-image-data');
+  const bytes = Buffer.from(data, 'base64');
+  if (bytes.length === 0) throw new AuthoringRequestError(400, 'image-data-empty');
+  if (bytes.length > IMAGE_MAX_BYTES) throw new AuthoringRequestError(413, 'image-data-too-large');
+  return { mediaType, data };
+}
+
+async function readBoundedImage(response: Response, maxBytes: number): Promise<Uint8Array> {
+  if (response.body === null) return new Uint8Array(0);
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new AuthoringRequestError(413, 'image-preview-too-large');
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks);
 }
 
 function retainedValue<T>(observation: SourcedObservation<T>): T | undefined {
@@ -141,6 +198,7 @@ export function createAuthoringService(
 ): AuthoringService {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const sdk = new FctpClient({ fetcher: (input, init) => fetcher(input, { ...init, cache: 'no-store' }) });
+  const call = <T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> => withDeadline(timeoutMs, operation);
 
   const readAccount = async (accountId: string): Promise<AccountRecord> => {
     const account = await state.read((current) => current.accounts[accountId]);
@@ -152,6 +210,13 @@ export function createAuthoringService(
     const account = await readAccount(accountId);
     if (account.login.status !== 'signed-in') throw new AuthoringRequestError(401, 'sign-in-required');
     return account;
+  };
+
+  const requireOwnedAssetDraft = async (draftId: string, accountId: string): Promise<AuthoringDraft> => {
+    const draft = await state.read((current) => draftFromStored(current.drafts[draftId]));
+    if (!draft || draft.accountId !== accountId) throw new AuthoringRequestError(404, 'draft-not-found');
+    if (draft.kind !== 'asset') throw new AuthoringRequestError(400, 'image-requires-asset-draft');
+    return draft;
   };
 
   const readDrafts = async (accountId: string): Promise<AuthoringDraft[]> => state.read((current) => Object.values(current.drafts)
@@ -317,6 +382,66 @@ export function createAuthoringService(
       });
       if (!draft) throw new AuthoringRequestError(404, 'draft-not-found');
       return { draft };
+    },
+    async uploadImage(draftId, input) {
+      const account = await requireSignedIn(input.accountId);
+      await requireOwnedAssetDraft(draftId, input.accountId);
+      const upload = validateImageUploadData(input.mediaType, input.data);
+      const endpoint = imageUploadEndpoint(account);
+      let payload: unknown;
+      try {
+        payload = await call(async (signal) => {
+          const response = await fetcher(endpoint, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${account.login.status === 'signed-in' ? account.login.nativeToken : ''}`
+          },
+          body: JSON.stringify({ mediaType: upload.mediaType, data: upload.data }),
+          cache: 'no-store',
+          redirect: 'error',
+          signal
+          });
+          if (!response.ok) throw new Error('image-upload-failed');
+          return response.json();
+        });
+      } catch {
+        throw new AuthoringRequestError(502, 'image-upload-failed');
+      }
+      if (!isRecord(payload)) throw new AuthoringRequestError(502, 'invalid-image-descriptor');
+      const url = guardedImageUrl(payload.url, authoringOrigin(account));
+      if (url === undefined || payload.mediaType !== upload.mediaType) throw new AuthoringRequestError(502, 'invalid-image-descriptor');
+      return { url, mediaType: upload.mediaType };
+    },
+    async readImage(draftId, input) {
+      const account = await requireSignedIn(input.accountId);
+      await requireOwnedAssetDraft(draftId, input.accountId);
+      const url = guardedImageUrl(input.url, authoringOrigin(account));
+      if (url === undefined) throw new AuthoringRequestError(400, 'invalid-image-url');
+      try {
+        return await call(async (signal) => {
+          const response = await fetcher(url, {
+          method: 'GET',
+          headers: {
+            Accept: 'image/png, image/jpeg, image/gif, image/webp',
+            Authorization: `Bearer ${account.login.status === 'signed-in' ? account.login.nativeToken : ''}`
+          },
+          cache: 'no-store',
+          redirect: 'error',
+          signal
+          });
+          if (!response.ok) throw new AuthoringRequestError(502, 'image-preview-failed');
+          const contentType = (response.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
+          if (!isImageMediaType(contentType)) throw new AuthoringRequestError(502, 'invalid-image-response');
+          const bytes = await readBoundedImage(response, IMAGE_MAX_BYTES);
+          if (bytes.byteLength === 0) throw new AuthoringRequestError(502, 'invalid-image-response');
+          return { mediaType: contentType, data: Buffer.from(bytes).toString('base64') };
+        });
+      } catch (error) {
+        if (error instanceof AuthoringRequestError) throw error;
+        throw new AuthoringRequestError(502, 'image-preview-failed');
+      }
     },
     async publishDraft(draftId, accountId) {
       const account = await requireSignedIn(accountId);

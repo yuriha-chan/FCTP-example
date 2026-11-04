@@ -684,6 +684,19 @@ Published Assets, Varieties, Grants, media, and the Player's public creations co
 
 `Production` data on a Variety is descriptive. It MUST NOT be interpreted as an executable Territory recipe, a job request, or a guarantee that a Territory can perform the described production.
 
+### 10.3 Image media
+
+A Repository MAY provide image upload and read support. This convention specifies the media descriptor and permission boundary, not runtime credential mechanics.
+
+| Method and path | Required permission | Request | Success |
+|---|---|---|---|
+| `POST /local/repository/authoring/images` | player | `{ mediaType: string, data: string }` | `201 { url: URI, mediaType: ImageMediaType }` |
+| `GET /objects/players/{name}/images/{id}` | player while unpublished; none after publication | None | `200` image bytes |
+
+`ImageMediaType` is `image/png`, `image/jpeg`, `image/gif`, or `image/webp`. Upload data MUST be canonical base64 encoding of nonempty bytes, MUST NOT exceed 10 MiB decoded, and MUST have a signature matching the declared media type. An implementation that limits the JSON request body MUST allow at least 15 MiB for this upload shape. SVG is not an accepted image type.
+
+The returned `{ url, mediaType }` descriptor identifies an uploaded image. Upload alone MUST NOT create or publish an Asset. To publish image media, the Player MUST submit the descriptor in an Asset's `media` array when authoring that Asset. The Repository MUST accept only descriptors retained for that same Player with the exact stored media type, and MUST use retained media metadata in the signed Asset. An unpublished image read MUST require the owning Player permission; a published image read is public. The descriptor is not itself published media. Clients MUST NOT automatically replay an upload after an ambiguous outcome; the convention does not require automatic publication or readback.
+
 ## 11. Territory: Policy Endpoints
 
 The following policy endpoints are optional. A Territory server MAY implement any of them. If it implements an endpoint, it MUST satisfy the corresponding requirements.

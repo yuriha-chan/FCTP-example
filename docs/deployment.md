@@ -10,6 +10,14 @@ The Authority configuration accepts `startingPorts`, an array of absolute publis
 
 The example preallocates no vessels and lists `https://west.example.org/objects/ports/east` as a recommendation. Replace it with a Port that the deployment actually publishes and can resolve. A recommendation does not grant permission to land.
 
+### Authority image object storage
+
+Authority supports optional S3-compatible image storage configured with `objectStorage.endpoint`, `region`, `bucket`, `accessKeyIdFile`, `secretAccessKeyFile`, and optional `forcePathStyle`. The endpoint must be an HTTP(S) origin. Credential files are read by Authority; the S3 credentials are service credentials and are not browser or Client credentials. Without object storage, text authoring remains available and image upload is unavailable.
+
+The Authority Compose project includes private, internal RustFS storage with a durable named data volume and a bucket initialization service using the existing Authority Node SDK. It does not expose a public bucket policy. RustFS is optional when operating Authority without image storage. For deployments using image storage, back up both the RustFS object data and Authority metadata together; restoring only one may leave metadata without bytes or orphaned bytes. A lost upload response or orphaned object can require operator follow-up. Automatic deletion, garbage collection, quotas, and image transformations are not provided.
+
+The S3 credential files must be readable by Authority UID 1000 and RustFS UID 10001. Compose adds supplementary group 1000 to RustFS and mounts only the two S3 credential files into that service: give those files group 1000 and mode 0640, accounting for host UID/GID mapping. Keep other Authority secrets at mode 0600, readable only by their intended service user. RustFS `_FILE` credential-variable support is verified in upstream `main`, not in the deployed `latest` image; the Compose stack has not been runtime-verified here.
+
 Create a `secrets/` directory in the Authority, Policy, and Simulation service directories. The Client uses no secret files. Store secrets as UTF-8 files without surrounding quotes; a single final newline is accepted. Images run as the `node` user (UID/GID `1000`), so bind-mounted config and secrets must be readable by that container user. On a normal rootful Linux Docker host, give the secrets directory and files UID `1000` ownership and modes `0700`/`0600`, or use a narrowly scoped ACL for that UID. Account for host UID mapping when using rootless Docker or user namespaces; do not make secrets world-readable. Do not put secret values in the JSON examples, `.env`, source control, image, or command-line arguments.
 
 Authority secrets:
