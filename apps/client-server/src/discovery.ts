@@ -17,7 +17,7 @@ export interface DiscoveryResult {
 export interface DiscoveryService {
   list(): Promise<DiscoveryResult>;
   discover(input: DiscoveryInput): Promise<DiscoveryResult>;
-  remember(actor: FCTPActor, server: string, origin: string, serverName?: string): Promise<void>;
+  remember(actor: FCTPActor, server: string, origin: string, serverName?: string, handle?: string): Promise<void>;
 }
 
 const authorityRoles = new Set<AuthorityRole>(['home', 'territory', 'registry', 'asset-server']);
@@ -62,6 +62,19 @@ function actorHandle(actor: Record<string, unknown>): string | undefined {
 function roleOf(actor: Record<string, unknown>): AuthorityRole | undefined {
   const role = actor.role;
   return typeof role === 'string' && authorityRoles.has(role as AuthorityRole) ? role as AuthorityRole : undefined;
+}
+
+function authorityRecord(actor: Record<string, unknown>, server: string, roles: AuthorityRole[], handle?: string): AuthorityRecord | undefined {
+  if (typeof actor.id !== 'string') return undefined;
+  const publishedHandle = handle ?? actorHandle(actor);
+  const name = typeof actor.name === 'string' && actor.name.length > 0 ? actor.name : undefined;
+  return {
+    ...(publishedHandle ? { handle: publishedHandle } : {}),
+    ...(name === undefined ? {} : { name }),
+    actorId: actor.id,
+    server,
+    roles
+  };
 }
 
 export function createDiscoveryService(state: ClientApplicationState, fetcher: typeof fetch): DiscoveryService {
@@ -114,10 +127,9 @@ export function createDiscoveryService(state: ClientApplicationState, fetcher: t
     const authorities: AuthorityRecord[] = [];
     for (const actor of discovered) {
       const role = roleOf(actor);
-      const actorId = actor.id;
-      if (!role || typeof actorId !== 'string') continue;
-      const handle = actorHandle(actor);
-      authorities.push({ ...(handle ? { handle } : {}), ...(typeof actor.name === 'string' ? { name: actor.name } : {}), actorId, server: new URL(actorId).host, roles: [role] });
+      if (!role || typeof actor.id !== 'string') continue;
+      const authority = authorityRecord(actor, new URL(actor.id).host, [role]);
+      if (authority !== undefined) authorities.push(authority);
     }
     const serverName = isRecord(info) && typeof info.name === 'string' && info.name.trim() ? info.name.trim() : undefined;
     const server: ServerRecord = {
@@ -145,54 +157,34 @@ export function createDiscoveryService(state: ClientApplicationState, fetcher: t
     if (parsed.kind === 'account') {
       const resolution = await sdk.resolveAccount(value);
       const role = roleOf(resolution.homeActor);
-      const handle = actorHandle(resolution.homeActor);
-      const authorities: AuthorityRecord[] = role === undefined ? [] : [{
-        ...(handle ? { handle } : {}),
-        actorId: resolution.homeAuthority,
-        server: resolution.homeServer,
-        roles: [role]
-      }];
-      const server: ServerRecord = {
-        server: resolution.homeServer,
-        origin: resolution.homeOrigin,
-        authorities: authorities.map((authority) => authority.actorId),
-        ...(resolution.serverName === undefined ? {} : { name: resolution.serverName })
-      };
-      return retain(server, authorities);
+      if (role === undefined) {
+        const server: ServerRecord = {
+          server: resolution.homeServer,
+          origin: resolution.homeOrigin,
+          authorities: [],
+          ...(resolution.serverName === undefined ? {} : { name: resolution.serverName })
+        };
+        return retain(server, []);
+      }
+      await remember(resolution.homeActor, resolution.homeServer, resolution.homeOrigin, resolution.serverName, actorHandle(resolution.homeActor));
+      return list();
     }
     const origin = await retainedOrigin(parsed.server);
     const resolution = await sdk.resolveAuthority(value, origin === undefined ? {} : { origin });
     const role = roleOf(resolution.actor as unknown as Record<string, unknown>);
     const roles = role === undefined ? resolution.roles.filter((entry): entry is AuthorityRole => authorityRoles.has(entry as AuthorityRole)) : [role];
     if (roles.length === 0) throw new Error('Resolved Actor does not publish an authority role');
-    const authorities: AuthorityRecord[] = [{
-      handle: value,
-      actorId: resolution.actorId,
-      server: resolution.server,
-      roles
-    }];
-    const server: ServerRecord = {
-      server: parsed.server,
-      origin: origin ?? new URL(resolution.actorId).origin,
-      authorities: [resolution.actorId]
-    };
-    return retain(server, authorities);
+    await remember(resolution.actor, resolution.server, origin ?? new URL(resolution.actorId).origin, undefined, resolution.handle);
+    return list();
   };
 
-  const remember = async (actor: FCTPActor, server: string, origin: string, serverName?: string): Promise<void> => {
+  const remember = async (actor: FCTPActor, server: string, origin: string, serverName?: string, handle?: string): Promise<void> => {
     const role = roleOf(actor);
     if (role === undefined) return;
     const normalized = normalizeOrigin(origin);
-    const handle = actorHandle(actor);
-    const name = typeof actor.name === 'string' && actor.name.length > 0 ? actor.name : undefined;
+    const authority = authorityRecord(actor, server, [role], handle);
+    if (authority === undefined) return;
     const trimmedServerName = serverName?.trim();
-    const authority: AuthorityRecord = {
-      ...(handle ? { handle } : {}),
-      ...(name ? { name } : {}),
-      actorId: actor.id,
-      server,
-      roles: [role]
-    };
     const record: ServerRecord = {
       server,
       origin: normalized.origin,

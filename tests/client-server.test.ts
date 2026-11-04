@@ -347,6 +347,7 @@ interface FixtureAuthorityActor {
   handle: string;
   actorId: string;
   role: FixtureAuthorityRole;
+  name?: string;
 }
 
 interface FixtureAuthority {
@@ -495,7 +496,7 @@ function authorityResponse(authority: FixtureAuthority, url: string, parsed: URL
     return new Response(JSON.stringify({ subject: `acct:${actor.handle}`, links: [{ rel: 'self', href: actor.actorId }] }), { status: 200, headers: { 'Content-Type': 'application/jrd+json' } });
   }
   const actor = authority.actors.find((candidate) => candidate.actorId === url);
-  if (actor) return new Response(JSON.stringify({ id: actor.actorId, role: actor.role }), { status: 200, headers: { 'Content-Type': 'application/activity+json' } });
+  if (actor) return new Response(JSON.stringify({ id: actor.actorId, role: actor.role, ...(actor.name === undefined ? {} : { name: actor.name }) }), { status: 200, headers: { 'Content-Type': 'application/activity+json' } });
   if (parsed.pathname === '/local/info') {
     const actors = Object.fromEntries(authority.actors.map((candidate) => [candidate.role, candidate.actorId]));
     return new Response(JSON.stringify({ kind: 'authority', actor: actors, ids: { actor: actors } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -919,7 +920,7 @@ test('requires exactly one valid server discovery input and resolves a matching 
   const authority: FixtureAuthority = {
     origin: 'http://harbor.test:4200',
     server: 'harbor.test:4200',
-    actors: [{ handle: '@harbor.registry@harbor.test:4200', actorId: 'http://harbor.test:4200/actors/registry', role: 'registry' }]
+    actors: [{ handle: '@harbor.registry@harbor.test:4200', actorId: 'http://harbor.test:4200/actors/registry', role: 'registry', name: 'Harbor Registry' }]
   };
   const fixture = createFixtureFetch([], [authority]);
   const opened = await openFixtureApplication(storeFile, fixture.fetch);
@@ -943,7 +944,10 @@ test('requires exactly one valid server discovery input and resolves a matching 
     const resolved = body.authorities.find((candidate) => candidate.actorId === authority.actors[0]!.actorId);
     assert.ok(resolved);
     assert.ok(resolved.roles.includes('registry'));
+    assert.equal(resolved.name, 'Harbor Registry', 'handle discovery must retain the fetched published name');
+    assert.equal(resolved.handle, authority.actors[0]!.handle, 'handle discovery must retain the published handle');
     assert.ok(fixture.calls.some((call) => new URL(call.url).pathname === '/.well-known/webfinger'));
+    assert.ok(fixture.calls.some((call) => call.url === authority.actors[0]!.actorId), 'authority discovery must fetch the Actor document');
   } finally {
     await opened.client.close();
     await opened.application.close();
