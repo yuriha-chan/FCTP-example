@@ -351,6 +351,7 @@ test('renders a Variety card with title, creator and holder handles, mass, versi
   const creatorOne = 'https://actors.invalid/alloy-smith';
   const creatorTwo = 'https://actors.invalid/ore-cutter';
   const holder = 'https://actors.invalid/foundry-keeper';
+  const oreId = 'https://resources.invalid/varieties/iron-ore';
   const mediaUrl = 'https://media.invalid/varieties/alloy.txt';
   const creatorOneHandle = '@alloy.smith@alpha.test:4200';
   const creatorTwoHandle = '@ore.cutter@alpha.test:4200';
@@ -371,17 +372,21 @@ test('renders a Variety card with title, creator and holder handles, mass, versi
       holder,
       mass: 2.5,
       version: '3.7.2',
+      production: [{ type: 'manufacture', duration: 2, ingredients: [{ variety: oreId, count: 2, data: {} }], yield: [{ probability: 1, count: 1, data: {} }] }],
+      referenceNames: { [oreId]: 'Iron Ore' },
       media: [{ url: mediaUrl, mediaType: 'text/plain', state: 'available', value: mediaText }]
     }
   });
 
   const text = await visibleText(page);
-  for (const expected of ['Amber Alloy', creatorOneHandle, creatorTwoHandle, holderHandle, '2.5', '3.7.2', mediaText]) {
+  for (const expected of ['Amber Alloy', creatorOneHandle, creatorTwoHandle, holderHandle, '2.5', '3.7.2', mediaText, 'Iron Ore', 'Manufactured', 'Asset Creator', 'Variety Manager']) {
     assert.ok(text.includes(expected), `expected ${JSON.stringify(expected)} in ${JSON.stringify(text)}`);
   }
   for (const hidden of [mediaUrl, creatorOne, creatorTwo, holder]) {
     assert.equal(text.includes(hidden), false, `the Variety card must not expose ${JSON.stringify(hidden)} in its normal text`);
   }
+  assert.equal(text.includes('held by'), false, 'the Variety card must use the Variety Manager label instead of held by');
+  assert.equal(text.includes(' by '), false, 'the Variety card must use the Asset Creator label instead of by');
   assert.deepEqual(errors, []);
 });
 
@@ -411,5 +416,152 @@ test('renders image media directly on the Variety card', async (t) => {
 
   assert.equal(await page.locator(`img[src="${mediaUrl}"]`).count(), 1, 'expected the image media to render directly');
   assert.equal((await visibleText(page)).includes(mediaUrl), false, 'the image URL must not be rendered as text');
+  assert.deepEqual(errors, []);
+});
+
+test('renders the Variety reference layout with item heading, lore, recipes, weighted yields, and credits labels', async (t) => {
+  const { page, errors } = await openFixture(t);
+  const copperId = 'https://resources.invalid/varieties/copper';
+  const glassId = 'https://resources.invalid/varieties/glass';
+  const waxId = 'https://resources.invalid/varieties/beeswax';
+  const oreId = 'https://resources.invalid/varieties/iron-ore';
+  const itemId = 'https://resources.invalid/items/lantern-core';
+  const artworkUrl = 'https://media.invalid/varieties/harbor-lantern.png';
+  const lore = 'A lantern kept for the harbor watch on foggy nights.';
+
+  await render(page, {
+    kind: 'one',
+    component: 'variety',
+    props: {
+      name: 'Harbor Lantern',
+      production: [
+        {
+          type: 'manufacture',
+          duration: 4,
+          ingredients: [
+            { variety: copperId, count: 2, data: {} },
+            { variety: glassId, count: 1, data: {} },
+            { id: itemId, variety: waxId, data: {} }
+          ],
+          yield: [{ probability: 0.8, count: 1, data: {} }, { probability: 0.2, count: 2, data: {} }]
+        },
+        {
+          type: 'mine',
+          duration: 1,
+          ingredients: [{ variety: oreId, count: 3, data: {} }],
+          yield: [{ probability: 1, count: 7, data: {} }]
+        }
+      ],
+      referenceNames: {
+        [copperId]: 'Copper',
+        [glassId]: 'Glass',
+        [waxId]: 'Beeswax',
+        [oreId]: 'Iron Ore'
+      },
+      media: [
+        { url: artworkUrl, mediaType: 'image/png', state: 'available' },
+        { url: 'https://media.invalid/varieties/harbor-lantern.txt', mediaType: 'text/plain', state: 'available', value: lore }
+      ]
+    }
+  });
+
+  assert.equal(await page.locator(`img[src="${artworkUrl}"]`).count(), 1, 'expected the Variety artwork to render directly');
+  const text = await visibleText(page);
+  for (const expected of ['Harbor Lantern', lore, 'Item', 'Manufactured', 'Mined', 'Copper', 'Glass', 'Beeswax', 'Iron Ore', '0.8', '0.2', '7']) {
+    assert.ok(text.includes(expected), `expected ${JSON.stringify(expected)} in ${JSON.stringify(text)}`);
+  }
+  assert.match(text, /Copper[^\d]{0,12}2/, 'expected the Copper ingredient count to remain visible');
+  assert.match(text, /Glass[^\d]{0,12}1/, 'expected the Glass ingredient count to remain visible');
+  assert.match(text, /Iron Ore[^\d]{0,12}3/, 'expected the Iron Ore ingredient count to remain visible');
+  assert.doesNotMatch(text, /Beeswax[ \t]*(?:×|x|\*)[ \t]*\d/i, 'an Item ingredient without a count must not fabricate a count');
+  assert.equal(text.includes('%'), false, 'probabilistic yields must not be presented as percentages');
+  assert.equal(/install/i.test(text), false, 'the card must not claim installability without data');
+  assert.doesNotMatch(text, /undefined|null|NaN/, 'malformed values must stay out of the visible card');
+  assert.deepEqual(errors, []);
+});
+
+test('renders an Item heading without inventing production or installation claims when production is absent', async (t) => {
+  const { page, errors } = await openFixture(t);
+
+  await render(page, { kind: 'one', component: 'variety', props: { name: 'Plain Alloy' } });
+
+  const text = await visibleText(page);
+  assert.ok(text.includes('Plain Alloy'), `expected the title in ${JSON.stringify(text)}`);
+  assert.match(text, /\bItem\b/i, 'expected an Item heading');
+  for (const forbidden of ['Manufactured', 'Mined', 'Recipe', 'Installable', 'Asset Creator', 'Variety Manager']) {
+    assert.equal(text.includes(forbidden), false, `the card must not claim ${JSON.stringify(forbidden)} without data`);
+  }
+  assert.doesNotMatch(text, /undefined|null|NaN/);
+  assert.deepEqual(errors, []);
+});
+
+test('tolerates malformed and incomplete production entries while showing known recipe names', async (t) => {
+  const { page, errors } = await openFixture(t);
+  const knownId = 'https://resources.invalid/varieties/catalyst';
+  const itemId = 'https://resources.invalid/items/frame';
+  const lore = 'An alloy with incomplete records.';
+
+  await render(page, {
+    kind: 'one',
+    component: 'variety',
+    props: {
+      name: 'Harbor Alloy',
+      production: [
+        null,
+        'broken entry',
+        {
+          type: 'manufacture',
+          duration: -1,
+          ingredients: 'not-an-array',
+          yield: [null, { probability: 0.5, count: 2, data: {} }, { probability: 'nope', count: '3', data: {} }]
+        },
+        {
+          type: 'mine',
+          ingredients: [null, { variety: knownId, count: '2', data: {} }, { id: itemId, variety: knownId }],
+          yield: []
+        }
+      ],
+      referenceNames: { [knownId]: 'Catalyst' },
+      media: [
+        { url: 'https://media.invalid/varieties/incomplete.txt', mediaType: 'text/plain', state: 'available', value: lore },
+        { url: 'https://media.invalid/varieties/unobserved', state: 'not-retrieved' },
+        { url: 'https://media.invalid/varieties/unsupported', mediaType: 'application/octet-stream', state: 'unavailable' }
+      ]
+    }
+  });
+
+  const text = await visibleText(page);
+  for (const expected of ['Harbor Alloy', lore, 'Catalyst', 'Media not retrieved', 'Media unavailable']) {
+    assert.ok(text.includes(expected), `expected ${JSON.stringify(expected)} in ${JSON.stringify(text)}`);
+  }
+  assert.doesNotMatch(text, /undefined|null|NaN/, 'malformed entries must not leak raw values into the card');
+  assert.deepEqual(errors, []);
+});
+
+test('uses an honest unknown ingredient fallback instead of guessing from the reference URL', async (t) => {
+  const { page, errors } = await openFixture(t);
+  const unknownId = 'https://resources.invalid/varieties/mystery-substance';
+
+  await render(page, {
+    kind: 'one',
+    component: 'variety',
+    props: {
+      name: 'Harbor Alloy',
+      production: [
+        {
+          type: 'manufacture',
+          duration: 1,
+          ingredients: [{ variety: unknownId, count: 1, data: {} }],
+          yield: [{ probability: 1, count: 1, data: {} }]
+        }
+      ],
+      referenceNames: {}
+    }
+  });
+
+  const text = await visibleText(page);
+  assert.match(text, /unknown/i, 'expected an honest unknown reference fallback');
+  assert.equal(text.includes('mystery-substance'), false, 'the reference URL tail must not be guessed as a name');
+  assert.doesNotMatch(text, /undefined|null|NaN/);
   assert.deepEqual(errors, []);
 });

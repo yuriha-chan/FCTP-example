@@ -682,17 +682,20 @@ test('prefers a draft media array over draft text and published media', async (t
 });
 
 test('does not use published media for a Variety draft without draft media', async (t) => {
+  const oreId = 'https://resources.invalid/varieties/iron-ore';
+  const catalystId = 'https://resources.invalid/varieties/published-catalyst';
+  const draftProduction = [{ type: 'manufacture', duration: 2, ingredients: [{ variety: oreId, count: 2, data: {} }], yield: [{ probability: 1, count: 1, data: {} }] }];
   const draft = makeDraft({
     id: varietyDraftId,
     kind: 'variety',
-    fields: { name: 'Alloy', mass: 1, version: '1' },
+    fields: { name: 'Alloy', mass: 1, version: '1', production: draftProduction },
     publication: {
       actionId,
       resourceIds: [varietyId],
-      publishedFields: { name: 'Alloy', mass: 1, version: '1' }
+      publishedFields: { name: 'Alloy', mass: 1, version: '1', production: draftProduction }
     }
   });
-  const { page, errors } = await openFixture(t, (request) => {
+  const { page, requests, errors } = await openFixture(t, (request) => {
     if (request.pathname === '/api/library') {
       return libraryPage(accountA, {
         varieties: [{
@@ -701,7 +704,16 @@ test('does not use published media for a Variety draft without draft media', asy
           name: 'Alloy',
           mass: 1,
           version: '1',
+          production: [{ type: 'mine', duration: 7, ingredients: [{ variety: catalystId, count: 7, data: {} }], yield: [{ probability: 1, count: 7, data: {} }] }],
           media: [{ url: 'https://media.invalid/varieties/alloy.txt', mediaType: 'text/plain', state: 'available', value: 'published variety media' }]
+        }, {
+          id: oreId,
+          type: 'Variety',
+          name: 'Iron Ore'
+        }, {
+          id: catalystId,
+          type: 'Variety',
+          name: 'Published Catalyst'
         }],
         drafts: [draft]
       });
@@ -713,7 +725,61 @@ test('does not use published media for a Variety draft without draft media', asy
   const region = await waitForRegion(page);
   const card = region.getByRole('button', { name: /^Alloy up-to-date$/ }).first();
   await card.waitFor({ state: 'visible', timeout: settleTimeout });
-  assert.equal((await card.innerText()).includes('published variety media'), false, 'published media must not be used as a draft fallback');
+  const text = await card.innerText();
+  assert.match(text, /Iron Ore[^\d]{0,12}2/, 'the draft card must use the current draft production and retained ingredient name');
+  assert.equal(text.includes('Published Catalyst'), false, 'the draft card must not fall back to published production');
+  assert.equal(text.includes('7'), false, 'the draft card must not show published production counts');
+  assert.equal(text.includes('published variety media'), false, 'published media must not be used as a draft fallback');
+  assert.equal(requests.filter((request) => request.pathname.startsWith('/api/resources/')).length, 0, 'retained ingredient names must not require a resource read');
+  assert.deepEqual(errors, []);
+});
+
+test('renders retained reference names in draft recipes and tolerates malformed production entries', async (t) => {
+  const oreId = 'https://resources.invalid/varieties/iron-ore';
+  const draft = makeDraft({
+    id: varietyDraftId,
+    kind: 'variety',
+    fields: {
+      name: 'Recipe Draft',
+      mass: 1,
+      version: '1',
+      production: [
+        null,
+        'broken entry',
+        {
+          type: 'manufacture',
+          duration: 2,
+          ingredients: [{ variety: oreId, count: 2, data: {} }],
+          yield: [{ probability: 0.5, count: 1, data: {} }, { probability: 0.5, count: 2, data: {} }]
+        },
+        {
+          type: 'mine',
+          ingredients: 'not-an-array',
+          yield: [null]
+        }
+      ]
+    }
+  });
+  const { page, requests, errors } = await openFixture(t, (request) => {
+    if (request.pathname === '/api/library') {
+      return libraryPage(accountA, {
+        varieties: [{ id: oreId, type: 'Variety', name: 'Iron Ore' }],
+        drafts: [draft]
+      });
+    }
+    if (request.pathname === `/api/drafts/${encodeURIComponent(varietyDraftId)}`) return { body: { draft } };
+    return { status: 404, body: { error: 'unexpected request' } };
+  });
+
+  const region = await waitForRegion(page);
+  const card = region.getByRole('button', { name: /^Recipe Draft draft$/ }).first();
+  await card.waitFor({ state: 'visible', timeout: settleTimeout });
+  const text = await card.innerText();
+  assert.ok(text.includes('Iron Ore'), `expected the retained ingredient name in ${JSON.stringify(text)}`);
+  assert.match(text, /Iron Ore[^\d]{0,12}2/, 'expected the draft ingredient count');
+  assert.equal(text.includes('%'), false, 'probabilistic yields must not be presented as percentages');
+  assert.doesNotMatch(text, /undefined|null|NaN/, 'malformed entries must not leak raw values into the draft card');
+  assert.equal(requests.filter((request) => request.pathname.startsWith('/api/resources/')).length, 0, 'retained ingredient names must not require a resource read');
   assert.deepEqual(errors, []);
 });
 
@@ -1893,6 +1959,7 @@ test('renders a retained Library Variety card with title, identities, mass, vers
   const creatorId = 'https://actors.invalid/alloy-maker';
   const holderId = 'https://actors.invalid/alloy-keeper';
   const mediaUrl = 'https://media.invalid/varieties/alloy.txt';
+  const oreId = 'https://resources.invalid/varieties/iron-ore';
   const creatorHandle = '@alloy.maker@alpha.test:4200';
   const holderHandle = '@alloy.keeper@alpha.test:4200';
   const mediaText = 'A dense alloy.';
@@ -1907,7 +1974,12 @@ test('renders a retained Library Variety card with title, identities, mass, vers
           holder: holderId,
           mass: 2.5,
           version: '4.2',
+          production: [{ type: 'manufacture', duration: 2, ingredients: [{ variety: oreId, count: 2, data: {} }], yield: [{ probability: 1, count: 1, data: {} }] }],
           media: [{ url: mediaUrl, mediaType: 'text/plain', state: 'available', value: mediaText }]
+        }, {
+          id: oreId,
+          type: 'Variety',
+          name: 'Iron Ore'
         }],
         identities: [
           { actorId: creatorId, verified: true, handle: creatorHandle },
@@ -1930,9 +2002,12 @@ test('renders a retained Library Variety card with title, identities, mass, vers
 
   const region = await waitForRegion(page);
   const text = await waitForText(region, mediaText, 'expected the retained Library Variety media on the card');
-  for (const expected of ['Alloy', creatorHandle, holderHandle, '2.5', '4.2', mediaText]) {
+  for (const expected of ['Alloy', creatorHandle, holderHandle, '2.5', '4.2', mediaText, 'Iron Ore', 'Manufactured', 'Asset Creator', 'Variety Manager']) {
     assert.ok(text.includes(expected), `expected ${JSON.stringify(expected)} on the Library Variety card`);
   }
+  assert.match(text, /Iron Ore[^\d]{0,12}2/, 'expected the retained ingredient name and count on the published Variety card');
+  assert.equal(text.includes('held by'), false, 'the Variety card must use the Variety Manager label instead of held by');
+  assert.equal(text.includes(' by '), false, 'the Variety card must use the Asset Creator label instead of by');
   assert.equal(text.includes(mediaUrl), false, 'the Variety card must not expose the media URL');
   assert.equal(await page.getByRole('button', { name: /^Open resource/i }).count(), 0, 'the Variety card must not require a generic Open resource control');
   assert.equal(requests.filter((request) => request.pathname.startsWith('/api/resources/')).length, 0, 'retained Library Variety media must render without opening the reader');

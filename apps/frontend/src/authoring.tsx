@@ -134,6 +134,14 @@ function draftMedia(draft: AuthoringDraft): LibraryMedia[] | undefined {
     : undefined;
 }
 
+function referenceNamesFromLibrary(library: LibraryResponse): Record<string, string> {
+  const names: Record<string, string> = {};
+  for (const entry of [...library.data.varieties, ...library.data.assets]) {
+    if (typeof entry.name === 'string' && entry.name.trim().length > 0) names[entry.id] = entry.name;
+  }
+  return names;
+}
+
 const IMAGE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
 function isImageMediaType(value: unknown): value is string {
@@ -424,8 +432,9 @@ function VarietyList(props: {
   activeDirty: boolean;
   onOpen: (reference: ResourceReference) => void;
   onEditDraft: (draftId: string) => void;
+  referenceNames: Readonly<Record<string, string>>;
 }): ReactElement | null {
-  const { title, entries, drafts, activeDraftId, activeDirty, onOpen, onEditDraft } = props;
+  const { title, entries, drafts, activeDraftId, activeDirty, onOpen, onEditDraft, referenceNames } = props;
   const merged = publishedDraftEntries(drafts, entries);
   if (merged.entries.length === 0 && drafts.length === 0) return null;
   return (
@@ -437,6 +446,7 @@ function VarietyList(props: {
           const mass = draftNumberField(draft, 'mass') ?? published?.mass;
           const version = draftStringField(draft, 'version') ?? published?.version;
           const media = draftMedia(draft);
+          const production = Array.isArray(draft.fields.production) ? draft.fields.production : undefined;
           return (
             <li key={`draft:${draft.id}`}>
               <VarietyCard
@@ -446,6 +456,8 @@ function VarietyList(props: {
                 {...(mass === undefined ? {} : { mass })}
                 {...(version === undefined ? {} : { version })}
                 {...(media === undefined ? {} : { media })}
+                {...(production === undefined ? {} : { production })}
+                referenceNames={referenceNames}
                 status={draftStatus(draft, activeDraftId, activeDirty)}
                 onPress={() => onEditDraft(draft.id)}
               />
@@ -461,6 +473,8 @@ function VarietyList(props: {
               {...(entry.mass === undefined ? {} : { mass: entry.mass })}
               {...(entry.version === undefined ? {} : { version: entry.version })}
               {...(entry.media === undefined ? {} : { media: entry.media })}
+              {...(entry.production === undefined ? {} : { production: entry.production })}
+              referenceNames={referenceNames}
               onPress={() => onOpen({ id: entry.id })}
             />
           </li>
@@ -1272,6 +1286,7 @@ export function Authoring(props: AuthoringProps): ReactElement {
                 activeDirty={dirty}
                 onOpen={openResource}
                 onEditDraft={(draftId) => openDraftForEdit('variety', draftId)}
+                referenceNames={referenceNamesFromLibrary(library)}
               />
               <EntryList title="Library grants" entries={library.data.grants} onOpen={openResource} />
               <ObservationList observations={library.observations} />
